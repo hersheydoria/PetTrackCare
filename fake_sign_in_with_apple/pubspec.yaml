@@ -1,0 +1,5 @@
+name: sign_in_with_apple
+description: Dummy package to override actual package
+version: 0.0.1
+environment:
+  sdk: ">=2.12.0 <4.0.0"
