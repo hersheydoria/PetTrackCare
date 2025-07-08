@@ -24,19 +24,13 @@ class _LoginScreenState extends State<LoginScreen> {
       final user = response.user;
 
       if (user != null) {
-        final userName = user.userMetadata?['name'] ?? 'User';
-        final userRole = user.userMetadata?['role'] ?? 'owner';
-
-        // ✅ Navigate directly to MainNavigation with parameters
+        // ✅ Navigate directly to MainNavigation
         Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => MainNavigation(
-              userName: userName,
-              userRole: userRole,
-            ),
-          ),
-        );
+        context,
+        MaterialPageRoute(
+          builder: (_) => MainNavigation(),
+        ),
+      );
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -59,8 +53,10 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               Image.asset('assets/logo.png', height: 100), // Replace with your logo
               SizedBox(height: 16),
-              Text("Welcome to PetTrackCare",
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              Text(
+                "Welcome to PetTrackCare",
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
               SizedBox(height: 24),
               TextField(
                 controller: emailController,

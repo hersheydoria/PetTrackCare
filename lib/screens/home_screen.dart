@@ -1,25 +1,121 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-class HomeScreen extends StatelessWidget {
-  final String userName;
-  final String userRole; // 'owner' or 'sitter'
+class HomeScreen extends StatefulWidget {
+  final String userId;
 
-  HomeScreen({required this.userName, required this.userRole});
+  HomeScreen({required this.userId});
+
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final supabase = Supabase.instance.client;
+
+  String userName = '';
+  String userRole = '';
+  List<dynamic> pets = [];
+  List<dynamic> sittingJobs = [];
+  Map<String, dynamic> summary = {};
+
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    print("HomeScreen initState() called"); // ✅ should appear
+    fetchUserData();
+  }
+
+    Future<void> fetchUserData() async {
+    try {
+      print('User ID: ${widget.userId}');
+      final userRes = await supabase
+          .from('users')
+          .select()
+          .eq('id', widget.userId)
+          .maybeSingle();
+
+      print('User Res: $userRes');
+
+      if (userRes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('User profile not found. Please contact support.')),
+        );
+        setState(() => isLoading = false);
+        return;
+      }
+
+      final role = userRes['role'];
+      final name = userRes['name'];
+
+      setState(() {
+        userRole = role;
+        userName = name;
+      });
+
+      await Future.wait([
+        if (role == 'Pet Owner') fetchOwnedPets(),
+        if (role == 'Pet Sitter') fetchSittingJobs(),
+        fetchDailySummary()
+      ]);
+
+      setState(() => isLoading = false);
+    } catch (e) {
+      print('❌ fetchUserData ERROR: $e');
+      setState(() => isLoading = false);
+    }
+  }
+
+  Future<void> fetchOwnedPets() async {
+    final petRes = await supabase
+        .from('pets')
+        .select()
+        .eq('owner_id', widget.userId);
+    setState(() => pets = petRes);
+  }
+
+  Future<void> fetchSittingJobs() async {
+    final jobsRes = await supabase
+        .from('sitting_jobs')
+        .select('*, pets(name)')
+        .eq('sitter_id', widget.userId)
+        .order('start_date', ascending: false);
+    setState(() => sittingJobs = jobsRes);
+  }
+
+  Future<void> fetchDailySummary() async {
+    try {
+      final summaryRes = await supabase
+          .from('behavior_logs')
+          .select()
+          .eq('user_id', widget.userId)
+          .order('log_date', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (summaryRes != null) {
+        setState(() => summary = summaryRes);
+      }
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        title: Text('PetTrackCare'),
         backgroundColor: Color(0xFFCB4154),
       ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16),
-        child: userRole == 'Pet Owner' ? _buildOwnerHome() : _buildSitterHome(),
-      ),
+      body: isLoading
+          ? Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: EdgeInsets.all(16),
+              child: userRole == 'Pet Owner' ? _buildOwnerHome() : _buildSitterHome(),
+            ),
     );
   }
 
-  // Home screen for Pet Owners
   Widget _buildOwnerHome() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -29,13 +125,8 @@ class HomeScreen extends StatelessWidget {
           style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
         ),
         SizedBox(height: 8),
-        Text(
-          "What would you like to do today?",
-          style: TextStyle(fontSize: 16),
-        ),
+        Text("What would you like to do today?"),
         SizedBox(height: 24),
-
-        // Owner Quick Actions
         GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,
@@ -49,13 +140,8 @@ class HomeScreen extends StatelessWidget {
             _buildHomeCard(icon: Icons.history, label: 'Pet History', onTap: () {}),
           ],
         ),
-
         SizedBox(height: 32),
-
-        Text(
-          "Daily Activity Summary",
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-        ),
+        Text("Daily Activity Summary", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         SizedBox(height: 12),
         Container(
           padding: EdgeInsets.all(16),
@@ -67,19 +153,17 @@ class HomeScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("Pet: Luna 🐾"),
-              SizedBox(height: 8),
-              Text("Steps: 5,200"),
-              Text("Mood: Happy 😊"),
-              Text("Sleep: 8 hrs"),
+              Text("Pet: ${pets.isNotEmpty ? pets.first['name'] : 'No pets'} 🐾"),
+              Text("Mood: ${summary['mood'] ?? 'Unknown'}"),
+              Text("Sleep: ${summary['sleep_hours']?.toString() ?? '--'} hrs"),
+              Text("Activity: ${summary['activity_level'] ?? 'Unknown'}"),
             ],
           ),
-        ),
+        )
       ],
     );
   }
 
-  // Home screen for Pet Sitters
   Widget _buildSitterHome() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -89,12 +173,8 @@ class HomeScreen extends StatelessWidget {
           style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
         ),
         SizedBox(height: 8),
-        Text(
-          "Here’s your dashboard for today:",
-          style: TextStyle(fontSize: 16),
-        ),
+        Text("Here’s your dashboard for today:"),
         SizedBox(height: 24),
-
         GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,
@@ -102,35 +182,19 @@ class HomeScreen extends StatelessWidget {
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
           children: [
-            _buildHomeCard(icon: Icons.schedule, label: 'Upcoming Bookings', onTap: () {}),
+            _buildHomeCard(icon: Icons.schedule, label: 'Bookings', onTap: () {}),
             _buildHomeCard(icon: Icons.message, label: 'Messages', onTap: () {}),
             _buildHomeCard(icon: Icons.reviews, label: 'Reviews', onTap: () {}),
             _buildHomeCard(icon: Icons.account_circle, label: 'Profile', onTap: () {}),
           ],
         ),
-
         SizedBox(height: 32),
-        Text(
-          "Earnings Summary",
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-        ),
+        Text("Your Assigned Jobs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
         SizedBox(height: 12),
-        Container(
-          padding: EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text("Today: ₱750.00"),
-              Text("This Week: ₱4,500.00"),
-              Text("Pending Payouts: ₱2,000.00"),
-            ],
-          ),
-        ),
+        ...sittingJobs.map((job) => Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: Text("Pet: ${job['pets']['name']} (${job['status']})"),
+            )),
       ],
     );
   }

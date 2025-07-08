@@ -29,13 +29,7 @@ class PetTrackCareApp extends StatelessWidget {
       routes: {
         '/login': (_) => LoginScreen(),
         '/register': (_) => RegistrationScreen(),
-        '/home': (context) {
-        final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
-        return MainNavigation(
-          userName: args['userName'],
-          userRole: args['userRole'],
-        );
-      },
+        '/home': (_) => MainNavigation(),
       },
     );
   }
