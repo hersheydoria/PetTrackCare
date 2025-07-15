@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+// Define the palette for reuse
+const deepRed = Color(0xFFB82132);
+const coral = Color(0xFFD2665A);
+const peach = Color(0xFFF2B28C);
+const lightBlush = Color(0xFFF6DED8);
+
 class HomeScreen extends StatefulWidget {
   final String userId;
 
@@ -24,20 +30,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    print("HomeScreen initState() called"); // ✅ should appear
     fetchUserData();
   }
 
-    Future<void> fetchUserData() async {
+  Future<void> fetchUserData() async {
     try {
-      print('User ID: ${widget.userId}');
       final userRes = await supabase
           .from('users')
           .select()
           .eq('id', widget.userId)
           .maybeSingle();
-
-      print('User Res: $userRes');
 
       if (userRes == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -103,12 +105,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('PetTrackCare'),
-        backgroundColor: Color(0xFFCB4154),
-      ),
+      backgroundColor: lightBlush,
       body: isLoading
-          ? Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: deepRed))
           : SingleChildScrollView(
               padding: EdgeInsets.all(16),
               child: userRole == 'Pet Owner' ? _buildOwnerHome() : _buildSitterHome(),
@@ -122,10 +121,10 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         Text(
           'Hi, $userName!',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
         ),
         SizedBox(height: 8),
-        Text("What would you like to do today?"),
+        Text("What would you like to do today?", style: TextStyle(color: deepRed)),
         SizedBox(height: 24),
         GridView.count(
           crossAxisCount: 2,
@@ -141,12 +140,12 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         SizedBox(height: 32),
-        Text("Daily Activity Summary", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        Text("Daily Activity Summary", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: coral)),
         SizedBox(height: 12),
         Container(
           padding: EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: peach,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
           ),
@@ -170,10 +169,10 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         Text(
           'Hi, $userName!',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
         ),
         SizedBox(height: 8),
-        Text("Here’s your dashboard for today:"),
+        Text("Here’s your dashboard for today:", style: TextStyle(color: deepRed)),
         SizedBox(height: 24),
         GridView.count(
           crossAxisCount: 2,
@@ -189,7 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         SizedBox(height: 32),
-        Text("Your Assigned Jobs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        Text("Your Assigned Jobs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: coral)),
         SizedBox(height: 12),
         ...sittingJobs.map((job) => Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
@@ -208,16 +207,16 @@ class _HomeScreenState extends State<HomeScreen> {
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: Color(0xFFFFE5E5),
+          color: peach,
           borderRadius: BorderRadius.circular(16),
           boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 40, color: Color(0xFFCB4154)),
+            Icon(icon, size: 40, color: deepRed),
             SizedBox(height: 12),
-            Text(label, style: TextStyle(fontWeight: FontWeight.w600)),
+            Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: deepRed)),
           ],
         ),
       ),

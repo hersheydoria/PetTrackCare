@@ -3,6 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/main_navigation.dart';
+import 'screens/location_picker.dart';
+import 'screens/reset_password_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,20 +18,52 @@ void main() async {
 class PetTrackCareApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final uri = Uri.base;
+    String initialRoute = '/login';
+
+    // Handle reset password redirect
+    if (uri.path == '/reset-password') {
+      initialRoute = '/reset-password';
+    }
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'PetTrackCare',
       theme: ThemeData(
-        primaryColor: Color(0xFFCB4154),
-        scaffoldBackgroundColor: Color(0xFFFFCCCB),
+        primaryColor: Color(0xFFB82132), // Main red color
+        scaffoldBackgroundColor: Color(0xFFF6DED8), // Light blush background
         fontFamily: 'Roboto',
-        textTheme: Theme.of(context).textTheme.apply(bodyColor: Colors.black),
+        colorScheme: ColorScheme.fromSwatch().copyWith(
+          primary: Color(0xFFB82132), // AppBar, buttons
+          secondary: Color(0xFFD2665A), // Accent color
+          background: Color(0xFFF6DED8), // Background color
+          surface: Color(0xFFF2B28C), // Cards, surfaces
+          onPrimary: Colors.white, // Text on primary
+          onSecondary: Colors.white, // Text on secondary
+          onBackground: Colors.black, // Text on background
+          onSurface: Colors.black, // Text on surfaces
+        ),
+        textTheme: Theme.of(context).textTheme.apply(
+          bodyColor: Colors.black,
+          displayColor: Colors.black,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Color(0xFFB82132),
+            foregroundColor: Colors.white,
+          ),
+        ),
+        appBarTheme: AppBarTheme(
+          backgroundColor: Color(0xFFB82132),
+          foregroundColor: Colors.white,
+        ),
       ),
-      initialRoute: '/login',
+      initialRoute: initialRoute,
       routes: {
         '/login': (_) => LoginScreen(),
         '/register': (_) => RegistrationScreen(),
         '/home': (_) => MainNavigation(),
+        '/location_picker': (_) => LocationPicker(),
+        '/reset-password': (_) => ResetPasswordScreen(),
       },
     );
   }
