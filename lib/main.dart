@@ -61,7 +61,10 @@ class PetTrackCareApp extends StatelessWidget {
       routes: {
         '/login': (_) => LoginScreen(),
         '/register': (_) => RegistrationScreen(),
-        '/home': (_) => MainNavigation(),
+        '/home': (_) {
+            final user = Supabase.instance.client.auth.currentUser;
+            return MainNavigation(userId: user!.id);
+          },
         '/location_picker': (_) => LocationPicker(),
         '/reset-password': (_) => ResetPasswordScreen(),
       },

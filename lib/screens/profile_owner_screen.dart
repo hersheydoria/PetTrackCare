@@ -64,14 +64,12 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
     return Scaffold(
       backgroundColor: lightBlush,
       appBar: AppBar(
-        title: Text('Owner Profile',
-            style: TextStyle(color: deepRed, fontWeight: FontWeight.bold)),
-        centerTitle: true,
-        backgroundColor: lightBlush,
+        title: Text('Owner Profile', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Color(0xFFCB4154),
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.more_vert, color: deepRed),
+            icon: Icon(Icons.more_vert),
             onPressed: () {
               showModalBottomSheet(
                 context: context,

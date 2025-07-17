@@ -16,7 +16,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool showPassword = false;
 
   void _login() async {
-    // ✅ Only proceed if form is valid
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => isLoading = true);
@@ -32,7 +31,13 @@ class _LoginScreenState extends State<LoginScreen> {
       if (user != null) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => MainNavigation()),
+          MaterialPageRoute(
+            builder: (_) => MainNavigation(userId: user.id), // ✅ userId passed
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Login failed: No user found.')),
         );
       }
     } catch (e) {

@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ChatDetailScreen extends StatefulWidget {
+  final String userId;     // Current user's ID
+  final String receiverId; // Other user's ID
   final String userName;
 
-  ChatDetailScreen({required this.userName});
+  ChatDetailScreen({
+    required this.userId,
+    required this.receiverId,
+    required this.userName,
+  });
 
   @override
   _ChatDetailScreenState createState() => _ChatDetailScreenState();
@@ -11,15 +18,42 @@ class ChatDetailScreen extends StatefulWidget {
 
 class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final TextEditingController _messageController = TextEditingController();
-  final List<String> messages = [];
+  final SupabaseClient supabase = Supabase.instance.client;
+  List<dynamic> messages = [];
 
-  void _sendMessage() {
-    if (_messageController.text.trim().isEmpty) return;
+  @override
+  void initState() {
+    super.initState();
+    fetchMessages();
+  }
+
+  Future<void> fetchMessages() async {
+    final response = await supabase
+        .from('messages')
+        .select()
+        .or('sender_id.eq.${widget.userId},receiver_id.eq.${widget.userId}')
+        .order('sent_at', ascending: false);
+
     setState(() {
-      messages.add(_messageController.text.trim());
-      _messageController.clear();
+      messages = response;
     });
   }
+
+  Future<void> _sendMessage() async {
+    final content = _messageController.text.trim();
+    if (content.isEmpty) return;
+
+    await supabase.from('messages').insert({
+      'sender_id': widget.userId,
+      'receiver_id': widget.receiverId,
+      'content': content,
+    });
+
+    _messageController.clear();
+    fetchMessages(); // refresh messages
+  }
+
+  bool isSender(String senderId) => senderId == widget.userId;
 
   @override
   Widget build(BuildContext context) {
@@ -35,18 +69,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               reverse: true,
               itemCount: messages.length,
               itemBuilder: (_, index) {
-                return ListTile(
-                  title: Align(
-                    alignment: Alignment.centerRight,
-                    child: Container(
-                      padding: EdgeInsets.all(12),
-                      margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                      decoration: BoxDecoration(
-                        color: Color(0xFFCB4154).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(messages[messages.length - 1 - index]),
+                final msg = messages[index];
+                final bool sentByMe = isSender(msg['sender_id']);
+                return Align(
+                  alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: sentByMe
+                          ? Color(0xFFCB4154).withOpacity(0.2)
+                          : Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(12),
                     ),
+                    child: Text(msg['content']),
                   ),
                 );
               },

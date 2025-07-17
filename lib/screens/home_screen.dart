@@ -23,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String userRole = '';
   List<dynamic> pets = [];
   List<dynamic> sittingJobs = [];
+  List<dynamic> availableSitters = [];
   Map<String, dynamic> summary = {};
 
   bool isLoading = true;
@@ -63,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await Future.wait([
         if (role == 'Pet Sitter') fetchOwnedPets(),
         if (role == 'Pet Owner') fetchSittingJobs(),
+        if (role == 'Pet Owner') fetchAvailableSitters(),
         fetchDailySummary()
       ]);
 
@@ -70,6 +72,18 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       print('❌ fetchUserData ERROR: $e');
       setState(() => isLoading = false);
+    }
+  }
+
+  Future<void> fetchAvailableSitters() async {
+    try {
+      final sitters = await supabase
+          .from('users')
+          .select()
+          .eq('role', 'Pet Sitter');
+      setState(() => availableSitters = sitters);
+    } catch (e) {
+      print('❌ fetchAvailableSitters ERROR: $e');
     }
   }
 
@@ -177,8 +191,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ListView.builder(
           shrinkWrap: true,
           physics: NeverScrollableScrollPhysics(),
-          itemCount: 3,
+          itemCount: availableSitters.length, // ✅ dynamic count
           itemBuilder: (context, index) {
+            final sitter = availableSitters[index]; // ✅ real data
             return Card(
               margin: EdgeInsets.only(bottom: 16),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -198,17 +213,24 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Sitter Name ${index + 1}',
+                              Text(sitter['name'] ?? 'Unnamed',
                                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                               Row(
                                 children: [
                                   Icon(Icons.star, color: Colors.orange, size: 18),
                                   SizedBox(width: 4),
-                                  Text('4.${index + 2}')
+                                  Text((sitter['rating']?.toStringAsFixed(1) ?? '4.5')),
                                 ],
                               ),
-                              Text('Status: Available Now', style: TextStyle(color: Colors.green[700])),
-                              Text('Rate: ₱250 / hour'),
+                              Text(
+                                'Status: ${sitter['is_available'] == true ? 'Available Now' : 'Busy'}',
+                                style: TextStyle(
+                                  color: sitter['is_available'] == true
+                                      ? Colors.green[700]
+                                      : Colors.grey,
+                                ),
+                              ),
+                              Text('Rate: ₱${sitter['rate_per_hour'] ?? 250} / hour'),
                             ],
                           ),
                         )

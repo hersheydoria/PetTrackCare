@@ -8,9 +8,14 @@ import 'profile_owner_screen.dart';
 import 'profile_sitter_screen.dart';
 
 class MainNavigation extends StatefulWidget {
+  final String userId;
+
+  const MainNavigation({Key? key, required this.userId}) : super(key: key);
+
   @override
-  _MainNavigationState createState() => _MainNavigationState();
+  State<MainNavigation> createState() => _MainNavigationState();
 }
+
 
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 0;
@@ -51,7 +56,7 @@ class _MainNavigationState extends State<MainNavigation> {
     return [
       HomeScreen(userId: Supabase.instance.client.auth.currentUser!.id),
       PetProfileScreen(), 
-      CommunityScreen(),
+      CommunityScreen(userId: widget.userId),
       ChatListScreen(),
       userRole == 'Pet Owner' ? OwnerProfileScreen() : SitterProfileScreen(),
     ];
@@ -68,10 +73,21 @@ class _MainNavigationState extends State<MainNavigation> {
     final screens = getScreens();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('PetTrackCare'),
-        backgroundColor: const Color(0xFFCB4154),
-      ),
+      appBar: _selectedIndex == 0
+        ? AppBar(
+            title: const Text('PetTrackCare', style: TextStyle(fontWeight: FontWeight.bold)),
+            backgroundColor: const Color(0xFFCB4154),
+            actions: [
+              IconButton(
+                icon: Icon(Icons.notifications),
+                onPressed: () {
+                  // TODO: Handle notification tap
+                  // Example: Navigator.push to NotificationScreen()
+                },
+              ),
+            ],
+          )
+        : null,
       body: screens[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
