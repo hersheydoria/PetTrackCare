@@ -27,6 +27,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool isLoading = true;
 
+  final List<String> filterOptions = ['All Sitters', 'Available Now', 'Top Rated'];
+  String selectedFilter = 'All Sitters';
+
   @override
   void initState() {
     super.initState();
@@ -58,8 +61,8 @@ class _HomeScreenState extends State<HomeScreen> {
       });
 
       await Future.wait([
-        if (role == 'Pet Owner') fetchOwnedPets(),
-        if (role == 'Pet Sitter') fetchSittingJobs(),
+        if (role == 'Pet Sitter') fetchOwnedPets(),
+        if (role == 'Pet Owner') fetchSittingJobs(),
         fetchDailySummary()
       ]);
 
@@ -110,10 +113,131 @@ class _HomeScreenState extends State<HomeScreen> {
           ? Center(child: CircularProgressIndicator(color: deepRed))
           : SingleChildScrollView(
               padding: EdgeInsets.all(16),
-              child: userRole == 'Pet Owner' ? _buildOwnerHome() : _buildSitterHome(),
+              child: userRole == 'Pet Sitter' ? _buildOwnerHome() : _buildSitterHome(),
             ),
     );
   }
+
+ Widget _buildSitterHome() {
+  return SingleChildScrollView(
+    padding: EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ✅ Centered Title
+        Center(
+          child: Text(
+            'Find Pet Sitters',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: deepRed,
+            ),
+          ),
+        ),
+        SizedBox(height: 16),
+
+        // 🔍 Search Field
+        TextField(
+          decoration: InputDecoration(
+            hintText: 'Search sitters by location',
+            prefixIcon: Icon(Icons.search),
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        SizedBox(height: 16),
+
+        // 🔘 Filter Chips (Horizontal)
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: ['All Sitters', 'Available Now', 'Top Rated'].map((filter) {
+              return Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: ChoiceChip(
+                  label: Text(filter),
+                  selected: false,
+                  onSelected: (_) {},
+                  selectedColor: coral,
+                  backgroundColor: Colors.grey[200],
+                  labelStyle: TextStyle(color: Colors.black),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        SizedBox(height: 16),
+
+        // 🧍‍♂️ Sitters List (Example)
+        ListView.builder(
+          shrinkWrap: true,
+          physics: NeverScrollableScrollPhysics(),
+          itemCount: 3,
+          itemBuilder: (context, index) {
+            return Card(
+              margin: EdgeInsets.only(bottom: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 26,
+                          backgroundImage: AssetImage('assets/sitter_placeholder.png'),
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Sitter Name ${index + 1}',
+                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                              Row(
+                                children: [
+                                  Icon(Icons.star, color: Colors.orange, size: 18),
+                                  SizedBox(width: 4),
+                                  Text('4.${index + 2}')
+                                ],
+                              ),
+                              Text('Status: Available Now', style: TextStyle(color: Colors.green[700])),
+                              Text('Rate: ₱250 / hour'),
+                            ],
+                          ),
+                        )
+                      ],
+                    ),
+                    SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        // TODO: Navigate to schedule view
+                      },
+                      icon: Icon(Icons.calendar_today),
+                      label: Text('View Schedule'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: deepRed,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    )
+                  ],
+                ),
+              ),
+            );
+          },
+        )
+      ],
+    ),
+  );
+}
+
 
   Widget _buildOwnerHome() {
     return Column(
@@ -159,41 +283,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         )
-      ],
-    );
-  }
-
-  Widget _buildSitterHome() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Hi, $userName!',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
-        ),
-        SizedBox(height: 8),
-        Text("Here’s your dashboard for today:", style: TextStyle(color: deepRed)),
-        SizedBox(height: 24),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: NeverScrollableScrollPhysics(),
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          children: [
-            _buildHomeCard(icon: Icons.schedule, label: 'Bookings', onTap: () {}),
-            _buildHomeCard(icon: Icons.message, label: 'Messages', onTap: () {}),
-            _buildHomeCard(icon: Icons.reviews, label: 'Reviews', onTap: () {}),
-            _buildHomeCard(icon: Icons.account_circle, label: 'Profile', onTap: () {}),
-          ],
-        ),
-        SizedBox(height: 32),
-        Text("Your Assigned Jobs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: coral)),
-        SizedBox(height: 12),
-        ...sittingJobs.map((job) => Padding(
-              padding: const EdgeInsets.only(bottom: 8.0),
-              child: Text("Pet: ${job['pets']['name']} (${job['status']})"),
-            )),
       ],
     );
   }

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'chat_list_screen.dart';
+import 'community_screen.dart';
 import 'home_screen.dart';
+import 'pets_screen.dart';
 import 'profile_owner_screen.dart';
 import 'profile_sitter_screen.dart';
 
@@ -48,8 +50,8 @@ class _MainNavigationState extends State<MainNavigation> {
   List<Widget> getScreens() {
     return [
       HomeScreen(userId: Supabase.instance.client.auth.currentUser!.id),
-      Center(child: Text('Pets Page')),
-      Center(child: Text('Community Page')),
+      PetProfileScreen(), 
+      CommunityScreen(),
       ChatListScreen(),
       userRole == 'Pet Owner' ? OwnerProfileScreen() : SitterProfileScreen(),
     ];

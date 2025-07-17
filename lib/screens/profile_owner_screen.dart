@@ -1,21 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+// Color palette
+const deepRed = Color(0xFFB82132);
+const coral = Color(0xFFD2665A);
+const peach = Color(0xFFF2B28C);
+const lightBlush = Color(0xFFF6DED8);
+
 class OwnerProfileScreen extends StatefulWidget {
   @override
   State<OwnerProfileScreen> createState() => _OwnerProfileScreenState();
 }
 
-class _OwnerProfileScreenState extends State<OwnerProfileScreen> with TickerProviderStateMixin {
+class _OwnerProfileScreenState extends State<OwnerProfileScreen>
+    with SingleTickerProviderStateMixin {
   final user = Supabase.instance.client.auth.currentUser;
-  final metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+  final metadata =
+      Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
 
   late TabController _tabController;
 
   String get name => metadata['name'] ?? 'Pet Owner';
-  String get role => metadata['role'] ?? 'Pet Owner';
   String get email => user?.email ?? 'No email';
-  String get address => metadata['address'] ?? metadata['location'] ?? 'No address provided';
+  String get address =>
+      metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
   @override
   void initState() {
@@ -40,16 +48,7 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with TickerProv
       'owner_id': userId,
     });
 
-    setState(() {}); // Refresh pet list
-  }
-
-  void _deletePet(String petId) async {
-    await Supabase.instance.client.from('pets').delete().eq('id', petId);
     setState(() {});
-  }
-
-  void _editPet(String petId) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Edit $petId')));
   }
 
   Future<List<Map<String, dynamic>>> _fetchPets() async {
@@ -60,124 +59,199 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with TickerProv
     return List<Map<String, dynamic>>.from(response);
   }
 
-  Widget _buildProfileHeader() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Column(
-        children: [
-          CircleAvatar(
-            radius: 40,
-            backgroundImage: AssetImage('assets/default_profile.png'),
-          ),
-          SizedBox(height: 8),
-          Text(name, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          Text(role, style: TextStyle(color: Colors.grey[600])),
-          Text(email, style: TextStyle(color: Colors.grey[700])),
-          Text(address, style: TextStyle(color: Colors.grey[700])),
-          SizedBox(height: 12),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: lightBlush,
       appBar: AppBar(
-        title: Text('Owner Profile'),
-        backgroundColor: Color(0xFFCB4154),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: [
-            Tab(text: 'Owned Pets'),
-            Tab(text: 'Settings'),
-          ],
-        ),
-      ),
-      body: Column(
-        children: [
-          _buildProfileHeader(),
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                // Pets Tab
-                Column(
+        title: Text('Owner Profile',
+            style: TextStyle(color: deepRed, fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: lightBlush,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.more_vert, color: deepRed),
+            onPressed: () {
+              showModalBottomSheet(
+                context: context,
+                builder: (_) => Wrap(
                   children: [
-                    ElevatedButton(
-                      onPressed: _addPet,
-                      child: Text("Add Pet"),
-                      style: ElevatedButton.styleFrom(backgroundColor: Color(0xFFCB4154)),
-                    ),
-                    Expanded(
-                      child: FutureBuilder<List<Map<String, dynamic>>>(
-                        future: _fetchPets(),
-                        builder: (context, snapshot) {
-                          if (!snapshot.hasData) {
-                            return Center(child: CircularProgressIndicator());
-                          }
-                          final pets = snapshot.data!;
-                          return ListView.builder(
-                            itemCount: pets.length,
-                            itemBuilder: (context, index) {
-                              final pet = pets[index];
-                              return Card(
-                                child: ListTile(
-                                  title: Text(pet['name']),
-                                  subtitle: Text('${pet['breed'] ?? 'Unknown'}, Age: ${pet['age'] ?? 0}'),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        icon: Icon(Icons.edit),
-                                        onPressed: () => _editPet(pet['id']),
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.delete),
-                                        onPressed: () => _deletePet(pet['id']),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          );
-                        },
-                      ),
+                    ListTile(
+                      leading: Icon(Icons.logout, color: Colors.red),
+                      title:
+                          Text('Logout', style: TextStyle(color: Colors.red)),
+                      onTap: () => _logout(context),
                     ),
                   ],
                 ),
-
-                // Settings Tab
-                ListView(
-                  padding: EdgeInsets.all(16),
+              );
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Profile Info
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              children: [
+                CircleAvatar(
+                  radius: 60,
+                  backgroundImage: AssetImage('assets/default_profile.png'),
+                ),
+                SizedBox(height: 12),
+                Text(name,
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: deepRed)),
+                Text(email, style: TextStyle(fontSize: 16)),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    ListTile(
-                      leading: Icon(Icons.person),
-                      title: Text('Account Info'),
-                      onTap: () {},
-                    ),
-                    ListTile(
-                      leading: Icon(Icons.settings),
-                      title: Text('App Preferences'),
-                      onTap: () {},
-                    ),
-                    ListTile(
-                      leading: Icon(Icons.help),
-                      title: Text('Help & Support'),
-                      onTap: () {},
-                    ),
-                    ListTile(
-                      leading: Icon(Icons.logout, color: Colors.red),
-                      title: Text('Logout', style: TextStyle(color: Colors.red)),
-                      onTap: () => _logout(context),
-                    ),
+                    Icon(Icons.location_on, color: Colors.grey[600], size: 16),
+                    SizedBox(width: 4),
+                    Text(address,
+                        style:
+                            TextStyle(fontSize: 14, color: Colors.grey[700]))
                   ],
                 ),
               ],
             ),
           ),
+
+          // White rounded container with tabs and tab content
+          Expanded(
+            child: Container(
+              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Column(
+                children: [
+                  TabBar(
+                    controller: _tabController,
+                    indicatorColor: deepRed,
+                    labelColor: deepRed,
+                    unselectedLabelColor: Colors.grey,
+                    tabs: [
+                      Tab(icon: Icon(Icons.pets), text: 'Owned Pets'),
+                      Tab(icon: Icon(Icons.settings), text: 'Settings'),
+                    ],
+                  ),
+                  Divider(height: 1, color: Colors.grey.shade300),
+
+                  // Tab content
+                  Expanded(
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
+                        // 🐾 Owned Pets
+                        Column(
+                          children: [
+                            Expanded(
+                              child: FutureBuilder<List<Map<String, dynamic>>>(
+                                future: _fetchPets(),
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return Center(
+                                        child: CircularProgressIndicator(
+                                            color: deepRed));
+                                  }
+                                  final pets = snapshot.data ?? [];
+                                  if (pets.isEmpty) {
+                                    return Center(
+                                        child: Text('No pets found.',
+                                            style:
+                                                TextStyle(color: Colors.grey)));
+                                  }
+                                  return ListView.builder(
+                                    itemCount: pets.length,
+                                    itemBuilder: (context, index) {
+                                      final pet = pets[index];
+                                      return Container(
+                                        margin: EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                              color: Colors.grey.shade300),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          color: Colors.white,
+                                        ),
+                                        child: ListTile(
+                                          leading: Icon(Icons.pets,
+                                              color: deepRed),
+                                          title:
+                                              Text(pet['name'] ?? 'Unnamed'),
+                                          subtitle: Text(
+                                              'Breed: ${pet['breed'] ?? 'Unknown'} | Age: ${pet['age'] ?? 0}'),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: ElevatedButton.icon(
+                                onPressed: _addPet,
+                                icon: Icon(Icons.add),
+                                label: Text('Add Pet'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: deepRed,
+                                  foregroundColor: Colors.white,
+                                  minimumSize: Size(double.infinity, 48),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  elevation: 4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        // ⚙️ Settings
+                        ListView(
+                          padding: EdgeInsets.all(16),
+                          children: [
+                            _settingsTile(Icons.lock, 'Change Password'),
+                            _settingsTile(Icons.notifications,
+                                'Notification Preferences'),
+                            _settingsTile(
+                                Icons.privacy_tip, 'Privacy Settings'),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _settingsTile(IconData icon, String title) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: deepRed),
+        title: Text(title),
+        onTap: () {},
       ),
     );
   }
