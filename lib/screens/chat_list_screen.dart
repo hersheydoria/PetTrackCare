@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'chat_detail_screen.dart';
+import 'notification_screen.dart';
 
 class ChatListScreen extends StatefulWidget {
   @override
@@ -58,7 +59,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
           IconButton(
             icon: Icon(Icons.notifications),
             onPressed: () {
-              // TODO: Navigate to Notifications
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const NotificationScreen(),
+                ),
+              );
             },
           ),
         ],

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'notification_screen.dart';
 
 const deepRed = Color(0xFFB82132);
 const lightBlush = Color(0xFFF6DED8);
@@ -487,7 +488,17 @@ void showEditPostModal(Map post) {
               ),
             ),
           ),
-          IconButton(icon: Icon(Icons.notifications), onPressed: () {}),
+          IconButton(
+            icon: Icon(Icons.notifications),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const NotificationScreen(),
+                ),
+              );
+            },
+          ),
         ],
       ),
       body: isLoading

@@ -6,6 +6,7 @@ import 'home_screen.dart';
 import 'pets_screen.dart';
 import 'profile_owner_screen.dart';
 import 'profile_sitter_screen.dart';
+import 'notification_screen.dart';
 
 class MainNavigation extends StatefulWidget {
   final String userId;
@@ -81,8 +82,12 @@ class _MainNavigationState extends State<MainNavigation> {
               IconButton(
                 icon: Icon(Icons.notifications),
                 onPressed: () {
-                  // TODO: Handle notification tap
-                  // Example: Navigator.push to NotificationScreen()
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const NotificationScreen(),
+                    ),
+                  );
                 },
               ),
             ],

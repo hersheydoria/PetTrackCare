@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'notification_screen.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -37,12 +38,16 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         title: Text('Pet Profile', style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
           IconButton(
-                icon: Icon(Icons.notifications),
-                onPressed: () {
-                  // TODO: Handle notification tap
-                  // Example: Navigator.push to NotificationScreen()
-                },
-              ),
+            icon: Icon(Icons.notifications),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const NotificationScreen(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: Icon(Icons.more_vert),
             onPressed: () {

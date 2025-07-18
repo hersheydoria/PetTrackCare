@@ -5,6 +5,7 @@ import 'screens/registration_screen.dart';
 import 'screens/main_navigation.dart';
 import 'screens/location_picker.dart';
 import 'screens/reset_password_screen.dart';
+import 'screens/notification_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,6 +68,7 @@ class PetTrackCareApp extends StatelessWidget {
           },
         '/location_picker': (_) => LocationPicker(),
         '/reset-password': (_) => ResetPasswordScreen(),
+        '/notification' : (_) => NotificationScreen(),
       },
     );
   }
