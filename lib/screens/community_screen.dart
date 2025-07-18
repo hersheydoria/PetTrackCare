@@ -266,27 +266,58 @@ void showEditPostModal(Map post) {
             ),
             ElevatedButton(
               onPressed: () async {
-                String? newImageUrl = post['image_url'];
-                if (selectedImage != null) {
+                final trimmedContent = contentController.text.trim();
+
+                if (trimmedContent.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Content cannot be empty.')),
+                  );
+                  return;
+                }
+
+                final originalContent = post['content']?.toString().trim() ?? '';
+                final originalImageUrl = post['image_url']?.toString();
+
+                bool contentChanged = trimmedContent != originalContent;
+                bool imageChanged = selectedImage != null;
+
+                if (!contentChanged && !imageChanged) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('No changes made to the post.')),
+                  );
+                  return;
+                }
+
+                String? newImageUrl = originalImageUrl;
+                if (imageChanged) {
                   newImageUrl = await uploadImage(selectedImage!);
                 }
 
+                // Build update map dynamically
+                final Map<String, dynamic> updatedFields = {};
+                if (contentChanged) updatedFields['content'] = trimmedContent;
+                if (imageChanged) updatedFields['image_url'] = newImageUrl;
+
                 try {
-                  await Supabase.instance.client
-                      .from('community_posts')
-                      .update({
-                        'content': contentController.text,
-                        'image_url': newImageUrl,
-                      })
-                      .eq('id', post['id']);
-                  Navigator.pop(context);
-                  fetchPosts();
+                  final response = await Supabase.instance.client
+                    .from('community_posts')
+                    .update(updatedFields)
+                    .eq('id', post['id'])
+                    .select('*');
+
+                  if (response == null || response.isEmpty) {
+                    print('No post updated.');
+                  } else {
+                    print('Post updated successfully.');
+                    Navigator.pop(context);
+                    fetchPosts(); // Refresh the list
+                  }
                 } catch (e) {
                   print('Error updating post: $e');
                 }
               },
               child: Text('Save Changes'),
-            )
+            ),
           ],
         ),
       ),
