@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:PetTrackCare/screens/calendar_screen.dart';
+import 'package:PetTrackCare/screens/chat_detail_screen.dart';
 
-// Define the palette for reuse
 const deepRed = Color(0xFFB82132);
 const coral = Color(0xFFD2665A);
 const peach = Color(0xFFF2B28C);
@@ -16,7 +17,7 @@ class HomeScreen extends StatefulWidget {
   _HomeScreenState createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   final supabase = Supabase.instance.client;
 
   String userName = '';
@@ -28,23 +29,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool isLoading = true;
 
-  final List<String> filterOptions = ['All Sitters', 'Available Now', 'Top Rated'];
-  String selectedFilter = 'All Sitters';
+  late TabController _sitterTabController;
 
   @override
   void initState() {
     super.initState();
     fetchUserData();
+    _sitterTabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _sitterTabController.dispose();
+    super.dispose();
   }
 
   Future<void> fetchUserData() async {
     try {
-      final userRes = await supabase
-          .from('users')
-          .select()
-          .eq('id', widget.userId)
-          .maybeSingle();
-
+      final userRes = await supabase.from('users').select().eq('id', widget.userId).maybeSingle();
       if (userRes == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('User profile not found. Please contact support.')),
@@ -53,18 +55,15 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final role = userRes['role'];
-      final name = userRes['name'];
-
       setState(() {
-        userRole = role;
-        userName = name;
+        userRole = userRes['role'];
+        userName = userRes['name'];
       });
 
       await Future.wait([
-        if (role == 'Pet Sitter') fetchOwnedPets(),
-        if (role == 'Pet Owner') fetchSittingJobs(),
-        if (role == 'Pet Owner') fetchAvailableSitters(),
+        if (userRole == 'Pet Sitter') fetchSittingJobs(),
+        if (userRole == 'Pet Owner') fetchOwnedPets(),
+        if (userRole == 'Pet Owner') fetchAvailableSitters(),
         fetchDailySummary()
       ]);
 
@@ -77,10 +76,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> fetchAvailableSitters() async {
     try {
-      final sitters = await supabase
-          .from('users')
-          .select()
-          .eq('role', 'Pet Sitter');
+      final sitters = await supabase.from('users').select().eq('role', 'Pet Sitter');
       setState(() => availableSitters = sitters);
     } catch (e) {
       print('❌ fetchAvailableSitters ERROR: $e');
@@ -88,10 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> fetchOwnedPets() async {
-    final petRes = await supabase
-        .from('pets')
-        .select()
-        .eq('owner_id', widget.userId);
+    final petRes = await supabase.from('pets').select().eq('owner_id', widget.userId);
     setState(() => pets = petRes);
   }
 
@@ -127,34 +120,25 @@ class _HomeScreenState extends State<HomeScreen> {
           ? Center(child: CircularProgressIndicator(color: deepRed))
           : SingleChildScrollView(
               padding: EdgeInsets.all(16),
-              child: userRole == 'Pet Sitter' ? _buildOwnerHome() : _buildSitterHome(),
+              child: userRole == 'Pet Sitter' ? _buildSitterHome() : _buildOwnerHome(),
             ),
     );
   }
 
- Widget _buildSitterHome() {
-  return SingleChildScrollView(
-    padding: EdgeInsets.all(16),
-    child: Column(
+  Widget _buildOwnerHome() {
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ✅ Centered Title
         Center(
           child: Text(
             'Find Pet Sitters',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: deepRed,
-            ),
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
           ),
         ),
         SizedBox(height: 16),
-
-        // 🔍 Search Field
         TextField(
           decoration: InputDecoration(
-            hintText: 'Search sitters by location',
+            hintText: 'Search Sitters by Location',
             prefixIcon: Icon(Icons.search),
             filled: true,
             fillColor: Colors.white,
@@ -165,103 +149,163 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         SizedBox(height: 16),
-
-        // 🔘 Filter Chips (Horizontal)
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: ['All Sitters', 'Available Now', 'Top Rated'].map((filter) {
-              return Padding(
-                padding: const EdgeInsets.only(right: 8.0),
-                child: ChoiceChip(
-                  label: Text(filter),
-                  selected: false,
-                  onSelected: (_) {},
-                  selectedColor: coral,
-                  backgroundColor: Colors.grey[200],
-                  labelStyle: TextStyle(color: Colors.black),
-                ),
-              );
-            }).toList(),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
           ),
-        ),
-        SizedBox(height: 16),
-
-        // 🧍‍♂️ Sitters List (Example)
-        ListView.builder(
-          shrinkWrap: true,
-          physics: NeverScrollableScrollPhysics(),
-          itemCount: availableSitters.length, // ✅ dynamic count
-          itemBuilder: (context, index) {
-            final sitter = availableSitters[index]; // ✅ real data
-            return Card(
-              margin: EdgeInsets.only(bottom: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          child: Column(
+            children: [
+              TabBar(
+                controller: _sitterTabController,
+                indicatorColor: deepRed,
+                labelColor: deepRed,
+                unselectedLabelColor: Colors.grey,
+                tabs: [
+                  Tab(text: 'All Sitters'),
+                  Tab(text: 'Available Now'),
+                  Tab(text: 'Top Rated'),
+                ],
+              ),
+              Divider(height: 1, color: Colors.grey.shade300),
+              SizedBox(
+                height: 600, // Adjust height if needed
+                child: TabBarView(
+                  controller: _sitterTabController,
                   children: [
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 26,
-                          backgroundImage: AssetImage('assets/sitter_placeholder.png'),
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(sitter['name'] ?? 'Unnamed',
-                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                              Row(
-                                children: [
-                                  Icon(Icons.star, color: Colors.orange, size: 18),
-                                  SizedBox(width: 4),
-                                  Text((sitter['rating']?.toStringAsFixed(1) ?? '4.5')),
-                                ],
-                              ),
-                              Text(
-                                'Status: ${sitter['is_available'] == true ? 'Available Now' : 'Busy'}',
-                                style: TextStyle(
-                                  color: sitter['is_available'] == true
-                                      ? Colors.green[700]
-                                      : Colors.grey,
-                                ),
-                              ),
-                              Text('Rate: ₱${sitter['rate_per_hour'] ?? 250} / hour'),
-                            ],
-                          ),
-                        )
-                      ],
-                    ),
-                    SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        // TODO: Navigate to schedule view
-                      },
-                      icon: Icon(Icons.calendar_today),
-                      label: Text('View Schedule'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: deepRed,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                    )
+                    _buildSitterList(availableSitters),
+                    _buildSitterList(availableSitters.where((s) => s['is_available'] == true).toList()),
+                    _buildSitterList(availableSitters.where((s) => (s['rating'] ?? 0) >= 4.5).toList()),
                   ],
                 ),
-              ),
-            );
-          },
-        )
+              )
+            ],
+          ),
+        ),
       ],
-    ),
-  );
-}
+    );
+  }
 
+  Widget _buildSitterList(List<dynamic> sitters) {
+    return ListView.builder(
+      padding: EdgeInsets.all(12),
+      itemCount: sitters.length,
+      itemBuilder: (context, index) {
+        final sitter = sitters[index];
+        return Card(
+          margin: EdgeInsets.only(bottom: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                Center(
+                  child: Text(
+                    sitter['name'] ?? 'Unnamed',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                SizedBox(height: 12),
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 26,
+                      backgroundImage: AssetImage('assets/sitter_placeholder.png'),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.star, color: Colors.orange, size: 18),
+                              SizedBox(width: 4),
+                              Text('${sitter['rating']?.toStringAsFixed(1) ?? '4.5'}'),
+                            ],
+                          ),
+                          Text(
+                            'Status: ${sitter['is_available'] == true ? 'Available Now' : 'Busy'}',
+                            style: TextStyle(
+                              color: sitter['is_available'] == true ? Colors.green[700] : Colors.grey,
+                            ),
+                          ),
+                          Text('Rate: ₱${sitter['rate_per_hour'] ?? 250} / hour'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 12),
+                Column(
+                  children: [
+                    SizedBox(
+                      width: 180,
+                      child: ElevatedButton.icon(
+  onPressed: () {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.85, // Adjust height as needed
+        child: CalendarScreen(sitter: sitter),
+      ),
+    );
+  },
 
-  Widget _buildOwnerHome() {
+                        icon: Icon(Icons.calendar_today),
+                        label: Text('View Schedule'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: deepRed,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    SizedBox(
+                      width: 180,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ChatDetailScreen(
+                                userId: widget.userId,
+                                receiverId: sitter['id'],
+                                userName: sitter['name'] ?? 'Sitter',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: Icon(Icons.message),
+                        label: Text('Send a Message'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: deepRed,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSitterHome() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
