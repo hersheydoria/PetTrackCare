@@ -199,6 +199,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     fetchMessages();
   }
 
+  String _getSharedCallId(String userA, String userB) {
+  final sorted = [userA, userB]..sort();
+  return '${sorted[0]}_${sorted[1]}'; // deterministic shared callID
+}
+
   void _startZegoCall(bool video) {
     Navigator.push(
       context,
@@ -208,7 +213,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           appSign: appSign,
           userID: widget.userId,
           userName: widget.userId,
-          callID: widget.receiverId,
+          callID: _getSharedCallId(widget.userId, widget.receiverId),
           config: video
               ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
               : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall(),
@@ -275,15 +280,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 Widget content = msg['type'] == 'image'
                 ? Image.network(supabase.storage.from('chat-media').getPublicUrl(msg['media_url']), fit: BoxFit.cover)
                 : Text(msg['text']);
-                if (msg['type'] == 'image') {
-                  Image.network(
+                if (msg['type'] == 'image' && msg['media_url'] != null) {
+                  content = Image.network(
                     supabase.storage.from('chat-media').getPublicUrl(msg['media_url']),
                     fit: BoxFit.cover,
                   );
                 } else if (msg['type'] == 'voice') {
                   content = Icon(Icons.play_arrow);
                 } else {
-                  content = Text(msg['content']);
+                  content = Text(msg['content'] ?? '[empty]');
                 }
 
                 return Align(
