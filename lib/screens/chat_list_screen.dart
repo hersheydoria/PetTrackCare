@@ -16,6 +16,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     fetchMessages();
+    setupRealtimeSubscription();
+  }
+
+  void setupRealtimeSubscription() {
+    final channel = supabase.channel('public:messages');
+
+    channel
+        .on(
+          RealtimeListenTypes.postgresChanges,
+          ChannelFilter(
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+          ),
+          (payload, [ref]) {
+            fetchMessages(); // Refresh the messages list on new insert
+          },
+        )
+        .subscribe();
   }
 
   Future<void> fetchMessages() async {
@@ -24,9 +43,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
     final response = await supabase
         .from('messages')
-        .select('sender_id, receiver_id, message, timestamp, sender:sender_id(name), receiver:receiver_id(name)')
+        .select('sender_id, receiver_id, content, sent_at, sender:sender_id(name), receiver:receiver_id(name)')
         .or('sender_id.eq.$userId,receiver_id.eq.$userId')
-        .order('timestamp', ascending: false);
+        .order('sent_at', ascending: false);
 
     final grouped = <String, Map<String, dynamic>>{};
 
@@ -39,7 +58,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         grouped[contactId] = {
           'contactId': contactId,
           'contactName': contactName,
-          'lastMessage': msg['message'],
+          'lastMessage': msg['content'],
         };
       }
     }
@@ -61,9 +80,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => const NotificationScreen(),
-                ),
+                MaterialPageRoute(builder: (context) => const NotificationScreen()),
               );
             },
           ),
@@ -75,9 +92,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
           final chat = messages[index];
           return ListTile(
             leading: CircleAvatar(
-              child: Text(chat['contactId'][0].toUpperCase()),
+              child: Text(chat['contactName'][0].toUpperCase()),
             ),
-            title: Text('Chat with ${chat['contactId']}'),
+            title: Text(chat['contactName']),
             subtitle: Text(chat['lastMessage']),
             onTap: () {
               Navigator.push(
