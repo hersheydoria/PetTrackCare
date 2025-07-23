@@ -277,9 +277,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 final isLastSeen = lastSeenMessageId != null &&
                     msg['id'].toString() == lastSeenMessageId;
 
-                Widget content = msg['type'] == 'image'
-                ? Image.network(supabase.storage.from('chat-media').getPublicUrl(msg['media_url']), fit: BoxFit.cover)
-                : Text(msg['text']);
+                Widget content;
                 if (msg['type'] == 'image' && msg['media_url'] != null) {
                   content = Image.network(
                     supabase.storage.from('chat-media').getPublicUrl(msg['media_url']),
