@@ -42,10 +42,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
     if (userId == null) return;
 
     final response = await supabase
-        .from('messages')
-        .select('sender_id, receiver_id, content, sent_at, sender:sender_id(name), receiver:receiver_id(name)')
-        .or('sender_id.eq.$userId,receiver_id.eq.$userId')
-        .order('sent_at', ascending: false);
+    .from('messages')
+    .select('sender_id, receiver_id, content, sent_at, is_seen, sender:sender_id(name), receiver:receiver_id(name)')
+    .or('sender_id.eq.$userId,receiver_id.eq.$userId')
+    .order('sent_at', ascending: false);
 
     final grouped = <String, Map<String, dynamic>>{};
 
@@ -54,11 +54,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
       final contactId = isSender ? msg['receiver_id'] : msg['sender_id'];
       final contactName = isSender ? msg['receiver']['name'] : msg['sender']['name'];
 
+      // Only include the latest message per contact
       if (!grouped.containsKey(contactId)) {
         grouped[contactId] = {
           'contactId': contactId,
           'contactName': contactName,
           'lastMessage': msg['content'],
+          'isSeen': msg['is_seen'],
+          'isSender': isSender,
         };
       }
     }
@@ -90,14 +93,39 @@ class _ChatListScreenState extends State<ChatListScreen> {
         itemCount: messages.length,
         itemBuilder: (context, index) {
           final chat = messages[index];
+          final isSeen = chat['isSeen'] ?? true;
+          final isSender = chat['isSender'] ?? false;
           return ListTile(
             leading: CircleAvatar(
-              child: Text(chat['contactName'][0].toUpperCase()),
+              child: Text(chat['contactName'][0].toUpperCase(), 
+                style: TextStyle(
+                  fontWeight: !isSeen && !isSender
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+                ),
+              ),
             ),
-            title: Text(chat['contactName']),
-            subtitle: Text(chat['lastMessage']),
-            onTap: () {
-              Navigator.push(
+            title: Text(
+              chat['contactName'],
+              style: TextStyle(
+                fontWeight: !isSeen && !isSender
+                    ? FontWeight.bold
+                    : FontWeight.normal,
+              ),
+            ),
+            subtitle: Text(
+              chat['lastMessage'],
+              style: TextStyle(
+                color: !isSeen && !isSender
+                    ? Colors.black
+                    : Colors.grey,
+              ),
+            ),
+            tileColor: !isSeen && !isSender
+                ? Color.fromARGB(255, 243, 216, 218)
+                : null,
+            onTap: () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ChatDetailScreen(
@@ -107,6 +135,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   ),
                 ),
               );
+              fetchMessages(); // Refresh the list on return
             },
           );
         },
