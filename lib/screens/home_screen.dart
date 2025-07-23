@@ -305,53 +305,89 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildSitterHome() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Hi, $userName!',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
+ // 👩‍⚕️ Pet Sitter Home
+ Widget _buildSitterHome() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Hi, $userName!',
+        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
+      ),
+      SizedBox(height: 8),
+      Text("Here’s your sitter dashboard today:", style: TextStyle(color: deepRed)),
+      SizedBox(height: 24),
+
+      // ✅ Assigned Jobs
+      _sectionWithBorder(
+        title: "Assigned Jobs",
+        child: Column(
+          children: sittingJobs.take(3).map((job) {
+            final petName = job['pets']['name'] ?? 'Pet';
+            final petType = job['pets']['type'] ?? 'Pet';
+            final startTime = job['start_date'] ?? 'Time not set';
+            return Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 3,
+              margin: EdgeInsets.symmetric(vertical: 6),
+              child: ListTile(
+                leading: Icon(Icons.pets, color: deepRed),
+                title: Text('$petName ($petType)'),
+                subtitle: Text('Start: $startTime'),
+              ),
+            );
+          }).toList(),
         ),
-        SizedBox(height: 8),
-        Text("What would you like to do today?", style: TextStyle(color: deepRed)),
-        SizedBox(height: 24),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: NeverScrollableScrollPhysics(),
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          children: [
-            _buildHomeCard(icon: Icons.pets, label: 'Track Pet', onTap: () {}),
-            _buildHomeCard(icon: Icons.warning, label: 'Alerts', onTap: () {}),
-            _buildHomeCard(icon: Icons.person_search, label: 'Hire Sitter', onTap: () {}),
-            _buildHomeCard(icon: Icons.history, label: 'Pet History', onTap: () {}),
-          ],
-        ),
-        SizedBox(height: 32),
-        Text("Daily Activity Summary", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: coral)),
-        SizedBox(height: 12),
-        Container(
-          padding: EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: peach,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      ),
+
+      SizedBox(height: 24),
+
+      // ⭐ Reviews
+      _sectionWithBorder(
+        title: "Reviews",
+        child: SizedBox(
+          height: 140,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
             children: [
-              Text("Pet: ${pets.isNotEmpty ? pets.first['name'] : 'No pets'} 🐾"),
-              Text("Mood: ${summary['mood'] ?? 'Unknown'}"),
-              Text("Sleep: ${summary['sleep_hours']?.toString() ?? '--'} hrs"),
-              Text("Activity: ${summary['activity_level'] ?? 'Unknown'}"),
+              _buildReviewCard("Very caring and always on time!", "Maria D."),
+              _buildReviewCard("Loves animals like family!", "John P."),
+              _buildReviewCard("Always punctual and friendly!", "Lisa M."),
             ],
           ),
-        )
-      ],
-    );
-  }
+        ),
+      ),
+
+      SizedBox(height: 24),
+
+      // 🗓️ Today’s Schedule
+      _sectionWithBorder(
+        title: "Today’s Schedule",
+        child: Column(
+          children: [
+            _buildScheduleItem("9:00 AM", "Luna", "Feed and walk"),
+            _buildScheduleItem("2:00 PM", "Max", "Play session"),
+          ],
+        ),
+      ),
+
+      SizedBox(height: 24),
+
+      // 🧾 Completed Jobs
+      _sectionWithBorder(
+        title: "Completed Jobs",
+        child: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green),
+            SizedBox(width: 12),
+            Text("You’ve completed 12 jobs", style: TextStyle(fontSize: 16, color: deepRed)),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
 
   Widget _buildHomeCard({
     required IconData icon,
@@ -378,3 +414,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 }
+
+Widget _sectionWithBorder({required String title, required Widget child}) {
+  return Container(
+    width: double.infinity,
+    padding: EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Colors.grey.shade300),
+      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionTitle(title),
+        SizedBox(height: 12),
+        child,
+      ],
+    ),
+  );
+}
+
+Widget _sectionTitle(String title) {
+    return Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: coral));
+  }
+
+  Widget _buildReviewCard(String review, String owner) {
+    return Container(
+      width: 250,
+      margin: EdgeInsets.only(right: 12),
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: List.generate(5, (index) => Icon(Icons.star, size: 18, color: Colors.orange))),
+          SizedBox(height: 8),
+          Text('"$review"', style: TextStyle(fontStyle: FontStyle.italic)),
+          Spacer(),
+          Text('– $owner', style: TextStyle(color: Colors.grey[600])),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScheduleItem(String time, String petName, String task) {
+    return Container(
+      margin: EdgeInsets.symmetric(vertical: 6),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: peach,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text('$time – $petName ($task)', style: TextStyle(color: deepRed)),
+    );
+  }
