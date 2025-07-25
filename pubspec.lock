@@ -40,8 +40,7 @@ packages:
       sha256: "758e6d74e971c3e5aceb4110bfd6698efc7f501675bcfe0c775459a8140750eb"
       url: "https://pub.dev"
     source: hosted
-<<<<<<< HEAD
-    version: "2.12.0"
+    version: "2.13.0"
   audio_session:
     dependency: transitive
     description:
@@ -106,9 +105,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.2.1"
-=======
-    version: "2.13.0"
->>>>>>> fae822f65a6dc79fa5bd30785db6ddb7cf430a9c
   boolean_selector:
     dependency: transitive
     description:
@@ -153,10 +149,10 @@ packages:
     dependency: transitive
     description:
       name: checked_yaml
-      sha256: feb6bed21949061731a7a75fc5d2aa727cf160b91af9a3e464c5e3a32e28b5ff
+      sha256: "959525d3162f249993882720d52b7e0c833978df229be20702b33d48d91de70f"
       url: "https://pub.dev"
     source: hosted
-    version: "2.0.3"
+    version: "2.0.4"
   cli_util:
     dependency: transitive
     description:
@@ -560,10 +556,10 @@ packages:
     dependency: transitive
     description:
       name: image_picker_android
-      sha256: "317a5d961cec5b34e777b9252393f2afbd23084aa6e60fcf601dcf6341b9ebeb"
+      sha256: "6fae381e6af2bbe0365a5e4ce1db3959462fa0c4d234facf070746024bb80c8d"
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.12+23"
+    version: "0.8.12+24"
   image_picker_for_web:
     dependency: transitive
     description:
@@ -720,10 +716,10 @@ packages:
     dependency: transitive
     description:
       name: logger
-      sha256: "2621da01aabaf223f8f961e751f2c943dbb374dc3559b982f200ccedadaa6999"
+      sha256: "55d6c23a6c15db14920e037fe7e0dc32e7cdaf3b64b4b25df2d541b5b6b81c0c"
       url: "https://pub.dev"
     source: hosted
-    version: "2.6.0"
+    version: "2.6.1"
   matcher:
     dependency: transitive
     description:
@@ -1140,10 +1136,10 @@ packages:
     dependency: transitive
     description:
       name: statemachine
-      sha256: "42ce52468879383c60d4983526114d91282b8b0c36657bc7d58be88975a02982"
+      sha256: "9d0088c5ab2c6baa08abe66e33086f5918f2b758a2e39955124ba03767e9fa61"
       url: "https://pub.dev"
     source: hosted
-    version: "3.3.1"
+    version: "3.4.0"
   storage_client:
     dependency: transitive
     description:
@@ -1188,10 +1184,10 @@ packages:
     dependency: transitive
     description:
       name: synchronized
-      sha256: "0669c70faae6270521ee4f05bffd2919892d42d1276e6c495be80174b6bc0ef6"
+      sha256: c254ade258ec8282947a0acbbc90b9575b4f19673533ee46f2f6e9b3aeefd7c0
       url: "https://pub.dev"
     source: hosted
-    version: "3.3.1"
+    version: "3.4.0"
   table_calendar:
     dependency: "direct main"
     description:
@@ -1351,8 +1347,7 @@ packages:
       sha256: ddfa8d30d89985b96407efce8acbdd124701f96741f2d981ca860662f1c0dc02
       url: "https://pub.dev"
     source: hosted
-<<<<<<< HEAD
-    version: "14.3.1"
+    version: "15.0.0"
   wakelock_plus:
     dependency: transitive
     description:
@@ -1369,9 +1364,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.2.3"
-=======
-    version: "15.0.0"
->>>>>>> fae822f65a6dc79fa5bd30785db6ddb7cf430a9c
   web:
     dependency: transitive
     description:
@@ -1400,10 +1392,10 @@ packages:
     dependency: transitive
     description:
       name: webview_flutter_android
-      sha256: "769f34fc9855f7d7789b786b79b7c37a60e92ff08f71e3a429208d7f5b81d944"
+      sha256: "9573ad97890d199ac3ab32399aa33a5412163b37feb573eb5b0a76b35e9ffe41"
       url: "https://pub.dev"
     source: hosted
-    version: "4.8.0"
+    version: "4.8.2"
   webview_flutter_platform_interface:
     dependency: transitive
     description:
@@ -1424,10 +1416,10 @@ packages:
     dependency: transitive
     description:
       name: win32
-      sha256: "329edf97fdd893e0f1e3b9e88d6a0e627128cc17cc316a8d67fda8f1451178ba"
+      sha256: "66814138c3562338d05613a6e368ed8cfb237ad6d64a9e9334be3f309acfca03"
       url: "https://pub.dev"
     source: hosted
-    version: "5.13.0"
+    version: "5.14.0"
   win32_registry:
     dependency: transitive
     description:
@@ -1541,5 +1533,5 @@ packages:
     source: hosted
     version: "2.8.0"
 sdks:
-  dart: ">=3.7.2 <4.0.0"
+  dart: ">=3.8.0 <4.0.0"
   flutter: ">=3.29.0"

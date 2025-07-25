@@ -36,20 +36,27 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
-  void _addPet() async {
-    final userId = user?.id;
-    if (userId == null) return;
+ void _addPet() {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (context) {
+      return Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+          top: 24,
+          left: 16,
+          right: 16,
+        ),
+        child: _AddPetForm(onPetAdded: () => setState(() {})),
+      );
+    },
+  );
+}
 
-    await Supabase.instance.client.from('pets').insert({
-      'name': 'New Pet',
-      'breed': 'Unknown',
-      'age': 0,
-      'gender': 'Unknown',
-      'owner_id': userId,
-    });
-
-    setState(() {});
-  }
 
   Future<List<Map<String, dynamic>>> _fetchPets() async {
     final response = await Supabase.instance.client
@@ -250,6 +257,117 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
         leading: Icon(icon, color: deepRed),
         title: Text(title),
         onTap: () {},
+      ),
+    );
+  }
+}
+
+class _AddPetForm extends StatefulWidget {
+  final VoidCallback onPetAdded;
+
+  _AddPetForm({required this.onPetAdded});
+
+  @override
+  State<_AddPetForm> createState() => _AddPetFormState();
+}
+
+class _AddPetFormState extends State<_AddPetForm> {
+  final _formKey = GlobalKey<FormState>();
+  String name = '';
+  String breed = '';
+  int age = 0;
+  String health = '';
+  double weight = 0.0;
+
+  bool _isLoading = false;
+
+  void _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    _formKey.currentState!.save();
+
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    setState(() => _isLoading = true);
+
+    await Supabase.instance.client.from('pets').insert({
+      'name': name,
+      'breed': breed,
+      'age': age,
+      'health': health,
+      'weight': weight,
+      'owner_id': userId,
+    });
+
+    setState(() => _isLoading = false);
+    widget.onPetAdded();
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Form(
+      key: _formKey,
+      child: Wrap(
+        children: [
+          Text("Add New Pet",
+              style: TextStyle(
+                  fontSize: 20, fontWeight: FontWeight.bold, color: deepRed)),
+          SizedBox(height: 16),
+          _buildTextField(label: "Name", onSaved: (val) => name = val ?? ''),
+          _buildTextField(label: "Breed", onSaved: (val) => breed = val ?? ''),
+          _buildTextField(
+            label: "Age (years)",
+            keyboardType: TextInputType.number,
+            onSaved: (val) => age = int.tryParse(val ?? '0') ?? 0,
+          ),
+          _buildTextField(
+              label: "Health",
+              onSaved: (val) => health = val ?? 'Healthy'),
+          _buildTextField(
+            label: "Weight (kg)",
+            keyboardType: TextInputType.number,
+            onSaved: (val) => weight = double.tryParse(val ?? '0.0') ?? 0.0,
+          ),
+          SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _isLoading ? null : _submit,
+              child: _isLoading
+                  ? CircularProgressIndicator(color: Colors.white)
+                  : Text("Save Pet"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: deepRed,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                padding: EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+          SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required String label,
+    TextInputType keyboardType = TextInputType.text,
+    required FormFieldSetter<String> onSaved,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: TextFormField(
+        keyboardType: keyboardType,
+        decoration: InputDecoration(
+          labelText: label,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        validator: (value) =>
+            (value == null || value.isEmpty) ? 'Required' : null,
+        onSaved: onSaved,
       ),
     );
   }
