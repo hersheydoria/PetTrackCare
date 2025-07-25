@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
+
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -58,6 +61,103 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
 }
 
 
+File? _profileImage;
+final ImagePicker _picker = ImagePicker();
+
+Future<void> _pickProfileImage() async {
+  final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+  if (pickedFile == null) return;
+
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: Text('Confirm Profile Picture'),
+        content: Image.file(File(pickedFile.path)),
+        actions: [
+          TextButton(
+            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+            child: Text('Confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      );
+    },
+  );
+
+  if (confirm != true) return;
+
+  final file = File(pickedFile.path);
+  final fileBytes = await file.readAsBytes();
+  final fileName =
+      'profile_images/${user!.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  try {
+    final supabase = Supabase.instance.client;
+    final bucket = supabase.storage.from('profile-pictures');
+
+    await bucket.uploadBinary(
+      fileName,
+      fileBytes,
+      fileOptions: const FileOptions(contentType: 'image/jpeg'),
+    );
+
+    final publicUrl = bucket.getPublicUrl(fileName);
+
+    await supabase.auth.updateUser(UserAttributes(
+      data: {'profile_picture': publicUrl},
+    ));
+
+    setState(() {
+      _profileImage = file;
+    });
+
+    print('✅ Profile picture updated!');
+  } catch (e) {
+    print('❌ Error uploading profile image: $e');
+  }
+}
+
+
+
+
+Future<void> pickAndUploadImage() async {
+  final ImagePicker picker = ImagePicker();
+  final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
+
+  if (pickedFile == null) {
+    print('No image selected.');
+    return;
+  }
+
+  final file = File(pickedFile.path);
+  final fileBytes = await file.readAsBytes();
+
+  final fileName = 'user_uploads/${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  try {
+    final supabase = Supabase.instance.client;
+
+    final response = await supabase.storage
+        .from('your-bucket-name') // Replace with your actual bucket name
+        .uploadBinary(fileName, fileBytes,
+            fileOptions: const FileOptions(contentType: 'image/jpeg'));
+
+    final publicUrl = supabase.storage
+        .from('your-bucket-name')
+        .getPublicUrl(fileName);
+
+    print('✅ Uploaded! Image URL: $publicUrl');
+  } catch (e) {
+    print('❌ Upload failed: $e');
+  }
+}
+
+
   Future<List<Map<String, dynamic>>> _fetchPets() async {
     final response = await Supabase.instance.client
         .from('pets')
@@ -98,34 +198,78 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
       body: Column(
         children: [
           // Profile Info
-          Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              children: [
-                CircleAvatar(
-                  radius: 60,
-                  backgroundImage: AssetImage('assets/default_profile.png'),
-                ),
-                SizedBox(height: 12),
-                Text(name,
-                    style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: deepRed)),
-                Text(email, style: TextStyle(fontSize: 16)),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.location_on, color: Colors.grey[600], size: 16),
-                    SizedBox(width: 4),
-                    Text(address,
-                        style:
-                            TextStyle(fontSize: 14, color: Colors.grey[700]))
-                  ],
-                ),
-              ],
+Container(
+  margin: EdgeInsets.only(top: 16),
+  child: Stack(
+    alignment: Alignment.bottomRight,
+    children: [
+      Container(
+        padding: EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: deepRed, width: 2),
+        ),
+        child: CircleAvatar(
+          radius: 60,
+          backgroundColor: Colors.white,
+          backgroundImage: _profileImage != null
+              ? FileImage(_profileImage!)
+              : (metadata['profile_picture'] != null
+                  ? NetworkImage(metadata['profile_picture'])
+                  : AssetImage('assets/default_profile.png')) as ImageProvider,
+        ),
+      ),
+      Positioned(
+        bottom: 4,
+        right: 4,
+        child: GestureDetector(
+          onTap: _pickProfileImage,
+          child: Container(
+            padding: EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: deepRed,
+            ),
+            child: Icon(
+              Icons.camera_alt,
+              size: 20,
+              color: Colors.white,
             ),
           ),
+        ),
+      ),
+    ],
+  ),
+),
+
+// 👇 Add this
+SizedBox(height: 12),
+Text(
+  name,
+  style: TextStyle(
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+    color: deepRed,
+  ),
+),
+Text(
+  email,
+  style: TextStyle(
+    fontSize: 16,
+  ),
+),
+Row(
+  mainAxisAlignment: MainAxisAlignment.center,
+  children: [
+    Icon(Icons.location_on, color: Colors.grey[600], size: 16),
+    SizedBox(width: 4),
+    Text(
+      address,
+      style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+    ),
+  ],
+),
+SizedBox(height: 16),
 
           // White rounded container with tabs and tab content
           Expanded(
@@ -223,16 +367,17 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
                         ),
 
                         // ⚙️ Settings
-                        ListView(
-                          padding: EdgeInsets.all(16),
-                          children: [
-                            _settingsTile(Icons.lock, 'Change Password'),
-                            _settingsTile(Icons.notifications,
-                                'Notification Preferences'),
-                            _settingsTile(
-                                Icons.privacy_tip, 'Privacy Settings'),
-                          ],
-                        ),
+                        // ⚙️ Settings
+ListView(
+  padding: EdgeInsets.all(16),
+  children: [
+    _settingsTile(Icons.lock, 'Change Password'),
+    _settingsTile(Icons.notifications, 'Notification Preferences'),
+    _settingsTile(Icons.privacy_tip, 'Privacy Settings'),
+    SizedBox(height: 16),
+  ],
+),
+
                       ],
                     ),
                   ),

@@ -24,6 +24,8 @@ dependencies:
   zego_uikit: ^2.28.22
   zego_uikit_signaling_plugin: ^2.8.15
   zego_plugin_adapter: ^2.13.9
+  image_cropper: ^5.0.1
+  
 
 dev_dependencies:
   flutter_test:
