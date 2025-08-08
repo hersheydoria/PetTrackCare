@@ -9,8 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  supabase_flutter: ^2.9.1
-  flutter_map: ^8.1.1
+  supabase_flutter: ^1.10.3
+  flutter_map: ^6.0.0
   latlong2: ^0.9.0
   geocoding: ^4.0.0
   image_picker: ^1.0.5
@@ -25,6 +25,7 @@ dependencies:
   zego_uikit_signaling_plugin: ^2.8.15
   zego_plugin_adapter: ^2.13.9
   image_cropper: ^9.1.0
+  realtime_client: ^1.0.0 
 
   
 dev_dependencies:
