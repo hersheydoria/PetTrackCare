@@ -30,11 +30,31 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     return response.first;
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+List<Map<String, dynamic>> _pets = [];
+Map<String, dynamic>? _selectedPet;
+
+Future<void> _fetchPets() async {
+  final response = await Supabase.instance.client
+      .from('pets')
+      .select()
+      .eq('owner_id', user?.id)
+      .order('id', ascending: false);
+
+  if (response.isNotEmpty) {
+    setState(() {
+      _pets = List<Map<String, dynamic>>.from(response);
+      _selectedPet = _pets.first; // Default to latest pet
+    });
   }
+}
+
+@override
+void initState() {
+  super.initState();
+  _tabController = TabController(length: 3, vsync: this);
+  _fetchPets();
+}
+
 
   @override
   void dispose() {
@@ -52,102 +72,108 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         title:
             Text('Pet Profile', style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
-          IconButton(
-            icon: Icon(Icons.notifications),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const NotificationScreen(),
-                ),
-              );
-            },
+  IconButton(
+    icon: Icon(Icons.notifications),
+    onPressed: () {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const NotificationScreen(),
+        ),
+      );
+    },
+  ),
+  PopupMenuButton<Map<String, dynamic>>(
+    icon: Icon(Icons.more_vert),
+    onSelected: (pet) {
+      setState(() {
+        _selectedPet = pet;
+      });
+    },
+    itemBuilder: (context) {
+      return _pets.map((pet) {
+        return PopupMenuItem(
+          value: pet,
+          child: Text(
+            pet['name'] ?? 'Unnamed',
+            style: TextStyle(
+              fontWeight: pet == _selectedPet
+                  ? FontWeight.bold
+                  : FontWeight.normal,
+              color: pet == _selectedPet ? deepRed : Colors.black,
+            ),
           ),
-          IconButton(
-            icon: Icon(Icons.more_vert),
-            onPressed: () {
-              // Add menu options here
-            },
-          ),
+        );
+      }).toList();
+    },
+  ),
+],
+      ),
+      body: _selectedPet == null
+    ? Center(child: CircularProgressIndicator(color: deepRed))
+    : SingleChildScrollView(
+        padding: EdgeInsets.only(bottom: 16),
+        child: Column(
+          children: [
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Column(
+                children: [
+                  CircleAvatar(
+                    radius: 60,
+                    backgroundImage: _selectedPet!['profile_picture'] != null &&
+                            _selectedPet!['profile_picture'].toString().isNotEmpty
+                        ? NetworkImage(_selectedPet!['profile_picture'])
+                        : const AssetImage('assets/pets-profile-pictures.png')
+                            as ImageProvider,
+                  ),
+                  SizedBox(height: 12),
+                  Text(_selectedPet!['name'] ?? 'Unnamed',
+                      style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: deepRed)),
+                  Text(_selectedPet!['breed'] ?? 'Unknown',
+                      style: TextStyle(fontSize: 16)),
+                  Text('${_selectedPet!['age']} years old',
+                      style:
+                          TextStyle(fontSize: 14, color: Colors.grey[700])),
+                ],
+              ),
+            ),
+          
+             // ❤️ Health & ⚖️ Weight Card
+Container(
+  margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+  padding: EdgeInsets.all(16),
+  decoration: BoxDecoration(
+    color: peach,
+    borderRadius: BorderRadius.circular(12),
+    boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
+  ),
+  child: Row(
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      Column(
+        children: [
+          Icon(Icons.favorite, color: Colors.green),
+          SizedBox(height: 4),
+          Text('Health', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text(_selectedPet!['health'] ?? 'Unknown'),
         ],
       ),
-      body: FutureBuilder<Map<String, dynamic>?>(
-        future: _fetchLatestPet(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator(color: deepRed));
-          }
+      Column(
+        children: [
+          Icon(Icons.monitor_weight, color: deepRed),
+          SizedBox(height: 4),
+          Text('Weight', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text('${_selectedPet!['weight']} kg'),
+        ],
+      ),
+    ],
+  ),
+),
 
-          final pet = snapshot.data;
-
-          if (pet == null) {
-            return Center(
-                child: Text('No pet found.',
-                    style: TextStyle(color: Colors.grey)));
-          }
-
-          return SingleChildScrollView(
-            padding: EdgeInsets.only(bottom: 16),
-            child: Column(
-              children: [
-                // 🐶 Pet Info
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Column(
-                    children: [
-                      CircleAvatar(
-                        radius: 60,
-                        backgroundImage:
-                            AssetImage('assets/pet_profile.png'),
-                      ),
-                      SizedBox(height: 12),
-                      Text(pet['name'] ?? 'Unnamed',
-                          style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: deepRed)),
-                      Text(pet['breed'] ?? 'Unknown',
-                          style: TextStyle(fontSize: 16)),
-                      Text('${pet['age']} years old',
-                          style: TextStyle(
-                              fontSize: 14, color: Colors.grey[700])),
-                    ],
-                  ),
-                ),
-
-                // ❤️ Health & ⚖️ Weight Card
-                Container(
-                  margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: peach,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      Column(
-                        children: [
-                          Icon(Icons.favorite, color: Colors.green),
-                          SizedBox(height: 4),
-                          Text('Health',
-                              style: TextStyle(fontWeight: FontWeight.bold)),
-                          Text(pet['health'] ?? 'Unknown'),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          Icon(Icons.monitor_weight, color: deepRed),
-                          SizedBox(height: 4),
-                          Text('Weight',
-                              style: TextStyle(fontWeight: FontWeight.bold)),
-                          Text('${pet['weight']} kg'),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
 
                 // 🧭 Tab Bar
                 Container(
@@ -186,10 +212,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                     ],
                   ),
                 ),
-              ],
-            ),
-          );
-        },
+          ],
+        ),
       ),
     );
   }

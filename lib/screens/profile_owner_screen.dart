@@ -33,6 +33,7 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen>
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
   }
+  
 
   void _logout(BuildContext context) async {
     await Supabase.instance.client.auth.signOut();
@@ -320,30 +321,35 @@ SizedBox(height: 16),
                                                 TextStyle(color: Colors.grey)));
                                   }
                                   return ListView.builder(
-                                    itemCount: pets.length,
-                                    itemBuilder: (context, index) {
-                                      final pet = pets[index];
-                                      return Container(
-                                        margin: EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          border: Border.all(
-                                              color: Colors.grey.shade300),
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          color: Colors.white,
-                                        ),
-                                        child: ListTile(
-                                          leading: Icon(Icons.pets,
-                                              color: deepRed),
-                                          title:
-                                              Text(pet['name'] ?? 'Unnamed'),
-                                          subtitle: Text(
-                                              'Breed: ${pet['breed'] ?? 'Unknown'} | Age: ${pet['age'] ?? 0}'),
-                                        ),
-                                      );
-                                    },
-                                  );
+  itemCount: pets.length,
+  itemBuilder: (context, index) {
+    final pet = pets[index];
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+      ),
+      child: ListTile(
+        leading: CircleAvatar(
+          radius: 25,
+          backgroundColor: Colors.grey[300],
+          backgroundImage: (pet['profile_picture'] != null &&
+                  pet['profile_picture'].toString().isNotEmpty)
+              ? NetworkImage(pet['profile_picture'])
+              : const AssetImage('assets/pets-profile-pictures.png')
+                  as ImageProvider,
+        ),
+        title: Text(pet['name'] ?? 'Unnamed'),
+        subtitle: Text(
+          'Breed: ${pet['breed'] ?? 'Unknown'} | Age: ${pet['age'] ?? 0}',
+        ),
+      ),
+    );
+  },
+);
+
                                 },
                               ),
                             ),
@@ -423,31 +429,81 @@ class _AddPetFormState extends State<_AddPetForm> {
   int age = 0;
   String health = '';
   double weight = 0.0;
-
+  File? _petImage;
   bool _isLoading = false;
 
+  final ImagePicker _picker = ImagePicker();
+
+  Future<void> _pickPetImage() async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _petImage = File(pickedFile.path);
+      });
+    }
+  }
+
+  Future<String?> _uploadPetImage(String userId) async {
+    if (_petImage == null) return null;
+
+    try {
+      final bytes = await _petImage!.readAsBytes();
+      final fileName =
+          'pet_images/${userId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final bucket = Supabase.instance.client.storage.from('pets-profile-pictures');
+
+      await bucket.uploadBinary(
+        fileName,
+        bytes,
+        fileOptions: const FileOptions(contentType: 'image/jpeg'),
+      );
+
+      final publicUrl = bucket.getPublicUrl(fileName);
+      return publicUrl;
+    } catch (e) {
+      print('❌ Error uploading pet image: $e');
+      return null;
+    }
+  }
+
   void _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    _formKey.currentState!.save();
+  if (!_formKey.currentState!.validate()) return;
+  _formKey.currentState!.save();
 
-    final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return;
+  final userId = Supabase.instance.client.auth.currentUser?.id;
+  if (userId == null) return;
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    await Supabase.instance.client.from('pets').insert({
+  try {
+    final imageUrl = await _uploadPetImage(userId);
+
+    final response = await Supabase.instance.client.from('pets').insert({
       'name': name,
       'breed': breed,
       'age': age,
       'health': health,
       'weight': weight,
       'owner_id': userId,
-    });
+      'profile_picture': imageUrl, // ✅ Must match your DB column name
+    }).select();
 
-    setState(() => _isLoading = false);
+    if (response.isEmpty) {
+      throw Exception("No data returned. Check your RLS policy or table columns.");
+    }
+
     widget.onPetAdded();
     Navigator.pop(context);
+  } catch (e) {
+    print('❌ Error saving pet: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to save pet. Please try again.')),
+    );
+  } finally {
+    setState(() => _isLoading = false);
   }
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -459,6 +515,41 @@ class _AddPetFormState extends State<_AddPetForm> {
               style: TextStyle(
                   fontSize: 20, fontWeight: FontWeight.bold, color: deepRed)),
           SizedBox(height: 16),
+
+          // Image picker section
+          Center(
+            child: Stack(
+              alignment: Alignment.bottomRight,
+              children: [
+                CircleAvatar(
+                  radius: 50,
+                  backgroundColor: Colors.grey[300],
+                  backgroundImage:
+                      _petImage != null ? FileImage(_petImage!) : null,
+                  child: _petImage == null
+                      ? Icon(Icons.pets, size: 50, color: Colors.white)
+                      : null,
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: GestureDetector(
+                    onTap: _pickPetImage,
+                    child: Container(
+                      padding: EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: deepRed,
+                      ),
+                      child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: 16),
+
           _buildTextField(label: "Name", onSaved: (val) => name = val ?? ''),
           _buildTextField(label: "Breed", onSaved: (val) => breed = val ?? ''),
           _buildTextField(
@@ -467,13 +558,13 @@ class _AddPetFormState extends State<_AddPetForm> {
             onSaved: (val) => age = int.tryParse(val ?? '0') ?? 0,
           ),
           _buildTextField(
-              label: "Health",
-              onSaved: (val) => health = val ?? 'Healthy'),
+              label: "Health", onSaved: (val) => health = val ?? 'Healthy'),
           _buildTextField(
             label: "Weight (kg)",
             keyboardType: TextInputType.number,
             onSaved: (val) => weight = double.tryParse(val ?? '0.0') ?? 0.0,
           ),
+
           SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -517,3 +608,4 @@ class _AddPetFormState extends State<_AddPetForm> {
     );
   }
 }
+
