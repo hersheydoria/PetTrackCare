@@ -193,7 +193,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       'content': '[image]',
       'is_seen': false,
       'type': type,
-      'media_url': 'public/chat-media/images/$filename',
+      'media_url': 'images/$filename',
     });
 
     fetchMessages();
