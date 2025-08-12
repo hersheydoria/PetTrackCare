@@ -160,10 +160,12 @@ Future<void> pickAndUploadImage() async {
 
 
   Future<List<Map<String, dynamic>>> _fetchPets() async {
+    final ownerId = user?.id;
+    if (ownerId == null) return [];
     final response = await Supabase.instance.client
         .from('pets')
         .select()
-        .eq('owner_id', user?.id);
+        .eq('owner_id', ownerId);
     return List<Map<String, dynamic>>.from(response);
   }
 

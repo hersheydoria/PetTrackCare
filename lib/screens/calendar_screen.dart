@@ -31,10 +31,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   Future<void> _fetchBookedSlots() async {
+    final sitterId = Supabase.instance.client.auth.currentUser?.id;
+    if (sitterId == null) return;
     final response = await supabase
         .from('sitter_slots')
         .select()
-        .eq('sitter_id', Supabase.instance.client.auth.currentUser?.id);
+        .eq('sitter_id', sitterId);
 
     final data = response as List<dynamic>;
 
@@ -58,10 +60,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
       _focusedDay = focusedDay;
     });
 
+    final sitterId = Supabase.instance.client.auth.currentUser?.id;
+    if (sitterId == null) return;
+
     final response = await supabase
         .from('sitter_slots')
         .select()
-        .eq('sitter_id', Supabase.instance.client.auth.currentUser?.id)
+        .eq('sitter_id', sitterId)
         .eq('date', DateFormat('yyyy-MM-dd').format(selectedDay));
 
     final data = response as List<dynamic>;

@@ -64,8 +64,8 @@ class _LocationPickerState extends State<LocationPicker> {
       body: FlutterMap(
         mapController: mapController,
         options: MapOptions(
-          center: LatLng(9.0393, 125.5746),
-          zoom: 11.5,
+          initialCenter: LatLng(9.0393, 125.5746),
+          initialZoom: 11.5,
           maxZoom: 19.0, 
           minZoom: 10.5,
           onTap: (tapPosition, latLng) => _onTapMap(latLng),

@@ -165,17 +165,17 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
 
     try {
       final response = await supabase
-          .from('sitting_jobs')
-          .select('''
-            pets (
-              id, name, breed, age, owner_id,
-              users!owner_id (
-                name
-              )
-            )
-          ''')
-          .eq('sitter_id', sitterId)
-          .in_('status', ['Accepted', 'Active']);
+      .from('sitting_jobs')
+      .select('''
+        pets (
+          id, name, breed, age, owner_id,
+          users!owner_id (
+            name
+          )
+        )
+      ''')
+      .eq('sitter_id', sitterId)
+      .or('status.eq.Accepted,status.eq.Active');
 
       setState(() {
         assignedPets = List<Map<String, dynamic>>.from(response);

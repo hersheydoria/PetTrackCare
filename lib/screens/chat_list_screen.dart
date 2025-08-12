@@ -23,14 +23,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final channel = supabase.channel('public:messages');
 
     channel
-        .on(
-          RealtimeListenTypes.postgresChanges,
-          ChannelFilter(
-            event: 'INSERT',
-            schema: 'public',
-            table: 'messages',
-          ),
-          (payload, [ref]) {
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'messages',
+          callback: (payload, [ref]) {
             fetchMessages(); // Refresh the messages list on new insert
           },
         )

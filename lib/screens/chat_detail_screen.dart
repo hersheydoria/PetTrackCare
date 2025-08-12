@@ -69,11 +69,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   void subscribeToMessages() {
     supabase
         .channel('public:messages')
-        .on(
-          RealtimeListenTypes.postgresChanges,
-          ChannelFilter(event: 'INSERT', schema: 'public', table: 'messages'),
-          (payload, [ref]) async {
-            final msg = payload['new'];
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'messages',
+          callback: (payload, [ref]) async {
+            final msg = payload.newRecord;
             final from = msg['sender_id'];
             final to = msg['receiver_id'];
 
@@ -104,11 +105,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   void listenToTyping() {
     supabase
         .channel('public:typing_status')
-        .on(
-          RealtimeListenTypes.postgresChanges,
-          ChannelFilter(event: 'UPDATE', schema: 'public', table: 'typing_status'),
-          (payload, [ref]) {
-            final data = payload['new'];
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'typing_status',
+          callback: (payload, [ref]) {
+            final data = payload.newRecord;
             if (data['user_id'] == widget.receiverId &&
                 data['chat_with_id'] == widget.userId) {
               setState(() {

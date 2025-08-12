@@ -54,28 +54,28 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   final List<String> activityLevels = ["High", "Medium", "Low"];
 
   Future<Map<String, dynamic>?> _fetchLatestPet() async {
+    final ownerId = user?.id;
+    if (ownerId == null) return null;
     final response = await Supabase.instance.client
         .from('pets')
         .select()
-        .eq('owner_id', user?.id)
+        .eq('owner_id', ownerId)
         .order('id', ascending: false)
-        .limit(1)
-        .execute();
-
-    final data = response.data as List?;
+        .limit(1);
+    final data = response as List?;
     if (data == null || data.isEmpty) return null;
     return data.first as Map<String, dynamic>;
   }
 
   Future<void> _fetchPets() async {
+    final ownerId = user?.id;
+    if (ownerId == null) return;
     final response = await Supabase.instance.client
         .from('pets')
         .select()
-        .eq('owner_id', user?.id)
-        .order('id', ascending: false)
-        .execute();
-
-    final data = response.data as List?;
+        .eq('owner_id', ownerId)
+        .order('id', ascending: false);
+    final data = response as List?;
     if (data != null && data.isNotEmpty) {
       setState(() {
         _pets = List<Map<String, dynamic>>.from(data);
