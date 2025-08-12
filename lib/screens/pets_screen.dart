@@ -25,7 +25,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
 
-  String backendUrl = "http://192.168.100.23:5000"; // set to your deployed backend
+  String backendUrl = "http://192.168.100.23:5000/analyze"; // set to your deployed backend
   List<double> _sleepTrend = []; // next 7 days predicted sleep hours
   Map<String, double> _moodProb = {};
   Map<String, double> _activityProb = {};
@@ -41,11 +41,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String? _activityLevel;
   double? _sleepHours;
   String? _notes;
-
-  final List<String> _behaviors = [
-    "Active", "Sleepy", "Aggressive", "Happy", "Anxious",
-    "Playful", "Eating", "Not Eating", "Restless", "Lethargic"
-  ];
 
   final List<String> moods = [
     "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
@@ -81,8 +76,42 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         _pets = List<Map<String, dynamic>>.from(data);
         _selectedPet = _pets.first;
       });
+      await _fetchLatestAnalysis(); // Fetch analysis after pets
     }
   }
+
+Future<void> _fetchLatestAnalysis() async {
+  if (_selectedPet == null) return;
+  final petId = _selectedPet!['id'];
+  final response = await Supabase.instance.client
+      .from('behavior_analysis')
+      .select()
+      .eq('pet_id', petId)
+      .order('created_at', ascending: false)
+      .limit(1);
+
+  final data = response as List?;
+  if (data != null && data.isNotEmpty) {
+    final analysis = data.first as Map<String, dynamic>;
+    setState(() {
+      _prediction = analysis['prediction'];
+      _recommendation = analysis['recommendation'];
+      final trends = analysis['trends'] ?? {};
+      _sleepTrend = (trends['sleep_forecast'] as List<dynamic>?)
+              ?.map((e) => (e as num).toDouble())
+              .toList() ??
+          [];
+      _moodProb =
+          (trends['mood_probabilities'] as Map?)?.map((k, v) =>
+                  MapEntry(k.toString(), (v as num).toDouble())) ??
+              {};
+      _activityProb =
+          (trends['activity_probabilities'] as Map?)?.map((k, v) =>
+                  MapEntry(k.toString(), (v as num).toDouble())) ??
+              {};
+    });
+  }
+}
 
   @override
   void initState() {
@@ -119,10 +148,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           ),
           PopupMenuButton<Map<String, dynamic>>(
             icon: Icon(Icons.more_vert),
-            onSelected: (pet) {
+            onSelected: (pet) async {
               setState(() {
                 _selectedPet = pet;
               });
+              await _fetchLatestAnalysis();
             },
             itemBuilder: (context) {
               return _pets.map((pet) {
@@ -445,7 +475,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                         // 2) Call backend analyze endpoint
                         try {
                           final resp = await http.post(
-                            Uri.parse(backendUrl),
+                            Uri.parse("http://192.168.100.23:5000/analyze"),
                             headers: {'Content-Type': 'application/json'},
                             body: jsonEncode({
                               'pet_id': _selectedPet!['id'],
@@ -534,12 +564,60 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           if (_sleepTrend.isNotEmpty) ...[
             Text("7-day Sleep Forecast", style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 8),
+            SizedBox(
+              height: 180,
+              child: LineChart(
+                LineChartData(
+                  minY: 0,
+                  maxY: 24,
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: true),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        getTitlesWidget: (value, meta) {
+                          int idx = value.toInt();
+                          if (idx >= 0 && idx < _sleepTrend.length) {
+                            final date = _selectedDate != null
+                                ? _selectedDate!.add(Duration(days: idx))
+                                : DateTime.now().add(Duration(days: idx));
+                            return Text(DateFormat('MM/dd').format(date), style: TextStyle(fontSize: 10));
+                          }
+                          return Text('');
+                        },
+                      ),
+                    ),
+                  ),
+                  gridData: FlGridData(show: true),
+                  borderData: FlBorderData(show: true),
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: List.generate(
+                        _sleepTrend.length,
+                        (i) => FlSpot(i.toDouble(), _sleepTrend[i]),
+                      ),
+                      isCurved: true,
+                      dotData: FlDotData(show: true),
+                      belowBarData: BarAreaData(show: true),
+                      barWidth: 3,
+                      color: deepRed,
+                    ),
+                  ],
+                ),
+              ),
+            ),
             SizedBox(height: 12),
             Text("Mood distribution (recent):"),
-            Text(_moodProb.isEmpty ? "No mood data" : _moodProb.entries.map((e)=>"${e.key}: ${(e.value*100).round()}%").join("  ·  ")),
+            Text(_moodProb.isEmpty
+                ? "No mood data"
+                : _moodProb.entries.map((e) => "${e.key}: ${(e.value * 100).round()}%").join("  ·  ")),
             SizedBox(height: 8),
             Text("Activity distribution (recent):"),
-            Text(_activityProb.isEmpty ? "No activity data" : _activityProb.entries.map((e)=>"${e.key}: ${(e.value*100).round()}%").join("  ·  ")),
+            Text(_activityProb.isEmpty
+                ? "No activity data"
+                : _activityProb.entries.map((e) => "${e.key}: ${(e.value * 100).round()}%").join("  ·  ")),
           ],
         ],
       ),
