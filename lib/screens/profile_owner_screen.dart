@@ -582,6 +582,7 @@ class _AddPetFormState extends State<_AddPetForm> {
   String breed = '';
   int age = 0;
   String health = '';
+  String gender = 'Male'; // added gender state
   double weight = 0.0;
   File? _petImage;
   bool _isLoading = false;
@@ -631,12 +632,14 @@ class _AddPetFormState extends State<_AddPetForm> {
       breed = p['breed']?.toString() ?? '';
       age = (p['age'] is int) ? p['age'] : int.tryParse(p['age']?.toString() ?? '') ?? 0;
       health = p['health']?.toString() ?? 'Good';
+      gender = p['gender']?.toString() ?? 'Male';
       weight = (p['weight'] is num) ? (p['weight'] as num).toDouble() : double.tryParse(p['weight']?.toString() ?? '') ?? 0.0;
       _species = (p['type'] ?? p['species'] ?? 'Dog').toString();
     } else {
       // default breed selection
       breed = dogBreeds.first;
       health = 'Good'; // default health for new pets
+      gender = 'Male';
     }
   }
 
@@ -707,6 +710,7 @@ class _AddPetFormState extends State<_AddPetForm> {
         'breed': breed,
         'age': age,
         'health': health,
+        'gender': gender,
         'weight': weight,
         'type': _species,
         if (imageUrl != null) 'profile_picture': imageUrl,
@@ -717,6 +721,7 @@ class _AddPetFormState extends State<_AddPetForm> {
         'breed': breed,
         'age': age,
         'health': health,
+        'gender': gender,
         'weight': weight,
         'owner_id': userId,
         'type': _species, // store species/type
@@ -760,8 +765,8 @@ class _AddPetFormState extends State<_AddPetForm> {
                  selected: _species == 'Dog',
                  onSelected: (_) => setState(() {
                    _species = 'Dog';
-                   // default breed if none
-                   if (breed.isEmpty) breed = dogBreeds.first;
+                   // ensure breed matches selected species
+                   if (!dogBreeds.contains(breed)) breed = dogBreeds.first;
                  }),
                ),
                SizedBox(width: 8),
@@ -770,29 +775,13 @@ class _AddPetFormState extends State<_AddPetForm> {
                  selected: _species == 'Cat',
                  onSelected: (_) => setState(() {
                    _species = 'Cat';
-                   if (breed.isEmpty) breed = catBreeds.first;
+                   // ensure breed matches selected species
+                   if (!catBreeds.contains(breed)) breed = catBreeds.first;
                  }),
                ),
              ],
            ),
            SizedBox(height: 12),
-
-           // dependent breed dropdown
-           Padding(
-             padding: const EdgeInsets.symmetric(vertical: 8),
-             child: DropdownButtonFormField<String>(
-               value: ( _species == 'Dog' ? (dogBreeds.contains(breed) ? breed : dogBreeds.first) : (catBreeds.contains(breed) ? breed : catBreeds.first) ),
-               decoration: InputDecoration(
-                 labelText: "Breed",
-                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-               ),
-               items: ( _species == 'Dog' ? dogBreeds : catBreeds ).map((b) {
-                 return DropdownMenuItem(value: b, child: Text(b));
-               }).toList(),
-               onChanged: (val) => setState(() => breed = val ?? ''),
-               onSaved: (val) => breed = val ?? '',
-             ),
-           ),
 
           // Image picker section
           Center(
@@ -829,10 +818,42 @@ class _AddPetFormState extends State<_AddPetForm> {
           SizedBox(height: 16),
 
           _buildTextField(label: "Name", onSaved: (val) => name = val ?? ''),
+         // Breed dropdown moved to after Name
+         Padding(
+           padding: const EdgeInsets.symmetric(vertical: 8),
+           child: DropdownButtonFormField<String>(
+             value: (_species == 'Dog' ? (dogBreeds.contains(breed) ? breed : dogBreeds.first) : (catBreeds.contains(breed) ? breed : catBreeds.first)),
+             decoration: InputDecoration(
+               labelText: "Breed",
+               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+             ),
+             items: (_species == 'Dog' ? dogBreeds : catBreeds).map((b) {
+               return DropdownMenuItem(value: b, child: Text(b));
+             }).toList(),
+             onChanged: (val) => setState(() => breed = val ?? ''),
+             onSaved: (val) => breed = val ?? '',
+           ),
+         ),
           _buildTextField(
             label: "Age (years)",
             keyboardType: TextInputType.number,
             onSaved: (val) => age = int.tryParse(val ?? '0') ?? 0,
+          ),
+          // Gender dropdown moved under Age
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: DropdownButtonFormField<String>(
+              value: gender.isNotEmpty ? gender : 'Male',
+              decoration: InputDecoration(
+                labelText: "Gender",
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              items: ['Male', 'Female', 'Unknown'].map((g) {
+                return DropdownMenuItem(value: g, child: Text(g));
+              }).toList(),
+              onChanged: (val) => setState(() => gender = val ?? 'Male'),
+              onSaved: (val) => gender = val ?? 'Male',
+            ),
           ),
           // replace free-text health field with dropdown
           Padding(

@@ -103,6 +103,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       setState(() => _loadingPets = false);
       return;
     }
+
     setState(() => _loadingPets = true);
     try {
       final response = await Supabase.instance.client
@@ -115,22 +116,25 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         setState(() {
           _pets = List<Map<String, dynamic>>.from(data);
           _selectedPet = _pets.first;
+          // stop showing loader as soon as we have pet data
+          _loadingPets = false;
         });
-        // fetch events and recent predictions immediately so UI shows them without waiting for analysis
-        await _fetchBehaviorDates();
-        await _fetchRecentPredictions();
-        // fetch backend analysis (illness risk + numeric sleep forecast) right away
-        await _fetchAnalyzeFromBackend();
-        // still fetch latest analysis (may be empty)
-        await _fetchLatestAnalysis(); // Fetch analysis after pets
+        // Trigger additional fetches in background so UI can render immediately.
+        // We intentionally do NOT await these so they don't keep the loader visible.
+        _fetchBehaviorDates();
+        _fetchRecentPredictions();
+        _fetchAnalyzeFromBackend();
+        _fetchLatestAnalysis();
       } else {
         // no pets found
         setState(() {
           _pets = [];
           _selectedPet = null;
+          _loadingPets = false;
         });
       }
-    } finally {
+    } catch (e) {
+      // ensure loader is cleared on error
       setState(() => _loadingPets = false);
     }
   }
