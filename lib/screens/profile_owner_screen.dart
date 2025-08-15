@@ -589,11 +589,36 @@ class _AddPetFormState extends State<_AddPetForm> {
   final ImagePicker _picker = ImagePicker();
 
   String _species = 'Dog'; // default
+  // Expanded breed lists including common Philippine local mixes (Askal/Aspin)
   final List<String> dogBreeds = [
-    'Labrador', 'Golden Retriever', 'German Shepherd', 'Bulldog', 'Beagle'
+    'Aspin (Askal)', // common local mixed-breed dog in the Philippines
+    'Labrador Retriever',
+    'Golden Retriever',
+    'German Shepherd',
+    'Shih Tzu',
+    'Pomeranian',
+    'Chihuahua',
+    'Beagle',
+    'Dachshund',
+    'Bulldog',
+    'Corgi',
+    'Siberian Husky',
+    'Maltese',
+    'Papillon',
+    'Pug',
   ];
+
   final List<String> catBreeds = [
-    'Siamese', 'Persian', 'Maine Coon', 'Ragdoll', 'Bengal'
+    'Puspin / Domestic Shorthair', // common local cat type
+    'Siamese',
+    'Persian',
+    'Maine Coon',
+    'Ragdoll',
+    'Bengal',
+    'British Shorthair',
+    'Sphynx',
+    'American Shorthair',
+    'Exotic Shorthair',
   ];
 
   @override
