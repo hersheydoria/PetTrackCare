@@ -159,7 +159,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     if (_selectedPet == null) return;
     final petId = _selectedPet!['id'];
     final response = await Supabase.instance.client
-        .from('behavior_analysis')
+        .from('predictions')
         .select()
         .eq('pet_id', petId)
         .order('created_at', ascending: false)
