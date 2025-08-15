@@ -25,6 +25,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<dynamic> pets = [];
   List<dynamic> sittingJobs = [];
   List<dynamic> availableSitters = [];
+  List<dynamic> ownerPendingRequests = [];
+  Set<String> pendingSitterIds = {};
   Map<String, dynamic> summary = {};
 
   bool isLoading = true;
@@ -86,6 +88,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> fetchOwnedPets() async {
     final petRes = await supabase.from('pets').select().eq('owner_id', widget.userId);
     setState(() => pets = petRes);
+    // After we have the owner's pets, fetch any pending sitting requests they created
+    await fetchOwnerPendingRequests();
+  }
+
+  Future<void> fetchOwnerPendingRequests() async {
+    try {
+      if (pets.isEmpty) {
+        setState(() {
+          ownerPendingRequests = [];
+          pendingSitterIds = {};
+        });
+        return;
+      }
+
+      // Query sitting_jobs and include pets; filter on the related pet's owner_id
+      final reqs = await supabase
+        .from('sitting_jobs')
+        .select('*, pets(owner_id)')
+        .eq('status', 'Pending')
+        .eq('pets.owner_id', widget.userId);
+
+      setState(() {
+        ownerPendingRequests = reqs ?? [];
+        pendingSitterIds = ownerPendingRequests.map((r) => r['sitter_id'] as String).toSet();
+      });
+    } catch (e) {
+      print('❌ fetchOwnerPendingRequests ERROR: $e');
+    }
   }
 
   Future<void> fetchSittingJobs() async {
@@ -110,6 +140,145 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         setState(() => summary = summaryRes);
       }
     } catch (_) {}
+  }
+
+  Future<void> _showHireModal(Map<String, dynamic> sitter) async {
+    if (pets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('You have no pets. Add a pet before hiring a sitter.')),
+      );
+      return;
+    }
+
+    String? selectedPetId = pets.isNotEmpty ? pets.first['id'] as String? : null;
+    DateTime selectedStart = DateTime.now();
+    DateTime? selectedEnd;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                left: 16,
+                right: 16,
+                top: 16,
+              ),
+              child: Wrap(
+                children: [
+                  Center(
+                    child: Container(
+                      height: 6,
+                      width: 60,
+                      margin: EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
+                    ),
+                  ),
+                  Text('Hire ${sitter['name'] ?? 'Sitter'}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                  SizedBox(height: 12),
+
+                  Text('Select which pet this sitter will look after:', style: TextStyle(color: deepRed)),
+                  SizedBox(height: 8),
+
+                  DropdownButtonFormField<String>(
+                    value: selectedPetId,
+                    items: pets.map<DropdownMenuItem<String>>((p) {
+                      return DropdownMenuItem(value: p['id'] as String?, child: Text(p['name'] ?? 'Unnamed'));
+                    }).toList(),
+                    onChanged: (v) => setModalState(() => selectedPetId = v),
+                    decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
+                  ),
+                  SizedBox(height: 12),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: selectedStart,
+                              firstDate: DateTime.now().subtract(Duration(days: 365)),
+                              lastDate: DateTime.now().add(Duration(days: 365 * 2)),
+                            );
+                            if (picked != null) setModalState(() => selectedStart = picked);
+                          },
+                          child: Text('Start: ${selectedStart.toLocal().toString().split(' ')[0]}'),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: selectedEnd ?? selectedStart,
+                              firstDate: selectedStart,
+                              lastDate: DateTime.now().add(Duration(days: 365 * 2)),
+                            );
+                            if (picked != null) setModalState(() => selectedEnd = picked);
+                          },
+                          child: Text('End: ${selectedEnd != null ? selectedEnd!.toLocal().toString().split(' ')[0] : 'Not set'}'),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        if (selectedPetId == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please select a pet.')));
+                          return;
+                        }
+                        Navigator.of(context).pop();
+                        await _createSittingJob(sitter['id'] as String, selectedPetId!, selectedStart, selectedEnd);
+                      },
+                      child: Text('Confirm Hire'),
+                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _createSittingJob(String sitterId, String petId, DateTime start, DateTime? end) async {
+    try {
+      final payload = {
+        'sitter_id': sitterId,
+        'pet_id': petId,
+        'start_date': start.toIso8601String().substring(0, 10),
+        'end_date': end != null ? end.toIso8601String().substring(0, 10) : null,
+        'status': 'Pending',
+      };
+
+      await supabase.from('sitting_jobs').insert(payload);
+
+      // Optimistically update UI so the Hire button immediately shows "Pending"
+      setState(() {
+        pendingSitterIds.add(sitterId);
+      });
+
+      // Give user feedback
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sitter hired — request sent.')));
+      // Refresh pending requests so UI stays in sync with backend
+      await fetchOwnerPendingRequests();
+    } catch (e) {
+      print('❌ createSittingJob ERROR: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create sitting job.')));
+    }
   }
 
   @override
@@ -271,6 +440,26 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     SizedBox(height: 8),
                     SizedBox(
                       width: 180,
+                      child: Builder(builder: (context) {
+                        final sitterId = sitter['id'] as String?;
+                        final isPending = sitterId != null && pendingSitterIds.contains(sitterId);
+                        return ElevatedButton.icon(
+                          onPressed: isPending ? null : () => _showHireModal(sitter),
+                          icon: Icon(isPending ? Icons.hourglass_top : Icons.person_add),
+                          label: Text(isPending ? 'Pending' : 'Hire Sitter'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isPending ? Colors.grey : deepRed,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                    SizedBox(height: 8),
+                    SizedBox(
+                      width: 180,
                       child: ElevatedButton.icon(
                         onPressed: () {
                           Navigator.push(
@@ -389,30 +578,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 }
 
 
-  Widget _buildHomeCard({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: peach,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 40, color: deepRed),
-            SizedBox(height: 12),
-            Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: deepRed)),
-          ],
-        ),
-      ),
-    );
-  }
+  // ...existing code... (unused home card helper removed)
 }
 
 Widget _sectionWithBorder({required String title, required Widget child}) {
