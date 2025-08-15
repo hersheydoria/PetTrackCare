@@ -5,6 +5,15 @@ import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'notification_screen.dart';
 
+Map<String, bool> likedPosts = {};
+Map<String, bool> showCommentInput = {};
+Map<String, TextEditingController> commentControllers = {};
+Map<String, int> likeCounts = {};
+Map<String, int> commentCounts = {};
+Map<String, List<Map<String, dynamic>>> postComments = {};
+Map<String, bool> likedComments = {};
+Map<String, TextEditingController> editCommentControllers = {};
+
 const deepRed = Color(0xFFB82132);
 const lightBlush = Color(0xFFF6DED8);
 const ownerColor = Color(0xFFECA1A6); 
@@ -35,10 +44,38 @@ class _CommunityScreenState extends State<CommunityScreen> {
     try {
       final response = await Supabase.instance.client
           .from('community_posts')
-          .select('*, users(name, role, profile)')
+          .select('''
+            *, 
+            users(name, role, profile), 
+            likes(user_id),
+            comments(
+              id, 
+              content, 
+              user_id, 
+              created_at,
+              users(name, profile),
+              comment_likes(user_id)
+            )
+          ''')
           .order('created_at', ascending: false);
+      print('Supabase response:');
+      print(response);
       setState(() {
         posts = response;
+        for (var post in posts) {
+          print('Post ID: ' + post['id'].toString() + ' - Comments: ' + post['comments'].toString());
+          final postId = post['id'].toString();
+          
+          // Check if the current user has liked this post
+          final likes = post['likes'] as List? ?? [];
+          likedPosts[postId] = likes.any((like) => like['user_id'] == widget.userId);
+          
+          // Handle comments
+          final comments = (post['comments'] != null && post['comments'] is List)
+            ? (post['comments'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList()
+            : <Map<String, dynamic>>[];
+          postComments[postId] = comments;
+        }
       });
     } catch (e) {
       print('Error fetching posts: $e');
@@ -306,7 +343,7 @@ void showEditPostModal(Map post) {
                     .eq('id', post['id'])
                     .select('*');
 
-                  if (response == null || response.isEmpty) {
+                  if (response.isEmpty) {
                     print('No post updated.');
                   } else {
                     print('Post updated successfully.');
@@ -339,6 +376,7 @@ void showEditPostModal(Map post) {
       itemCount: postList.length,
       itemBuilder: (context, index) {
         final post = postList[index];
+        final postId = post['id'].toString();
         final userData = post['users'] ?? {};
         final userName = userData['name'] ?? 'Unknown';
         final userRole = userData['role'] ?? 'User';
@@ -352,6 +390,18 @@ void showEditPostModal(Map post) {
                 : timeDiff.inHours < 24
                     ? '${timeDiff.inHours}h ago'
                     : '${timeDiff.inDays}d ago';
+
+        // Only initialize if not already set
+        if (!likedPosts.containsKey(postId)) {
+          final likes = post['likes'] as List? ?? [];
+          likedPosts[postId] = likes.any((like) => like['user_id'] == widget.userId);
+        }
+        showCommentInput.putIfAbsent(postId, () => false);
+        commentControllers.putIfAbsent(postId, () => TextEditingController());
+
+      int likeCount = (post['likes'] != null && post['likes'] is List) ? post['likes'].length : 0;
+      List<dynamic> comments = (post['comments'] != null && post['comments'] is List) ? post['comments'] : [];
+      int commentCount = comments.length;
 
         return Card(
           margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -417,22 +467,392 @@ void showEditPostModal(Map post) {
                   ],
                 ),
                 SizedBox(height: 10),
+                Text(post['content'] ?? ''),
+                SizedBox(height: 10),
                 if (post['image_url'] != null)
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: Image.network(post['image_url'], fit: BoxFit.cover),
                   ),
                 SizedBox(height: 10),
-                Text(post['content'] ?? ''),
-                SizedBox(height: 10),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    IconButton(icon: Icon(Icons.favorite_border, color: deepRed), onPressed: () {}),
-                    IconButton(icon: Icon(Icons.comment_outlined, color: deepRed), onPressed: () {}),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            likedPosts[postId]! ? Icons.favorite : Icons.favorite_border,
+                            color: likedPosts[postId]! ? Colors.red : deepRed,
+                          ),
+                          onPressed: () async {
+                            // Optimistically update UI
+                            final bool newLikeState = !likedPosts[postId]!;
+                            setState(() {
+                              likedPosts[postId] = newLikeState;
+                              if (newLikeState) {
+                                likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
+                              } else {
+                                likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
+                              }
+                            });
+
+                            try {
+                              // Update like in database
+                              if (newLikeState) {
+                                await Supabase.instance.client
+                                  .from('likes')
+                                  .insert({'post_id': postId, 'user_id': widget.userId});
+                              } else {
+                                await Supabase.instance.client
+                                  .from('likes')
+                                  .delete()
+                                  .eq('post_id', postId)
+                                  .eq('user_id', widget.userId);
+                              }
+
+                              // Fetch updated like count for this post only
+                              final updatedPost = await Supabase.instance.client
+                                .from('community_posts')
+                                .select('*, likes(user_id)')
+                                .eq('id', postId)
+                                .single();
+                              
+                              if (updatedPost != null) {
+                                setState(() {
+                                  // Update only this post's data
+                                  final index = posts.indexWhere((p) => p['id'].toString() == postId);
+                                  if (index != -1) {
+                                    posts[index]['likes'] = updatedPost['likes'];
+                                    likeCounts[postId] = updatedPost['likes']?.length ?? 0;
+                                  }
+                                });
+                              }
+                            } catch (e) {
+                              print('Error updating like: $e');
+                              // Revert UI on error
+                              setState(() {
+                                likedPosts[postId] = !newLikeState;
+                                if (!newLikeState) {
+                                  likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
+                                } else {
+                                  likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
+                                }
+                              });
+                            }
+                          },
+                        ),
+                            if (likeCount > 0)
+                              Text('$likeCount'),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.comment_outlined, color: deepRed),
+                          onPressed: () {
+                            setState(() {
+                              showCommentInput[postId] = !showCommentInput[postId]!;
+                            });
+                          },
+                        ),
+                            if (commentCount > 0)
+                              Text('$commentCount comments'),
+                      ],
+                    ),
                     IconButton(icon: Icon(Icons.bookmark_border, color: deepRed), onPressed: () {}),
                   ],
-                )
+                ),
+                if (showCommentInput[postId]!)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: commentControllers[postId],
+                                decoration: InputDecoration(
+                                  hintText: 'Add a comment...',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              icon: Icon(Icons.send, color: deepRed),
+                              onPressed: () async {
+                                final commentText = commentControllers[postId]?.text.trim();
+                                if (commentText != null && commentText.isNotEmpty) {
+                                  // Optimistically add the comment
+                                  final optimisticComment = {
+                                    'content': commentText,
+                                    'user_id': widget.userId,
+                                    'created_at': DateTime.now().toIso8601String(),
+                                    'users': {'name': 'You', 'profile': null},
+                                    'comment_likes': []
+                                  };
+                                  
+                                  setState(() {
+                                    postComments[postId]?.add(optimisticComment);
+                                    commentCounts[postId] = (commentCounts[postId] ?? 0) + 1;
+                                    showCommentInput[postId] = false;
+                                    commentControllers[postId]?.clear();
+                                  });
+
+                                  try {
+                                    // Add comment to database
+                                    final response = await Supabase.instance.client
+                                      .from('comments')
+                                      .insert({
+                                        'post_id': postId,
+                                        'user_id': widget.userId,
+                                        'content': commentText
+                                      })
+                                      .select('*, users(name, profile), comment_likes(*)')
+                                      .single();
+
+                                    // Update the optimistic comment with real data
+                                    setState(() {
+                                      final comments = postComments[postId] ?? [];
+                                      final index = comments.length - 1;
+                                      if (index >= 0) {
+                                        postComments[postId]![index] = response;
+                                      }
+                                    });
+                                  } catch (e) {
+                                    print('Error posting comment: $e');
+                                    // Remove the optimistic comment on error
+                                    setState(() {
+                                      postComments[postId]?.removeLast();
+                                      commentCounts[postId] = (commentCounts[postId] ?? 1) - 1;
+                                    });
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to post comment'))
+                                    );
+                                  }
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                        if ((postComments[postId]?.length ?? 0) > 0)
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: NeverScrollableScrollPhysics(),
+                            itemCount: postComments[postId]?.length ?? 0,
+                            itemBuilder: (context, idx) {
+                              final comment = postComments[postId]![idx];
+                              final user = comment['users'] ?? {};
+                              final commentId = comment['id'].toString();
+                              final commentLikes = comment['comment_likes'] as List? ?? [];
+                              final isLiked = commentLikes.any((like) => like['user_id'] == widget.userId);
+                              likedComments[commentId] = isLiked;
+
+                              return Card(
+                                elevation: 1,
+                                margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                                child: Padding(
+                                  padding: EdgeInsets.all(8),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          CircleAvatar(
+                                            radius: 16,
+                                            backgroundImage: user['profile'] != null
+                                                ? NetworkImage(user['profile'])
+                                                : AssetImage('assets/logo.png') as ImageProvider,
+                                          ),
+                                          SizedBox(width: 8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Row(
+                                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Text(
+                                                          user['name'] ?? 'Unknown',
+                                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                                        ),
+                                                        SizedBox(width: 8),
+                                                        Text(
+                                                          _getTimeAgo(DateTime.parse(comment['created_at'])),
+                                                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    if (comment['user_id'] == widget.userId)
+                                                      PopupMenuButton<String>(
+                                                        icon: Icon(Icons.more_vert, size: 16),
+                                                        onSelected: (value) async {
+                                                          if (value == 'edit') {
+                                                            editCommentControllers.putIfAbsent(
+                                                                commentId, () => TextEditingController(text: comment['content']));
+                                                            showDialog(
+                                                              context: context,
+                                                              builder: (context) => AlertDialog(
+                                                                title: Text('Edit Comment'),
+                                                                content: TextField(
+                                                                  controller: editCommentControllers[commentId],
+                                                                  decoration: InputDecoration(
+                                                                    hintText: 'Edit your comment...',
+                                                                    border: OutlineInputBorder(),
+                                                                  ),
+                                                                  maxLines: 3,
+                                                                ),
+                                                                actions: [
+                                                                  TextButton(
+                                                                    onPressed: () => Navigator.pop(context),
+                                                                    child: Text('Cancel'),
+                                                                  ),
+                                                                  ElevatedButton(
+                                                                    onPressed: () async {
+                                                                      final newContent = editCommentControllers[commentId]?.text.trim();
+                                                                      if (newContent?.isNotEmpty ?? false) {
+                                                                        await Supabase.instance.client
+                                                                            .from('comments')
+                                                                            .update({'content': newContent})
+                                                                            .eq('id', commentId);
+                                                                        Navigator.pop(context);
+                                                                        fetchPosts();
+                                                                      }
+                                                                    },
+                                                                    child: Text('Save'),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            );
+                                                          } else if (value == 'delete') {
+                                                            final confirm = await showDialog<bool>(
+                                                              context: context,
+                                                              builder: (context) => AlertDialog(
+                                                                title: Text('Delete Comment'),
+                                                                content: Text('Are you sure you want to delete this comment?'),
+                                                                actions: [
+                                                                  TextButton(
+                                                                    onPressed: () => Navigator.pop(context, false),
+                                                                    child: Text('Cancel'),
+                                                                  ),
+                                                                  ElevatedButton(
+                                                                    onPressed: () => Navigator.pop(context, true),
+                                                                    child: Text('Delete'),
+                                                                    style: ElevatedButton.styleFrom(
+                                                                      backgroundColor: Colors.red,
+                                                                    ),
+                                                                  ),
+                                                                ],
+                                                              ),
+                                                            );
+                                                            if (confirm == true) {
+                                                              await Supabase.instance.client
+                                                                  .from('comments')
+                                                                  .delete()
+                                                                  .eq('id', commentId);
+                                                              fetchPosts();
+                                                            }
+                                                          }
+                                                        },
+                                                        itemBuilder: (_) => [
+                                                          PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                                          PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                                        ],
+                                                      ),
+                                                  ],
+                                                ),
+                                                SizedBox(height: 4),
+                                                Text(
+                                                  comment['content'] ?? '',
+                                                  style: TextStyle(fontSize: 13),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Padding(
+                                        padding: EdgeInsets.only(left: 40, top: 8),
+                                        child: Row(
+                                          children: [
+                                            InkWell(
+                                              onTap: () async {
+                                                final newLikeState = !likedComments[commentId]!;
+                                                final oldLikes = comment['comment_likes'] as List? ?? [];
+                                                
+                                                setState(() {
+                                                  likedComments[commentId] = newLikeState;
+                                                  if (newLikeState) {
+                                                    comment['comment_likes'] = [...oldLikes, {'user_id': widget.userId}];
+                                                  } else {
+                                                    comment['comment_likes'] = oldLikes.where((like) => like['user_id'] != widget.userId).toList();
+                                                  }
+                                                });
+
+                                                try {
+                                                  if (newLikeState) {
+                                                    await Supabase.instance.client
+                                                        .from('comment_likes')
+                                                        .insert({
+                                                      'comment_id': commentId,
+                                                      'user_id': widget.userId
+                                                    });
+                                                  } else {
+                                                    await Supabase.instance.client
+                                                        .from('comment_likes')
+                                                        .delete()
+                                                        .eq('comment_id', commentId)
+                                                        .eq('user_id', widget.userId);
+                                                  }
+
+                                                  // Fetch updated comment likes
+                                                  final updatedComment = await Supabase.instance.client
+                                                    .from('comments')
+                                                    .select('comment_likes(*)')
+                                                    .eq('id', commentId)
+                                                    .single();
+                                                  
+                                                  setState(() {
+                                                    comment['comment_likes'] = updatedComment['comment_likes'];
+                                                  });
+                                                } catch (e) {
+                                                  print('Error updating comment like: $e');
+                                                  // Revert on error
+                                                  setState(() {
+                                                    likedComments[commentId] = !newLikeState;
+                                                    comment['comment_likes'] = oldLikes;
+                                                  });
+                                                }
+                                              },
+                                              child: Icon(
+                                                likedComments[commentId]! ? Icons.favorite : Icons.favorite_border,
+                                                size: 16,
+                                                color: likedComments[commentId]! ? Colors.red : Colors.grey,
+                                              ),
+                                            ),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              '${(comment['comment_likes']?.length ?? 0)} likes',
+                                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                                            ),
+                                            SizedBox(width: 16),
+                                            SizedBox(width: 4),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
@@ -514,6 +934,22 @@ void showEditPostModal(Map post) {
         child: Icon(Icons.add, color: Colors.white), // Optional: change icon color
       ),
     );
+  }
+
+  String _getTimeAgo(DateTime dateTime) {
+    final difference = DateTime.now().difference(dateTime);
+    
+    if (difference.inMinutes < 1) {
+      return 'Just now';
+    } else if (difference.inHours < 1) {
+      return '${difference.inMinutes}m';
+    } else if (difference.inDays < 1) {
+      return '${difference.inHours}h';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d';
+    } else {
+      return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
+    }
   }
 }
 
