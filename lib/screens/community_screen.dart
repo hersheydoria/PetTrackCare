@@ -6,7 +6,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'notification_screen.dart';
 
 Map<String, bool> likedPosts = {};
-Map<String, bool> showCommentInput = {};
 Map<String, TextEditingController> commentControllers = {};
 Map<String, int> likeCounts = {};
 Map<String, int> commentCounts = {};
@@ -32,11 +31,21 @@ class _CommunityScreenState extends State<CommunityScreen> {
   List<dynamic> posts = [];
   bool isLoading = false;
   String selectedFilter = 'all';
+  Map<String, bool> showCommentInput = {};
 
   @override
   void initState() {
     super.initState();
+    // Reset comment sections when screen is initialized
+    showCommentInput.clear();
     fetchPosts();
+  }
+
+  @override
+  void dispose() {
+    // Clean up the state when the widget is disposed
+    showCommentInput.clear();
+    super.dispose();
   }
 
   Future<void> fetchPosts() async {
