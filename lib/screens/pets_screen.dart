@@ -14,6 +14,9 @@ const peach = Color(0xFFF2B28C);
 const lightBlush = Color(0xFFF6DED8);
 
 class PetProfileScreen extends StatefulWidget {
+  final Map<String, dynamic>? initialPet;
+  PetProfileScreen({Key? key, this.initialPet}) : super(key: key);
+
   @override
   _PetProfileScreenState createState() => _PetProfileScreenState();
 }
@@ -113,9 +116,22 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           .order('id', ascending: false);
       final data = response as List?;
       if (data != null && data.isNotEmpty) {
+        final list = List<Map<String, dynamic>>.from(data);
+        Map<String, dynamic>? selected;
+        // prefer widget.initialPet if provided (match by id), otherwise pick first
+        if (widget.initialPet != null) {
+          final initId = widget.initialPet!['id'];
+          try {
+            selected = list.firstWhere((p) => p['id'] == initId, orElse: () => widget.initialPet!);
+          } catch (_) {
+            selected = widget.initialPet;
+          }
+        } else {
+          selected = list.first;
+        }
         setState(() {
-          _pets = List<Map<String, dynamic>>.from(data);
-          _selectedPet = _pets.first;
+          _pets = list;
+          _selectedPet = selected;
           // stop showing loader as soon as we have pet data
           _loadingPets = false;
         });

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-
+import 'pets_screen.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -179,6 +179,15 @@ Future<void> pickAndUploadImage() async {
         color: Colors.white,
       ),
       child: ListTile(
+        onTap: () {
+          // open pet profile and show this pet
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PetProfileScreen(initialPet: pet),
+            ),
+          );
+        },
         leading: CircleAvatar(
           radius: 25,
           backgroundColor: Colors.grey[300],
