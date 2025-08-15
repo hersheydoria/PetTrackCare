@@ -125,9 +125,8 @@ def forecast_sleep_trend(df):
     else:
         return "Pet sleep is normal"
 
-def analyze_pet(pet_id):
-    """Analyze pet behavior trends, store predictions, and return results."""
-    df = fetch_logs_df(pet_id)
+def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
+    """Analyze provided DataFrame of logs for pet_id and (optionally) store prediction for prediction_date."""
     if df.empty:
         return {
             "trend": "No data available.",
@@ -137,18 +136,17 @@ def analyze_pet(pet_id):
             "activity_prob": None
         }
 
-    # Convert dates
+    # Ensure dates are datetimes
+    df = df.copy()
     df['log_date'] = pd.to_datetime(df['log_date'])
 
-    # Calculate mood probability
+    # Calculate mood/activity probabilities
     mood_counts = df['mood'].str.lower().value_counts(normalize=True).to_dict()
     mood_prob = {m: round(p, 2) for m, p in mood_counts.items()}
-
-    # Calculate activity probability
     activity_counts = df['activity_level'].str.lower().value_counts(normalize=True).to_dict()
     activity_prob = {a: round(p, 2) for a, p in activity_counts.items()}
 
-    # Trend and risk logic for all moods and activity levels
+    # Trend and risk logic (same as before)
     trend = "Pet is doing well overall."
     risk_level = "low"
     recommendation = "Keep up the good work!"
@@ -199,18 +197,35 @@ def analyze_pet(pet_id):
         trend += " Pet may be oversleeping."
         recommendation += " Monitor for signs of illness."
 
-    # Store prediction in Supabase
-    try:
-        supabase.table("predictions").insert({
-            "pet_id": pet_id,
-            "prediction_date": datetime.utcnow().date().isoformat(),
-            "prediction_text": trend,
-            "risk_level": risk_level,
-            "suggestions": recommendation,
-            "activity_prob": activity_prob.get("high", 0)
-        }).execute()
-    except Exception as e:
-        print(f"Error storing prediction: {e}")
+    # Determine prediction_date to store (default to today)
+    pred_date = (pd.to_datetime(prediction_date).date().isoformat()
+                 if prediction_date is not None
+                 else datetime.utcnow().date().isoformat())
+
+    payload = {
+        "pet_id": pet_id,
+        "prediction_date": pred_date,
+        "prediction_text": trend,
+        "risk_level": risk_level,
+        "suggestions": recommendation,
+        "activity_prob": activity_prob.get("high", 0)
+    }
+
+    if store:
+        try:
+            # check existing prediction for idempotency
+            existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", pred_date).execute()
+            if not (existing.data):
+                resp = supabase.table("predictions").insert(payload).execute()
+                if getattr(resp, "error", None):
+                    print(f"[ERROR] Failed to insert prediction for pet {pet_id} date {pred_date}: {resp.error}")
+                else:
+                    print(f"[INFO] Inserted prediction for pet {pet_id} date {pred_date}")
+            else:
+                # optionally update? for now skip if existing
+                print(f"[INFO] Prediction already exists for pet {pet_id} date {pred_date}; skipping insert.")
+        except Exception as e:
+            print(f"Error storing prediction for pet {pet_id} date {pred_date}: {e}")
 
     return {
         "trend": trend,
@@ -220,6 +235,86 @@ def analyze_pet(pet_id):
         "activity_prob": activity_prob
     }
 
+def analyze_pet(pet_id):
+    """Backward-compatible wrapper: fetch logs then analyze & store prediction for today."""
+    df = fetch_logs_df(pet_id)
+    return analyze_pet_df(pet_id, df, prediction_date=datetime.utcnow().date().isoformat())
+
+# ------------------- Migration: move behavior_logs into predictions -------------------
+def migrate_behavior_logs_to_predictions(limit_per_pet=1000):
+    """
+    Fetch behavior_logs and generate/store predictions historically.
+    For each pet, for each unique log_date, analyze logs up to that date and insert prediction if missing.
+    This is idempotent: it checks predictions table for existence before inserting.
+    """
+    print("Starting migration of behavior_logs -> predictions...")
+    try:
+        resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
+        logs = resp.data or []
+        total_logs = len(logs)
+        print(f"Found {total_logs} behavior_logs records.")
+        if not logs:
+            print("No behavior_logs to migrate.")
+            return
+
+        df_all = pd.DataFrame(logs)
+        # normalize types
+        df_all['log_date'] = pd.to_datetime(df_all['log_date']).dt.date
+        df_all['sleep_hours'] = pd.to_numeric(df_all.get('sleep_hours', 0), errors='coerce').fillna(0.0)
+        df_all['mood'] = df_all['mood'].fillna('Unknown').astype(str)
+        df_all['activity_level'] = df_all['activity_level'].fillna('Unknown').astype(str)
+
+        inserted_total = 0
+        analyzed_total = 0
+        pet_count = 0
+
+        for pet_id, group in df_all.groupby('pet_id'):
+            pet_count += 1
+            # Unique sorted dates
+            dates = sorted(group['log_date'].unique())
+            print(f"Processing pet {pet_id} with {len(dates)} unique dates.")
+            for d in dates[:limit_per_pet]:
+                analyzed_total += 1
+                # build df of logs up to and including d
+                subset = group[group['log_date'] <= d].copy()
+                # convert back to expected format for analyze_pet_df
+                subset['log_date'] = pd.to_datetime(subset['log_date'])
+                # train models on full pet logs (optional step - fine-tune)
+                try:
+                    train_illness_model(subset)
+                    forecast_sleep_with_tf(subset['sleep_hours'].tolist())
+                except Exception as e:
+                    print(f"Model training error for pet {pet_id} on date {d}: {e}")
+
+                # analyze and store prediction for that historic date
+                try:
+                    # analyze_pet_df will attempt to store (store=True)
+                    analyze_pet_df(pet_id, subset, prediction_date=d.isoformat(), store=True)
+                    # After analyze_pet_df runs, check if inserted by querying predictions
+                    existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", d.isoformat()).execute()
+                    if existing.data:
+                        inserted_total += 1
+                except Exception as e:
+                    print(f"Analysis error for pet {pet_id} on date {d}: {e}")
+
+        print(f"Migration completed. Pets processed: {pet_count}, dates analyzed: {analyzed_total}, predictions present/inserted: {inserted_total}.")
+    except Exception as e:
+        print(f"Unexpected error during migration: {e}")
+
+# ------------------- Core Analysis -------------------
+def forecast_sleep_trend(df):
+    # Example placeholder logic — replace with your real forecasting logic
+    if df.empty:
+        return "No sleep data available"
+
+    avg_sleep = df["sleep_hours"].mean()
+    if avg_sleep < 6:
+        return "Pet might be sleep deprived"
+    elif avg_sleep > 9:
+        return "Pet is oversleeping"
+    else:
+        return "Pet sleep is normal"
+
 # ------------------- Flask API -------------------
 
 @app.route("/analyze", methods=["POST"])
@@ -228,7 +323,40 @@ def analyze_endpoint():
     pet_id = data.get("pet_id")
     if not pet_id:
         return jsonify({"error": "pet_id required"}), 400
-    return jsonify(analyze_pet(pet_id))
+
+    # Core analysis (trend/recommendation/summaries) based on logs
+    result = analyze_pet(pet_id)
+
+    # Also provide a numeric 7-day sleep forecast (if possible) and an illness risk
+    # using the latest log entry (if a trained illness model exists).
+    df = fetch_logs_df(pet_id)
+
+    # sleep_forecast: numeric list (uses predict_future_sleep which loads/trains the TF model)
+    try:
+        sleep_series = df["sleep_hours"].tolist() if not df.empty else []
+        sleep_forecast = predict_future_sleep(sleep_series)
+    except Exception:
+        # fallback: empty or repeated last value
+        last = sleep_series[-1] if sleep_series else 8.0
+        sleep_forecast = [last for _ in range(7)]
+
+    # illness_risk: try to get latest log and run predict_illness_risk (returns "high"/"low" or None)
+    illness_risk = None
+    try:
+        if not df.empty:
+            latest = df.sort_values("log_date", ascending=False).iloc[0]
+            mood = str(latest.get("mood", "") or "")
+            sleep_hours = float(latest.get("sleep_hours") or 0.0)
+            activity_level = str(latest.get("activity_level", "") or "")
+            illness_risk = predict_illness_risk(mood, sleep_hours, activity_level)
+    except Exception:
+        illness_risk = None
+
+    # Merge into response
+    merged = dict(result)
+    merged["illness_risk"] = illness_risk
+    merged["sleep_forecast"] = sleep_forecast
+    return jsonify(merged)
 
 @app.route("/predict", methods=["POST"])
 def predict_endpoint():
@@ -267,12 +395,19 @@ def daily_analysis_job():
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(daily_analysis_job, 'interval', days=1)  # runs every 24h
+scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)  # ensure daily migration/analysis
 scheduler.start()
 
 if __name__ == "__main__":
+    # Run a one-time migration at startup (safe and idempotent)
+    try:
+        migrate_behavior_logs_to_predictions()
+    except Exception as e:
+        print(f"Startup migration error: {e}")
     app.run(host="0.0.0.0", port=BACKEND_PORT)
 
 def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
     supabase.table("predictions").insert({
         "pet_id": pet_id,
         "prediction_date": datetime.utcnow().date().isoformat(),
@@ -281,20 +416,14 @@ def store_prediction(pet_id, prediction, risk_level, recommendation):
         "suggestions": recommendation
     }).execute()
 
-def daily_analysis_job():
-    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
-    pets_resp = supabase.table("pets").select("id").execute()
-    for pet in pets_resp.data or []:
-        result = analyze_pet(pet["id"])
-        print(f"📊 Pet {pet['id']} analysis stored:", result)
-
 def predict_illness_risk(mood, sleep_hours, activity_level, model_path="illness_model.pkl"):
-    model, (le_mood, le_activity) = load_illness_model(model_path)
-    if model is None or le_mood is None or le_activity is None:
+    model, encoders = load_illness_model(model_path)
+    if model is None or encoders is None:
         return None  # Model not trained yet
-    # Encode inputs
-    mood_enc = le_mood.transform([mood])[0] if mood in le_mood.classes_ else 0
-    act_enc = le_activity.transform([activity_level])[0] if activity_level in le_activity.classes_ else 0
+    le_mood, le_activity = encoders
+    # Encode inputs safely
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
     X = np.array([[mood_enc, float(sleep_hours), act_enc]])
     pred = model.predict(X)[0]
     risk = "high" if pred == 1 else "low"
