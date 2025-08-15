@@ -539,9 +539,14 @@ SizedBox(height: 16),
                         ListView(
                           padding: EdgeInsets.all(16),
                           children: [
-                            _settingsTile(Icons.lock, 'Change Password'),
-                            _settingsTile(Icons.notifications, 'Notification Preferences'),
-                            _settingsTile(Icons.privacy_tip, 'Privacy Settings'),
+                            // Account entry now contains name, address, password and delete actions
+                            _settingsTile(Icons.person, 'Account (Name / Address / Security)', onTap: _openAccountSettings),
+                            _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
+                            _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
+                            _settingsTile(Icons.palette, 'App Theme', onTap: _openThemeSettings),
+                            _settingsTile(Icons.language, 'Language', onTap: _openLanguageSettings),
+                            _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
+                            _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
                             SizedBox(height: 16),
                           ],
                         ),
@@ -558,7 +563,7 @@ SizedBox(height: 16),
     );
   }
 
-  Widget _settingsTile(IconData icon, String title) {
+  Widget _settingsTile(IconData icon, String title, {VoidCallback? onTap}) {
     return Container(
       margin: EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -569,8 +574,595 @@ SizedBox(height: 16),
       child: ListTile(
         leading: Icon(icon, color: deepRed),
         title: Text(title),
-        onTap: () {},
+        onTap: onTap ?? () {},
       ),
+    );
+  }
+
+  // Open dialog for account settings (name / address / optional password / inline delete)
+  void _openAccountSettings() async {
+    String newName = name;
+    String newAddress = address == 'No address provided' ? '' : address;
+    String newPassword = '';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setSt) {
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              child: SizedBox(
+                height: MediaQuery.of(ctx).size.height * 0.9,
+                child: Column(
+                  children: [
+                    Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Account', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                      ),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Column(
+                          children: [
+                            TextFormField(
+                              initialValue: newName,
+                              decoration: InputDecoration(labelText: 'Name', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                              onChanged: (v) => setSt(() => newName = v),
+                            ),
+                            SizedBox(height: 12),
+                            TextFormField(
+                              initialValue: newAddress,
+                              decoration: InputDecoration(labelText: 'Address', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                              onChanged: (v) => setSt(() => newAddress = v),
+                            ),
+                            SizedBox(height: 12),
+                            TextFormField(
+                              obscureText: true,
+                              decoration: InputDecoration(labelText: 'New password (optional)', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+                              onChanged: (v) => setSt(() => newPassword = v),
+                            ),
+                            SizedBox(height: 16),
+                            Divider(),
+                            SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
+                                child: Text('Delete Account', style: TextStyle(color: Colors.white)),
+                                onPressed: () async {
+                                  final confirmed = await showModalBottomSheet<bool>(
+                                    context: ctx,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+                                    isScrollControlled: true,
+                                    builder: (c) {
+                                      return SafeArea(
+                                        child: SizedBox(
+                                          height: MediaQuery.of(c).size.height * 0.4,
+                                          child: Column(
+                                            children: [
+                                              Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                                              Padding(
+                                                padding: const EdgeInsets.all(16),
+                                                child: Align(
+                                                  alignment: Alignment.centerLeft,
+                                                  child: Text('Confirm delete', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                                                ),
+                                              ),
+                                              Padding(
+                                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                                child: Text('Deleting your account is permanent. Continue?'),
+                                              ),
+                                              Spacer(),
+                                              Padding(
+                                                padding: const EdgeInsets.all(16),
+                                                child: Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: OutlinedButton(
+                                                        onPressed: () => Navigator.pop(c, false),
+                                                        child: Text('Cancel'),
+                                                      ),
+                                                    ),
+                                                    SizedBox(width: 12),
+                                                    Expanded(
+                                                      child: ElevatedButton(
+                                                        style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                                                        onPressed: () => Navigator.pop(c, true),
+                                                        child: Text('Delete'),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                  if (confirmed == true) {
+                                    try {
+                                      await Supabase.instance.client.auth.signOut();
+                                      await Supabase.instance.client.from('users').delete().eq('id', user!.id);
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
+                                      Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting account: $e')));
+                                    }
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                              onPressed: () async {
+                                Navigator.pop(ctx);
+                                try {
+                                  final supabase = Supabase.instance.client;
+                                  if (newPassword.isNotEmpty) {
+                                    await supabase.auth.updateUser(UserAttributes(password: newPassword, data: {
+                                      'name': newName,
+                                      'address': newAddress,
+                                    }));
+                                  } else {
+                                    await supabase.auth.updateUser(UserAttributes(data: {
+                                      'name': newName,
+                                      'address': newAddress,
+                                    }));
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account updated.')));
+                                  setState(() {}); // refresh metadata display
+                                } catch (e) {
+                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating account: $e')));
+                                }
+                              },
+                              child: Text('Save'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  // Open dialog for notification preferences
+  void _openNotificationPreferences() async {
+    final currentPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        bool enabled = currentPrefs['enabled'] ?? true;
+        return StatefulBuilder(builder: (ctx, setSt) {
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.9,
+              child: Column(
+                children: [
+                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Notification Preferences', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        children: [
+                          SwitchListTile(
+                            title: Text('Enable Notifications'),
+                            value: enabled,
+                            onChanged: (v) => setSt(() => enabled = v),
+                          ),
+                          // ...add other notification settings here...
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'notification_preferences': {'enabled': enabled}}));
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Notification preferences updated.')));
+                              } catch (e) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating preferences: $e')));
+                              }
+                            },
+                            child: Text('Save'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  // Open dialog for privacy settings
+  void _openPrivacySettings() async {
+    final currentPrivacy = metadata['privacy'] ?? {'profile_visible': true};
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        bool profileVisible = currentPrivacy['profile_visible'] ?? true;
+        return StatefulBuilder(builder: (ctx, setSt) {
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.9,
+              child: Column(
+                children: [
+                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Privacy Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        children: [
+                          SwitchListTile(
+                            title: Text('Profile Visible'),
+                            value: profileVisible,
+                            onChanged: (v) => setSt(() => profileVisible = v),
+                          ),
+                          // ...add other privacy options...
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'privacy': {'profile_visible': profileVisible}}));
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Privacy settings updated.')));
+                              } catch (e) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating privacy: $e')));
+                              }
+                            },
+                            child: Text('Save'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  // Open dialog for theme settings
+  void _openThemeSettings() async {
+    final currentTheme = metadata['theme'] ?? 'System Default';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        String selectedTheme = currentTheme;
+        return StatefulBuilder(builder: (ctx, setSt) {
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.9,
+              child: Column(
+                children: [
+                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('App Theme', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        children: [
+                          RadioListTile(value: 'Light', groupValue: selectedTheme, title: Text('Light'), onChanged: (v) => setSt(() => selectedTheme = v as String)),
+                          RadioListTile(value: 'Dark', groupValue: selectedTheme, title: Text('Dark'), onChanged: (v) => setSt(() => selectedTheme = v as String)),
+                          RadioListTile(value: 'System Default', groupValue: selectedTheme, title: Text('System Default'), onChanged: (v) => setSt(() => selectedTheme = v as String)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'theme': selectedTheme}));
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Theme updated. Restart the app to see changes.')));
+                              } catch (e) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating theme: $e')));
+                              }
+                            },
+                            child: Text('Save'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  // Open dialog for language settings
+  void _openLanguageSettings() async {
+    final currentLanguage = metadata['language'] ?? 'English';
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        String selectedLanguage = currentLanguage;
+        return StatefulBuilder(builder: (ctx, setSt) {
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.9,
+              child: Column(
+                children: [
+                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Language Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        children: [
+                          RadioListTile(value: 'English', groupValue: selectedLanguage, title: Text('English'), onChanged: (v) => setSt(() => selectedLanguage = v as String)),
+                          RadioListTile(value: 'Filipino', groupValue: selectedLanguage, title: Text('Filipino'), onChanged: (v) => setSt(() => selectedLanguage = v as String)),
+                          // ...add more languages...
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'language': selectedLanguage}));
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Language updated. Restart the app to see changes.')));
+                              } catch (e) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating language: $e')));
+                              }
+                            },
+                            child: Text('Save'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  // Open dialog for help & support
+  void _openHelpSupport() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(ctx).size.height * 0.9,
+            child: Column(
+              children: [
+                Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Help & Support', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: ListBody(
+                      children: [
+                        Text('For assistance, please contact support@pettrackcare.com'),
+                        SizedBox(height: 8),
+                        Text('Visit our Help Center for FAQs and guides.'),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Close')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Open dialog for about information
+  void _openAbout() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(ctx).size.height * 0.9,
+            child: Column(
+              children: [
+                Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('About PetTrackCare', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: ListBody(
+                      children: [
+                        Text('Version 1.0.0'),
+                        Text('PetTrackCare is a comprehensive app for pet owners.'),
+                        SizedBox(height: 8),
+                        Text('Developed by: Your Company Name'),
+                        Text('Contact: support@pettrackcare.com'),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Close')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String?> _showTextInputDialog({
+    required String title,
+    required String hint,
+    String? initialValue,
+    bool isObscure = false,
+  }) async {
+    String value = initialValue ?? '';
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(title),
+          content: TextField(
+            obscureText: isObscure,
+            decoration: InputDecoration(
+              hintText: hint,
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (val) => value = val,
+          ),
+          actions: [
+            TextButton(
+              child: Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+              child: Text('Save'),
+              onPressed: () => Navigator.of(context).pop(value),
+            ),
+          ],
+        );
+      },
     );
   }
 }
