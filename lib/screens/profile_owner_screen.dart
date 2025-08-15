@@ -761,8 +761,16 @@ class _AddPetFormState extends State<_AddPetForm> {
              mainAxisAlignment: MainAxisAlignment.center,
              children: [
                ChoiceChip(
-                 label: Text('Dog'),
+                 label: Text(
+                   'Dog',
+                   style: TextStyle(
+                     color: _species == 'Dog' ? Colors.white : deepRed,
+                     fontWeight: FontWeight.w600,
+                   ),
+                 ),
                  selected: _species == 'Dog',
+                 selectedColor: deepRed,
+                 backgroundColor: Colors.grey.shade200,
                  onSelected: (_) => setState(() {
                    _species = 'Dog';
                    // ensure breed matches selected species
@@ -771,8 +779,16 @@ class _AddPetFormState extends State<_AddPetForm> {
                ),
                SizedBox(width: 8),
                ChoiceChip(
-                 label: Text('Cat'),
+                 label: Text(
+                   'Cat',
+                   style: TextStyle(
+                     color: _species == 'Cat' ? Colors.white : deepRed,
+                     fontWeight: FontWeight.w600,
+                   ),
+                 ),
                  selected: _species == 'Cat',
+                 selectedColor: deepRed,
+                 backgroundColor: Colors.grey.shade200,
                  onSelected: (_) => setState(() {
                    _species = 'Cat';
                    // ensure breed matches selected species
