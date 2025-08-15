@@ -26,6 +26,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
 
+  // loading flag to know when we've finished fetching pets
+  bool _loadingPets = true;
+
   String backendUrl = "http://192.168.100.23:5000/analyze"; // set to your deployed backend
   List<double> _sleepTrend = []; // next 7 days predicted sleep hours
   Map<String, double> _moodProb = {};
@@ -96,25 +99,39 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   Future<void> _fetchPets() async {
     final ownerId = user?.id;
-    if (ownerId == null) return;
-    final response = await Supabase.instance.client
-        .from('pets')
-        .select()
-        .eq('owner_id', ownerId)
-        .order('id', ascending: false);
-    final data = response as List?;
-    if (data != null && data.isNotEmpty) {
-      setState(() {
-        _pets = List<Map<String, dynamic>>.from(data);
-        _selectedPet = _pets.first;
-      });
-      // fetch events and recent predictions immediately so UI shows them without waiting for analysis
-      await _fetchBehaviorDates();
-      await _fetchRecentPredictions();
-      // fetch backend analysis (illness risk + numeric sleep forecast) right away
-      await _fetchAnalyzeFromBackend();
-      // still fetch latest analysis (may be empty)
-      await _fetchLatestAnalysis(); // Fetch analysis after pets
+    if (ownerId == null) {
+      setState(() => _loadingPets = false);
+      return;
+    }
+    setState(() => _loadingPets = true);
+    try {
+      final response = await Supabase.instance.client
+          .from('pets')
+          .select()
+          .eq('owner_id', ownerId)
+          .order('id', ascending: false);
+      final data = response as List?;
+      if (data != null && data.isNotEmpty) {
+        setState(() {
+          _pets = List<Map<String, dynamic>>.from(data);
+          _selectedPet = _pets.first;
+        });
+        // fetch events and recent predictions immediately so UI shows them without waiting for analysis
+        await _fetchBehaviorDates();
+        await _fetchRecentPredictions();
+        // fetch backend analysis (illness risk + numeric sleep forecast) right away
+        await _fetchAnalyzeFromBackend();
+        // still fetch latest analysis (may be empty)
+        await _fetchLatestAnalysis(); // Fetch analysis after pets
+      } else {
+        // no pets found
+        setState(() {
+          _pets = [];
+          _selectedPet = null;
+        });
+      }
+    } finally {
+      setState(() => _loadingPets = false);
     }
   }
 
@@ -313,20 +330,31 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           ),
         ],
       ),
-      body: _selectedPet == null
+      body: _loadingPets
           ? Center(child: CircularProgressIndicator(color: deepRed))
-          : SingleChildScrollView(
-              padding: EdgeInsets.only(bottom: 16),
-              child: Column(
-                children: [
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Column(
-                      children: [
-                        CircleAvatar(
-                          radius: 60,
-                          backgroundImage: _selectedPet!['profile_picture'] !=
-                                      null &&
+          : _pets.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: Text(
+                      'No pet. Go to the profile to add a pet',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: deepRed),
+                    ),
+                  ),
+                )
+              : SingleChildScrollView(
+                  padding: EdgeInsets.only(bottom: 16),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Column(
+                          children: [
+                            CircleAvatar(
+                              radius: 60,
+                              backgroundImage: _selectedPet!['profile_picture'] !=
+                                          null &&
                                   _selectedPet!['profile_picture']
                                       .toString()
                                       .isNotEmpty
@@ -334,98 +362,98 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                               : const AssetImage(
                                       'assets/pets-profile-pictures.png')
                                   as ImageProvider,
+                            ),
+                            SizedBox(height: 12),
+                            Text(_selectedPet!['name'] ?? 'Unnamed',
+                                style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: deepRed)),
+                            Text(_selectedPet!['breed'] ?? 'Unknown',
+                                style: TextStyle(fontSize: 16)),
+                            Text('${_selectedPet!['age']} years old',
+                                style: TextStyle(
+                                    fontSize: 14, color: Colors.grey[700])),
+                          ],
                         ),
-                        SizedBox(height: 12),
-                        Text(_selectedPet!['name'] ?? 'Unnamed',
-                            style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                                color: deepRed)),
-                        Text(_selectedPet!['breed'] ?? 'Unknown',
-                            style: TextStyle(fontSize: 16)),
-                        Text('${_selectedPet!['age']} years old',
-                            style: TextStyle(
-                                fontSize: 14, color: Colors.grey[700])),
-                      ],
-                    ),
-                  ),
+                      ),
 
-                  // ❤️ Health & ⚖️ Weight Card
-                  Container(
-                    margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    padding: EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: peach,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        Column(
+                      // ❤️ Health & ⚖️ Weight Card
+                      Container(
+                        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        padding: EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: peach,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6)],
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: [
-                            Icon(Icons.favorite, color: _illnessRisk != null ? deepRed : Colors.green),
-                            SizedBox(height: 4),
-                            Text('Health',
-                                style: TextStyle(fontWeight: FontWeight.bold)),
-                            Text(_illnessRisk != null ? 'Bad' : 'Good',
-                                style: TextStyle(color: _illnessRisk != null ? deepRed : Colors.green)),
+                            Column(
+                              children: [
+                                Icon(Icons.favorite, color: _illnessRisk != null ? deepRed : Colors.green),
+                                SizedBox(height: 4),
+                                Text('Health',
+                                    style: TextStyle(fontWeight: FontWeight.bold)),
+                                Text(_illnessRisk != null ? 'Bad' : 'Good',
+                                    style: TextStyle(color: _illnessRisk != null ? deepRed : Colors.green)),
+                              ],
+                            ),
+                            Column(
+                              children: [
+                                Icon(Icons.monitor_weight, color: deepRed),
+                                SizedBox(height: 4),
+                                Text('Weight',
+                                    style: TextStyle(fontWeight: FontWeight.bold)),
+                                Text('${_selectedPet!['weight']} kg'),
+                              ],
+                            ),
                           ],
                         ),
-                        Column(
-                          children: [
-                            Icon(Icons.monitor_weight, color: deepRed),
-                            SizedBox(height: 4),
-                            Text('Weight',
-                                style: TextStyle(fontWeight: FontWeight.bold)),
-                            Text('${_selectedPet!['weight']} kg'),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
+                      ),
 
-                  // 🧭 Tab Bar
-                  Container(
-                    margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        TabBar(
-                          controller: _tabController,
-                          indicatorColor: deepRed,
-                          labelColor: deepRed,
-                          unselectedLabelColor: Colors.grey,
-                          tabs: [
-                            Tab(icon: Icon(Icons.qr_code), text: 'QR Code'),
-                            Tab(icon: Icon(Icons.location_on), text: 'Location'),
-                            Tab(icon: Icon(Icons.bar_chart), text: 'Behavior'),
+                      // 🧭 Tab Bar
+                      Container(
+                        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          children: [
+                            TabBar(
+                              controller: _tabController,
+                              indicatorColor: deepRed,
+                              labelColor: deepRed,
+                              unselectedLabelColor: Colors.grey,
+                              tabs: [
+                                Tab(icon: Icon(Icons.qr_code), text: 'QR Code'),
+                                Tab(icon: Icon(Icons.location_on), text: 'Location'),
+                                Tab(icon: Icon(Icons.bar_chart), text: 'Behavior'),
+                              ],
+                            ),
+                            Divider(height: 1, color: Colors.grey.shade300),
+                            // Use a responsive height to avoid overflow; allow behavior tab to scroll
+                            Container(
+                              height: MediaQuery.of(context).size.height * 0.55,
+                              padding: EdgeInsets.all(12),
+                              child: TabBarView(
+                                controller: _tabController,
+                                children: [
+                                  _buildTabContent('QR Code Content Here'),
+                                  _buildTabContent('Location Content Here'),
+                                  _buildBehaviorTab(), // Updated Behavior Tab (scrollable)
+                                ],
+                              ),
+                            ),
                           ],
                         ),
-                        Divider(height: 1, color: Colors.grey.shade300),
-                        // Use a responsive height to avoid overflow; allow behavior tab to scroll
-                        Container(
-                          height: MediaQuery.of(context).size.height * 0.55,
-                          padding: EdgeInsets.all(12),
-                          child: TabBarView(
-                            controller: _tabController,
-                            children: [
-                              _buildTabContent('QR Code Content Here'),
-                              _buildTabContent('Location Content Here'),
-                              _buildBehaviorTab(), // Updated Behavior Tab (scrollable)
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
     );
   }
 
