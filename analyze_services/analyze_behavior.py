@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -320,7 +320,7 @@ def forecast_sleep_trend(df):
         return "Pet sleep is normal"
 
 # ------------------- Flask API -------------------
-
+ 
 @app.route("/analyze", methods=["POST"])
 def analyze_endpoint():
     data = request.get_json()
@@ -384,6 +384,203 @@ def predict_endpoint():
         "illness_risk": illness_risk,
         "sleep_forecast": sleep_forecast
     })
+
+# ------------------- Public pet info page -------------------
+@app.route("/pet/<pet_id>", methods=["GET"])
+def public_pet_page(pet_id):
+    try:
+        # fetch pet
+        resp = supabase.table("pets").select("*").eq("id", pet_id).limit(1).execute()
+        pet_rows = resp.data or []
+        if not pet_rows:
+            return make_response("<h3>Pet not found</h3>", 404)
+        pet = pet_rows[0]
+
+        # resolve owner using the app USERS table (schema: id, name, email, role)
+        owner_name = None
+        owner_email = None
+        owner_role = None
+        owner_id = pet.get("owner_id")
+
+        if owner_id:
+            try:
+                # use app users table fields per your schema
+                uresp = supabase.table("users").select("name, email, role").eq("id", owner_id).limit(1).execute()
+                urows = uresp.data or []
+                if urows:
+                    u0 = urows[0]
+                    owner_name = u0.get("name")
+                    owner_email = u0.get("email") or owner_email
+                    owner_role = u0.get("role") or owner_role
+            except Exception:
+                # ignore errors and continue to fallback attempts
+                owner_name = owner_name or None
+
+            # best-effort: if name missing, try to fetch auth users metadata (if available in your Supabase instance)
+            if not owner_name:
+                try:
+                    # supabase.auth.api.get_user may be available in your client; wrapped in try/except
+                    auth_user = None
+                    if hasattr(supabase.auth, "api") and hasattr(supabase.auth.api, "get_user"):
+                        auth_user = supabase.auth.api.get_user(owner_id)
+                    elif hasattr(supabase.auth, "get_user"):
+                        # alternative method name
+                        auth_user = supabase.auth.get_user(owner_id)
+                    if auth_user:
+                        # auth_user may be dict-like or object; handle both
+                        meta = {}
+                        try:
+                            # attempt multiple possible attribute / key names
+                            meta = (auth_user.get("user_metadata") if isinstance(auth_user, dict) else getattr(auth_user, "user_metadata", None)) or \
+                                   (auth_user.get("raw_user_meta_data") if isinstance(auth_user, dict) else getattr(auth_user, "raw_user_meta_data", None)) or {}
+                        except Exception:
+                            meta = {}
+                        if isinstance(meta, str):
+                            try:
+                                meta = json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        if isinstance(meta, dict):
+                            # prefer common keys
+                            owner_name = owner_name or (meta.get("name") or meta.get("full_name") or meta.get("display_name"))
+                except Exception:
+                    pass
+
+        # fallback: use email local-part or owner id or generic label
+        if not owner_name:
+            if owner_email:
+                try:
+                    owner_name = owner_email.split("@")[0]
+                except Exception:
+                    owner_name = owner_email
+            else:
+                owner_name = owner_id or "Owner"
+
+        # prepare pet fields for display (added gender & health)
+        pet_name = pet.get("name") or "Unnamed"
+        pet_breed = pet.get("breed") or "Unknown"
+        pet_age = pet.get("age") or ""
+        pet_weight = pet.get("weight") or ""
+        pet_gender = pet.get("gender") or "Unknown"
+        pet_health = pet.get("health") or "Unknown"
+
+        # fetch latest prediction for illness/risk info, if present
+        latest_prediction_text = ""
+        latest_suggestions = ""
+        latest_risk = None
+        try:
+            presp = supabase.table("predictions").select("prediction_text, risk_level, suggestions, created_at").eq("pet_id", pet_id).order("created_at", desc=True).limit(1).execute()
+            prows = presp.data or []
+            if prows:
+                p0 = prows[0]
+                latest_prediction_text = p0.get("prediction_text") or p0.get("prediction") or ""
+                latest_suggestions = p0.get("suggestions") or p0.get("recommendations") or ""
+                latest_risk = (p0.get("risk_level") or p0.get("risk") or None)
+        except Exception:
+            latest_prediction_text = ""
+            latest_suggestions = ""
+            latest_risk = None
+
+        # determine a simple color for risk badge
+        if latest_risk:
+            lr = str(latest_risk).lower()
+            if "high" in lr:
+                risk_color = "#B82132"  # deep red
+            elif "medium" in lr:
+                risk_color = "#FF8C00"  # orange
+            elif "low" in lr:
+                risk_color = "#2ECC71"  # green
+            else:
+                risk_color = "#666666"
+        else:
+            risk_color = "#2ECC71"  # healthy default (green)
+
+        # Simple HTML with modal dialog - auto-open on load
+        html = f"""
+        <!doctype html>
+        <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Pet Info - {pet_name}</title>
+          <style>
+            body {{ font-family: Arial, sans-serif; background:#f6f6f6; padding:16px; }}
+            .card {{ max-width: 520px; margin:24px auto; background:#fff; border-radius:8px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }}
+            .label {{ color:#666; font-size:13px; }}
+            .value {{ color:#222; font-weight:600; font-size:18px; }}
+            .badge {{ display:inline-block;padding:6px 10px;border-radius:12px;font-weight:600;color:#fff;font-size:13px; }}
+            /* modal */
+            .modal-backdrop{{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}}
+            .modal{{background:#fff;border-radius:10px;padding:18px;max-width:420px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,0.2);}}
+            .close-btn{{background:#B82132;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;}}
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2>Pet Quick Info</h2>
+            <p class="label">Name</p><p class="value">{pet_name}</p>
+            <p class="label">Breed</p><p class="value">{pet_breed}</p>
+            <p class="label">Age</p><p class="value">{pet_age}</p>
+            <p class="label">Weight</p><p class="value">{pet_weight}</p>
+            <p class="label">Gender</p><p class="value">{pet_gender}</p>
+            <p class="label">Health</p><p class="value">{pet_health}</p>
+            <p class="label">Owner</p><p class="value">{owner_name}</p>
+            <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;">
+              <div>
+                <span class="label">Illness Risk</span><br/>
+                <span class="badge" style="background:{risk_color};">{(latest_risk or 'No risk detected').capitalize() if latest_risk else 'Healthy'}</span>
+                <p style="margin-top:8px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
+              </div>
+              <div style="text-align:right;">
+                <button onclick="openModal()" style="background:#eee;border-radius:6px;padding:8px 12px;border:none;cursor:pointer;">More</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="modal" style="display:none;" class="modal-backdrop" onclick="closeModal()">
+            <div class="modal" onclick="event.stopPropagation()">
+              <h3>Detailed Pet Info</h3>
+              <p><strong>Name:</strong> {pet_name}</p>
+              <p><strong>Breed:</strong> {pet_breed}</p>
+              <p><strong>Age:</strong> {pet_age}</p>
+              <p><strong>Weight:</strong> {pet_weight}</p>
+              <p><strong>Gender:</strong> {pet_gender}</p>
+              <p><strong>Health:</strong> {pet_health}</p>
+              <p><strong>Owner:</strong> {owner_name}</p>
+              <hr/>
+              <h4>Latest Analysis</h4>
+              <p><strong>Risk:</strong> {(latest_risk or 'None')}</p>
+              <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
+              <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
+              <div style="margin-top:12px;text-align:right;">
+                <button class="close-btn" onclick="closeModal()">Close</button>
+              </div>
+            </div>
+          </div>
+
+          <script>
+            function openModal() {{
+              document.getElementById('modal').style.display = 'flex';
+            }}
+            function closeModal() {{
+              document.getElementById('modal').style.display = 'none';
+            }}
+            // auto-open modal on page load so scanned users see pop-up immediately
+            window.addEventListener('load', function() {{
+              setTimeout(openModal, 400);
+            }});
+          </script>
+        </body>
+        </html>
+        """
+        return make_response(html, 200, {"Content-Type": "text/html"})
+    except Exception as e:
+        return make_response(f"<h3>Error: {str(e)}</h3>", 500)
+
+# Alias route so URLs under /analyze/pet/<id> also resolve (compatible with QR payloads that include /analyze)
+@app.route("/analyze/pet/<pet_id>", methods=["GET"])
+def public_pet_page_alias(pet_id):
+    return public_pet_page(pet_id)
+
 # ------------------- Daily Scheduler -------------------
 
 def daily_analysis_job():

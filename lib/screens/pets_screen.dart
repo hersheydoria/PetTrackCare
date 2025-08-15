@@ -515,16 +515,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       return _buildTabContent('No pet selected');
     }
 
-    // Build payload that will be encoded into the QR (JSON)
-    final payload = {
-      'pet_id': _selectedPet!['id'],
-      'name': _selectedPet!['name'] ?? '',
-      'breed': _selectedPet!['breed'] ?? '',
-      'age': _selectedPet!['age']?.toString() ?? '',
-      'weight': _selectedPet!['weight']?.toString() ?? '',
-      'owner_name': ownerName,
-    };
-    final payloadStr = jsonEncode(payload);
+    // Build a public URL that opens the pet info page (works even without the app)
+    final baseBackend = backendUrl.replaceAll(RegExp(r'/analyze/?\$'), '');
+    final publicUrl = '$baseBackend/pet/${_selectedPet!['id']}';
+    final payloadStr = publicUrl;
 
     return Center(
       child: Column(
@@ -557,7 +551,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24.0),
             child: Text(
-              'Owner: $ownerName\nPet: ${_selectedPet!['name'] ?? 'Unnamed'}',
+              'Owner: $ownerName\nPet: ${_selectedPet!['name'] ?? 'Unnamed'}\n\nScan opens: $publicUrl',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey[800]),
             ),
@@ -568,11 +562,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             children: [
               ElevatedButton.icon(
                 icon: Icon(Icons.copy),
-                label: Text('Copy Payload'),
+                label: Text('Copy URL'),
                 style: ElevatedButton.styleFrom(backgroundColor: deepRed),
                 onPressed: () async {
                   await Clipboard.setData(ClipboardData(text: payloadStr));
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('QR payload copied to clipboard')));
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Public URL copied to clipboard')));
                 },
               ),
               SizedBox(width: 8),
