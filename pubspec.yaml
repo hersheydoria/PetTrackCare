@@ -28,7 +28,7 @@ dependencies:
   realtime_client: ^2.5.1 
   http: ^1.5.0
   fl_chart: ^1.0.0
-
+  qr_flutter: ^4.0.0
   
 dev_dependencies:
   flutter_test:

@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:table_calendar/table_calendar.dart';
+import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
+import 'package:flutter/services.dart'; // for Clipboard
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -462,7 +464,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                               child: TabBarView(
                                 controller: _tabController,
                                 children: [
-                                  _buildTabContent('QR Code Content Here'),
+                                  _buildQRCodeSection(), // show per-pet QR
                                   _buildTabContent('Location Content Here'),
                                   _buildBehaviorTab(), // Updated Behavior Tab (scrollable)
                                 ],
@@ -483,6 +485,118 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         text,
         style:
             TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: deepRed),
+      ),
+    );
+  }
+
+  // generate PNG bytes for the QR using qr_flutter's QrPainter
+  Future<Uint8List?> _generateQrBytes(String data, double size) async {
+    try {
+      final painter = qr_flutter.QrPainter(
+        data: data,
+        version: qr_flutter.QrVersions.auto,
+        gapless: false,
+        color: Colors.black,
+        emptyColor: Colors.white,
+      );
+      final byteData = await painter.toImageData(size);
+      return byteData?.buffer.asUint8List();
+    } catch (e) {
+      // return null on failure
+      return null;
+    }
+  }
+
+  Widget _buildQRCodeSection() {
+    final ownerMeta = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+    final ownerName = ownerMeta['name']?.toString() ?? Supabase.instance.client.auth.currentUser?.email ?? 'Owner';
+
+    if (_selectedPet == null) {
+      return _buildTabContent('No pet selected');
+    }
+
+    // Build payload that will be encoded into the QR (JSON)
+    final payload = {
+      'pet_id': _selectedPet!['id'],
+      'name': _selectedPet!['name'] ?? '',
+      'breed': _selectedPet!['breed'] ?? '',
+      'age': _selectedPet!['age']?.toString() ?? '',
+      'weight': _selectedPet!['weight']?.toString() ?? '',
+      'owner_name': ownerName,
+    };
+    final payloadStr = jsonEncode(payload);
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text('Scan to view pet info', style: TextStyle(fontWeight: FontWeight.bold, color: deepRed)),
+          SizedBox(height: 12),
+          Container(
+            color: Colors.white,
+            padding: EdgeInsets.all(12),
+            // generate QR bytes and show Image.memory (works across qr_flutter versions)
+            child: FutureBuilder<Uint8List?>(
+              future: _generateQrBytes(payloadStr, 220.0),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return SizedBox(width: 220, height: 220, child: Center(child: CircularProgressIndicator(color: deepRed)));
+                }
+                if (snapshot.hasData && snapshot.data != null) {
+                  return Image.memory(snapshot.data!, width: 220, height: 220, fit: BoxFit.contain);
+                }
+                return SizedBox(
+                  width: 220,
+                  height: 220,
+                  child: Center(child: Text('QR unavailable', style: TextStyle(color: Colors.grey))),
+                );
+              },
+            ),
+          ),
+          SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            child: Text(
+              'Owner: $ownerName\nPet: ${_selectedPet!['name'] ?? 'Unnamed'}',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey[800]),
+            ),
+          ),
+          SizedBox(height: 12),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ElevatedButton.icon(
+                icon: Icon(Icons.copy),
+                label: Text('Copy Payload'),
+                style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: payloadStr));
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('QR payload copied to clipboard')));
+                },
+              ),
+              SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: Icon(Icons.refresh),
+                label: Text('Regenerate'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade600),
+                onPressed: () {
+                  // forces UI refresh (in case pet changed externally)
+                  setState(() {});
+                },
+              ),
+            ],
+          ),
+          SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32.0),
+            child: Text(
+              'When scanned, the QR contains the pet details and owner name as JSON.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+          ),
+        ],
       ),
     );
   }
