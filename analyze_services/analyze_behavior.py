@@ -231,8 +231,12 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
         "trend": trend,
         "recommendation": recommendation,
         "sleep_trend": sleep_trend,
+        # keep legacy (short) keys
         "mood_prob": mood_prob,
-        "activity_prob": activity_prob
+        "activity_prob": activity_prob,
+        # add UI-friendly plural keys so pet_screen can read mood_probabilities / activity_probabilities
+        "mood_probabilities": mood_prob,
+        "activity_probabilities": activity_prob
     }
 
 def analyze_pet(pet_id):
