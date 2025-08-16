@@ -519,18 +519,22 @@ void showEditPostModal(Map post) {
                       ),
                     ),
                     if (post['user_id'] == widget.userId)
-                      PopupMenuButton<String>(
-                        onSelected: (value) {
-                          if (value == 'edit') {
-                            showEditPostModal(post);
-                          } else if (value == 'delete') {
-                            deletePost(context, post['id']);
-                          }
-                        },
-                        itemBuilder: (_) => [
-                          PopupMenuItem(value: 'edit', child: Text('Edit')),
-                          PopupMenuItem(value: 'delete', child: Text('Delete')),
-                        ],
+                      Container(
+                        width: 120, // Match IconButton size for alignment
+                        alignment: Alignment.topCenter,
+                        child: PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'edit') {
+                              showEditPostModal(post);
+                            } else if (value == 'delete') {
+                              deletePost(context, post['id']);
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          ],
+                        ),
                       ),
                   ],
                 ),
