@@ -38,6 +38,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String? _playingMessageId;
   String? _incomingPromptedCallId;
   bool _joiningCall = false;
+  String? _myDisplayName; // current user's display name, used for Zego
 
   @override
   void initState() {
@@ -49,6 +50,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     subscribeToMessages();
     subscribeToTyping();
     listenToTyping();
+    _loadSelfName(); // load my display name for calls
   }
 
   // Initialize recorder/player with permission
@@ -61,6 +63,23 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     try {
       await _player!.openPlayer();
     } catch (_) {}
+  }
+
+  Future<void> _loadSelfName() async {
+    try {
+      final row = await supabase
+          .from('users')
+          .select('name')
+          .eq('id', widget.userId)
+          .maybeSingle();
+      if (mounted) {
+        setState(() {
+          _myDisplayName = (row?['name']?.toString() ?? '').trim();
+        });
+      }
+    } catch (_) {
+      // ignore
+    }
   }
 
   // Build a signed URL for a storage object (works for private buckets), fallback to public URL
@@ -267,12 +286,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
 
     final me = _sanitizeId(widget.userId);
-    debugPrint('Joining Zego call, callID=$callId, me=$me');
+    final myName = (_myDisplayName != null && _myDisplayName!.isNotEmpty) ? _myDisplayName! : me;
+    debugPrint('Joining Zego call, callID=$callId, me=$me, name=$myName');
 
     if (!mounted) {
       _joiningCall = false;
       return;
     }
+
+    final config = video
+        ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
+        : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall();
+    // Optional: keep waiting in room even if only self is present
+    // config.onOnlySelfInRoom = (context) { /* keep waiting */ };
 
     await Navigator.push(
       context,
@@ -281,11 +307,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           appID: appID,
           appSign: appSign,
           userID: me,
-          userName: widget.userName,
+          userName: myName, // use my own display name
           callID: callId,
-          config: video
-              ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
-              : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall(),
+          config: config,
         ),
       ),
     );
@@ -468,25 +492,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Max 64 characters (we are well under)
     return id;
   }
-
-  // Caller flow: send invite then join
-  // NOTE: Duplicate definition removed to fix "already declared" error.
-  // The valid _startZegoCall(bool video) is defined earlier in this file.
-  // void _startZegoCall(bool video) async {
-  //   final callId = _sharedCallId(widget.userId, widget.receiverId);
-  //   try {
-  //     await supabase.from('messages').insert({
-  //       'sender_id': widget.userId,
-  //       'receiver_id': widget.receiverId,
-  //       'type': 'call',
-  //       'content': video ? '[video_call]' : '[voice_call]',
-  //       'call_id': callId,
-  //       'call_mode': video ? 'video' : 'voice',
-  //       'is_seen': false,
-  //     });
-  //   } catch (_) {}
-  //   await _joinZegoCall(callId: callId, video: video);
-  // }
 
   bool isSender(String id) => id == widget.userId;
 
