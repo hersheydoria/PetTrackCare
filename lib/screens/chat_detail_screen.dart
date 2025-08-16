@@ -40,6 +40,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   bool _joiningCall = false;
   String? _myDisplayName; // current user's display name, used for Zego
 
+  String? _outgoingCallId;
+  String _outgoingCallMode = 'voice';
+  bool _awaitingAccept = false;
+  bool _callingDialogOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -235,10 +240,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               final callId = (msg['call_id'] ?? '').toString().trim();
               final mode = (msg['call_mode'] ?? 'voice').toString();
               if (callId.isEmpty) return;
-              if (_incomingPromptedCallId == callId) return; // avoid duplicate dialogs
+              if (_incomingPromptedCallId == callId) return;
               _incomingPromptedCallId = callId;
 
               if (!mounted) return;
+              final callerId = from?.toString();
               final accept = await showDialog<bool>(
                 context: context,
                 barrierDismissible: true,
@@ -246,14 +252,72 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
                   content: const Text('Join this call?'),
                   actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Decline')),
-                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Accept')),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Decline'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Accept'),
+                    ),
                   ],
                 ),
               );
 
               if (accept == true && mounted) {
+                // Notify caller that callee accepted
+                try {
+                  await supabase.from('messages').insert({
+                    'sender_id': widget.userId,
+                    'receiver_id': callerId,
+                    'type': 'call_accept',
+                    'call_id': callId,
+                    'call_mode': mode,
+                    'content': '[call_accept]',
+                    'is_seen': false,
+                  });
+                } catch (_) {}
                 await _joinZegoCall(callId: callId, video: mode == 'video');
+              } else {
+                // Optionally notify decline
+                try {
+                  await supabase.from('messages').insert({
+                    'sender_id': widget.userId,
+                    'receiver_id': callerId,
+                    'type': 'call_decline',
+                    'call_id': callId,
+                    'call_mode': mode,
+                    'content': '[call_decline]',
+                    'is_seen': false,
+                  });
+                } catch (_) {}
+              }
+            }
+
+            // Caller side: callee accepted -> join now
+            if (from == widget.receiverId && to == widget.userId && msg['type'] == 'call_accept') {
+              final callId = (msg['call_id'] ?? '').toString().trim();
+              final mode = (msg['call_mode'] ?? 'voice').toString();
+              if (callId.isEmpty) return;
+              if (_awaitingAccept && _outgoingCallId == callId) {
+                _dismissCallingDialog();
+                _awaitingAccept = false;
+                await _joinZegoCall(callId: callId, video: mode == 'video');
+              }
+            }
+
+            // Caller side: callee canceled/declined -> dismiss dialog
+            if (from == widget.receiverId && to == widget.userId &&
+                (msg['type'] == 'call_cancel' || msg['type'] == 'call_decline')) {
+              final callId = (msg['call_id'] ?? '').toString().trim();
+              if (_awaitingAccept && _outgoingCallId == callId) {
+                _dismissCallingDialog();
+                _awaitingAccept = false;
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(msg['type'] == 'call_decline' ? 'Call declined' : 'Call canceled')),
+                  );
+                }
               }
             }
           },
@@ -261,67 +325,67 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         .subscribe();
   }
 
-  // Join an existing call room (used by both caller and callee)
-  Future<void> _joinZegoCall({required String callId, required bool video}) async {
-    if (_joiningCall) return;
-    _joiningCall = true;
-
-    final mic = await Permission.microphone.request();
-    if (!mic.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
-      }
-      _joiningCall = false;
-      return;
+  void _dismissCallingDialog() {
+    if (_callingDialogOpen && mounted) {
+      Navigator.of(context, rootNavigator: true).maybePop();
+      _callingDialogOpen = false;
     }
-    if (video) {
-      final cam = await Permission.camera.request();
-      if (!cam.isGranted) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
-        }
-        _joiningCall = false;
-        return;
-      }
-    }
-
-    final me = _sanitizeId(widget.userId);
-    final myName = (_myDisplayName != null && _myDisplayName!.isNotEmpty) ? _myDisplayName! : me;
-    debugPrint('Joining Zego call, callID=$callId, me=$me, name=$myName');
-
-    if (!mounted) {
-      _joiningCall = false;
-      return;
-    }
-
-    final config = video
-        ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
-        : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall();
-    // Optional: keep waiting in room even if only self is present
-    // config.onOnlySelfInRoom = (context) { /* keep waiting */ };
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ZegoUIKitPrebuiltCall(
-          appID: appID,
-          appSign: appSign,
-          userID: me,
-          userName: myName, // use my own display name
-          callID: callId,
-          config: config,
-        ),
-      ),
-    );
-
-    _joiningCall = false;
   }
 
-  // Caller flow: send invite then join
+  void _openCallingDialog(String callId, bool video) {
+    if (_callingDialogOpen || !mounted) return;
+    _callingDialogOpen = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          title: Text('Calling ${widget.userName}...'),
+          content: const Text('Waiting for recipient to accept'),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                // Send cancel to recipient
+                try {
+                  await supabase.from('messages').insert({
+                    'sender_id': widget.userId,
+                    'receiver_id': widget.receiverId,
+                    'type': 'call_cancel',
+                    'call_id': callId,
+                    'call_mode': video ? 'video' : 'voice',
+                    'content': '[call_cancel]',
+                    'is_seen': false,
+                  });
+                } catch (_) {}
+                _awaitingAccept = false;
+                _callingDialogOpen = false;
+                if (mounted) Navigator.of(context, rootNavigator: true).pop();
+              },
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      ),
+    ).then((_) {
+      _callingDialogOpen = false;
+    });
+
+    // Optional timeout (e.g., 45s)
+    Future.delayed(const Duration(seconds: 45), () {
+      if (!mounted) return;
+      if (_awaitingAccept && _outgoingCallId == callId) {
+        _dismissCallingDialog();
+        _awaitingAccept = false;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No answer')));
+      }
+    });
+  }
+
+  // Caller flow: send invite then wait for accept (do not auto-join)
   void _startZegoCall(bool video) async {
     final callId = _sharedCallId(widget.userId, widget.receiverId);
 
-    // Send a lightweight invite so the recipient can join the exact same room
     try {
       await supabase.from('messages').insert({
         'sender_id': widget.userId,
@@ -332,11 +396,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'call_mode': video ? 'video' : 'voice',
         'is_seen': false,
       });
-    } catch (_) {
-      // Even if insert fails, allow caller to proceed
-    }
+    } catch (_) {}
 
-    await _joinZegoCall(callId: callId, video: video);
+    _outgoingCallId = callId;
+    _outgoingCallMode = video ? 'video' : 'voice';
+    _awaitingAccept = true;
+    _openCallingDialog(callId, video);
+    // Caller will join when 'call_accept' is received
   }
 
   void subscribeToTyping() {
@@ -552,6 +618,60 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       ),
     );
+  }
+
+  // Join an existing call room (used by both caller and callee)
+  Future<void> _joinZegoCall({required String callId, required bool video}) async {
+    if (_joiningCall) return;
+    _joiningCall = true;
+
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
+      }
+      _joiningCall = false;
+      return;
+    }
+    if (video) {
+      final cam = await Permission.camera.request();
+      if (!cam.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
+        }
+        _joiningCall = false;
+        return;
+      }
+    }
+
+    final me = _sanitizeId(widget.userId);
+    final myName = (_myDisplayName != null && _myDisplayName!.isNotEmpty) ? _myDisplayName! : me;
+    debugPrint('Joining Zego call, callID=$callId, me=$me, name=$myName');
+
+    if (!mounted) {
+      _joiningCall = false;
+      return;
+    }
+
+    final config = video
+        ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
+        : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall();
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ZegoUIKitPrebuiltCall(
+          appID: appID,
+          appSign: appSign,
+          userID: me,
+          userName: myName,
+          callID: callId,
+          config: config,
+        ),
+      ),
+    );
+
+    _joiningCall = false;
   }
 
   @override
