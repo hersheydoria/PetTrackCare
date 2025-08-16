@@ -36,8 +36,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
   @override
   void initState() {
     super.initState();
-    // Reset comment sections when screen is initialized
+    // Reset all comment-related state when screen is initialized
     showCommentInput.clear();
+    commentControllers.clear();
+    postComments.clear();
+    commentCounts.clear();
     fetchPosts();
   }
 
@@ -51,43 +54,88 @@ class _CommunityScreenState extends State<CommunityScreen> {
   Future<void> fetchPosts() async {
     setState(() => isLoading = true);
     try {
+      // First fetch the posts with basic information
       final response = await Supabase.instance.client
           .from('community_posts')
           .select('''
-            *, 
-            users(name, role, profile), 
-            likes(user_id),
-            comments(
-              id, 
-              content, 
-              user_id, 
+            *,
+            users!community_posts_user_id_fkey (
+              name,
+              role,
+              profile
+            ),
+            likes (
+              user_id
+            ),
+            comments (
+              id,
+              content,
+              user_id,
               created_at,
-              users(name, profile),
-              comment_likes(user_id)
+              users!comments_user_id_fkey (
+                name,
+                profile
+              ),
+              comment_likes (
+                user_id
+              )
             )
           ''')
           .order('created_at', ascending: false);
-      print('Supabase response:');
-      print(response);
+
+      print('Fetched posts response: ${response.toString()}');
+
       setState(() {
         posts = response;
+        // Process each post's data
         for (var post in posts) {
-          print('Post ID: ' + post['id'].toString() + ' - Comments: ' + post['comments'].toString());
           final postId = post['id'].toString();
-          
-          // Check if the current user has liked this post
+          print('Processing post ID: $postId');
+
+          // Handle likes
           final likes = post['likes'] as List? ?? [];
           likedPosts[postId] = likes.any((like) => like['user_id'] == widget.userId);
+          likeCounts[postId] = likes.length;
           
-          // Handle comments
-          final comments = (post['comments'] != null && post['comments'] is List)
-            ? (post['comments'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList()
-            : <Map<String, dynamic>>[];
-          postComments[postId] = comments;
+          // Initialize comment controllers if not exists
+          if (!commentControllers.containsKey(postId)) {
+            commentControllers[postId] = TextEditingController();
+          }
+
+          // Process comments
+          try {
+            List<Map<String, dynamic>> comments = [];
+            if (post['comments'] != null && post['comments'] is List) {
+              comments = (post['comments'] as List).map((comment) {
+                if (comment is! Map<String, dynamic>) {
+                  return Map<String, dynamic>.from(comment);
+                }
+                return comment;
+              }).toList();
+
+              // Sort comments by created_at date (newest first)
+              comments.sort((a, b) {
+                final dateA = DateTime.parse(a['created_at'] as String);
+                final dateB = DateTime.parse(b['created_at'] as String);
+                return dateB.compareTo(dateA);
+              });
+            }
+            postComments[postId] = comments;
+            print('Processed ${comments.length} comments for post $postId');
+          } catch (e) {
+            print('Error processing comments for post $postId: $e');
+            postComments[postId] = [];
+          }
+
+          // Initialize comment input state
+          showCommentInput[postId] = showCommentInput[postId] ?? false;
         }
       });
     } catch (e) {
       print('Error fetching posts: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading posts. Please try again.'))
+      );
     } finally {
       setState(() => isLoading = false);
     }
@@ -409,8 +457,13 @@ void showEditPostModal(Map post) {
         commentControllers.putIfAbsent(postId, () => TextEditingController());
 
       int likeCount = (post['likes'] != null && post['likes'] is List) ? post['likes'].length : 0;
-      List<dynamic> comments = (post['comments'] != null && post['comments'] is List) ? post['comments'] : [];
-      int commentCount = comments.length;
+      if (!postComments.containsKey(postId)) {
+        List<Map<String, dynamic>> comments = [];
+        if (post['comments'] != null && post['comments'] is List) {
+          comments = (post['comments'] as List).map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+        postComments[postId] = comments;
+      }
 
         return Card(
           margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -467,12 +520,11 @@ void showEditPostModal(Map post) {
                             PopupMenuItem(value: 'edit', child: Text('Edit')),
                             PopupMenuItem(value: 'delete', child: Text('Delete')),
                           ],
-                        )
-                      else
-                        Text(
-                          timeAgo,
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
                         ),
+                      Text(
+                        timeAgo,
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
                   ],
                 ),
                 SizedBox(height: 10),
@@ -491,12 +543,13 @@ void showEditPostModal(Map post) {
                       children: [
                         IconButton(
                           icon: Icon(
-                            likedPosts[postId]! ? Icons.favorite : Icons.favorite_border,
-                            color: likedPosts[postId]! ? Colors.red : deepRed,
+                            (likedPosts[postId] ?? false) ? Icons.favorite : Icons.favorite_border,
+                            color: (likedPosts[postId] ?? false) ? Colors.red : deepRed,
                           ),
                           onPressed: () async {
-                            // Optimistically update UI
-                            final bool newLikeState = !likedPosts[postId]!;
+                            // Any user can like/unlike any post
+                            final bool currentLikeState = likedPosts[postId] ?? false;
+                            final bool newLikeState = !currentLikeState;
                             setState(() {
                               likedPosts[postId] = newLikeState;
                               if (newLikeState) {
@@ -505,9 +558,7 @@ void showEditPostModal(Map post) {
                                 likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
                               }
                             });
-
                             try {
-                              // Update like in database
                               if (newLikeState) {
                                 await Supabase.instance.client
                                   .from('likes')
@@ -519,35 +570,34 @@ void showEditPostModal(Map post) {
                                   .eq('post_id', postId)
                                   .eq('user_id', widget.userId);
                               }
-
-                              // Fetch updated like count for this post only
                               final updatedPost = await Supabase.instance.client
                                 .from('community_posts')
                                 .select('*, likes(user_id)')
                                 .eq('id', postId)
                                 .single();
-                              
-                              if (updatedPost != null) {
-                                setState(() {
-                                  // Update only this post's data
-                                  final index = posts.indexWhere((p) => p['id'].toString() == postId);
-                                  if (index != -1) {
-                                    posts[index]['likes'] = updatedPost['likes'];
-                                    likeCounts[postId] = updatedPost['likes']?.length ?? 0;
-                                  }
-                                });
-                              }
+                              setState(() {
+                                final index = posts.indexWhere((p) => p['id'].toString() == postId);
+                                if (index != -1) {
+                                  posts[index]['likes'] = updatedPost['likes'];
+                                  likeCounts[postId] = updatedPost['likes']?.length ?? 0;
+                                }
+                              });
                             } catch (e) {
                               print('Error updating like: $e');
-                              // Revert UI on error
                               setState(() {
-                                likedPosts[postId] = !newLikeState;
-                                if (!newLikeState) {
+                                likedPosts[postId] = currentLikeState;
+                                if (currentLikeState) {
                                   likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
                                 } else {
                                   likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
                                 }
                               });
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to update like. Please try again.'),
+                                  duration: Duration(seconds: 2),
+                                )
+                              );
                             }
                           },
                         ),
@@ -560,19 +610,19 @@ void showEditPostModal(Map post) {
                         IconButton(
                           icon: Icon(Icons.comment_outlined, color: deepRed),
                           onPressed: () {
+                            // Any user can comment on any post
                             setState(() {
-                              showCommentInput[postId] = !showCommentInput[postId]!;
+                              showCommentInput[postId] = !(showCommentInput[postId] ?? false);
                             });
                           },
                         ),
-                            if (commentCount > 0)
-                              Text('$commentCount comments'),
+                            Text('${(postComments[postId]?.length ?? 0)} comments'),
                       ],
                     ),
                     IconButton(icon: Icon(Icons.bookmark_border, color: deepRed), onPressed: () {}),
                   ],
                 ),
-                if (showCommentInput[postId]!)
+                if (showCommentInput[postId] == true)
                   Padding(
                     padding: const EdgeInsets.only(top: 8.0),
                     child: Column(
@@ -593,53 +643,62 @@ void showEditPostModal(Map post) {
                               onPressed: () async {
                                 final commentText = commentControllers[postId]?.text.trim();
                                 if (commentText != null && commentText.isNotEmpty) {
-                                  // Optimistically add the comment
-                                  final optimisticComment = {
-                                    'content': commentText,
-                                    'user_id': widget.userId,
-                                    'created_at': DateTime.now().toIso8601String(),
-                                    'users': {'name': 'You', 'profile': null},
-                                    'comment_likes': []
-                                  };
+                                  print('Preparing to post comment on post $postId');
                                   
-                                  setState(() {
-                                    postComments[postId]?.add(optimisticComment);
-                                    commentCounts[postId] = (commentCounts[postId] ?? 0) + 1;
-                                    showCommentInput[postId] = false;
-                                    commentControllers[postId]?.clear();
-                                  });
-
+                                  // Clear the input field immediately
+                                  commentControllers[postId]?.clear();
+                                  
                                   try {
-                                    // Add comment to database
-                                    final response = await Supabase.instance.client
+                                    // Insert the comment - allow any user to comment on any post
+                                    print('Inserting comment into database');
+                                    final newComment = await Supabase.instance.client
                                       .from('comments')
                                       .insert({
                                         'post_id': postId,
                                         'user_id': widget.userId,
-                                        'content': commentText
+                                        'content': commentText,
                                       })
-                                      .select('*, users(name, profile), comment_likes(*)')
+                                      .select('id, content, created_at, user_id')
                                       .single();
+                                      
+                                    print('Comment inserted: $newComment');
 
-                                    // Update the optimistic comment with real data
+                                    // Get user data
+                                    final userData = await Supabase.instance.client
+                                      .from('users')
+                                      .select('name, profile')
+                                      .eq('id', widget.userId)
+                                      .single();
+                                      
+                                    print('User data fetched: $userData');
+
+                                    // Combine comment and user data
+                                    final fullComment = {
+                                      ...Map<String, dynamic>.from(newComment),
+                                      'users': userData,
+                                      'comment_likes': []
+                                    };
+
                                     setState(() {
-                                      final comments = postComments[postId] ?? [];
-                                      final index = comments.length - 1;
-                                      if (index >= 0) {
-                                        postComments[postId]![index] = response;
+                                      if (postComments[postId] == null) {
+                                        postComments[postId] = [];
                                       }
+                                      postComments[postId]!.insert(0, fullComment);
                                     });
                                   } catch (e) {
                                     print('Error posting comment: $e');
-                                    // Remove the optimistic comment on error
-                                    setState(() {
-                                      postComments[postId]?.removeLast();
-                                      commentCounts[postId] = (commentCounts[postId] ?? 1) - 1;
-                                    });
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Failed to post comment'))
+                                      SnackBar(
+                                        content: Text('Failed to post comment. Please try again.'),
+                                        duration: Duration(seconds: 3),
+                                      )
                                     );
+                                    // Restore the comment text if posting failed
+                                    commentControllers[postId]?.text = commentText;
                                   }
+                                  
+                                  // Hide keyboard after comment attempt
+                                  FocusScope.of(context).unfocus();
                                 }
                               },
                             ),
@@ -724,12 +783,36 @@ void showEditPostModal(Map post) {
                                                                     onPressed: () async {
                                                                       final newContent = editCommentControllers[commentId]?.text.trim();
                                                                       if (newContent?.isNotEmpty ?? false) {
-                                                                        await Supabase.instance.client
-                                                                            .from('comments')
-                                                                            .update({'content': newContent})
-                                                                            .eq('id', commentId);
+                                                                        // Store the original content for rollback
+                                                                        final originalContent = comment['content'];
+                                                                        
+                                                                        // Optimistically update the comment
+                                                                        setState(() {
+                                                                          comment['content'] = newContent;
+                                                                          comment['isEditing'] = true;
+                                                                        });
                                                                         Navigator.pop(context);
-                                                                        fetchPosts();
+
+                                                                        try {
+                                                                          await Supabase.instance.client
+                                                                              .from('comments')
+                                                                              .update({'content': newContent})
+                                                                              .eq('id', commentId);
+                                                                          
+                                                                          setState(() {
+                                                                            comment['isEditing'] = false;
+                                                                          });
+                                                                        } catch (e) {
+                                                                          print('Error updating comment: $e');
+                                                                          // Rollback on error
+                                                                          setState(() {
+                                                                            comment['content'] = originalContent;
+                                                                            comment['isEditing'] = false;
+                                                                          });
+                                                                          ScaffoldMessenger.of(context).showSnackBar(
+                                                                            SnackBar(content: Text('Failed to update comment'))
+                                                                          );
+                                                                        }
                                                                       }
                                                                     },
                                                                     child: Text('Save'),
@@ -759,11 +842,32 @@ void showEditPostModal(Map post) {
                                                               ),
                                                             );
                                                             if (confirm == true) {
-                                                              await Supabase.instance.client
+                                                              // Store comment for potential rollback
+                                                              final deletedComment = {...comment};
+                                                              final commentIndex = postComments[postId]!.indexOf(comment);
+                                                              
+                                                              // Optimistically remove the comment
+                                                              setState(() {
+                                                                postComments[postId]!.removeAt(commentIndex);
+                                                                commentCounts[postId] = (commentCounts[postId] ?? 1) - 1;
+                                                              });
+
+                                                              try {
+                                                                await Supabase.instance.client
                                                                   .from('comments')
                                                                   .delete()
                                                                   .eq('id', commentId);
-                                                              fetchPosts();
+                                                              } catch (e) {
+                                                                print('Error deleting comment: $e');
+                                                                // Rollback on error
+                                                                setState(() {
+                                                                  postComments[postId]!.insert(commentIndex, deletedComment);
+                                                                  commentCounts[postId] = (commentCounts[postId] ?? 0) + 1;
+                                                                });
+                                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                                  SnackBar(content: Text('Failed to delete comment'))
+                                                                );
+                                                              }
                                                             }
                                                           }
                                                         },
@@ -790,9 +894,10 @@ void showEditPostModal(Map post) {
                                           children: [
                                             InkWell(
                                               onTap: () async {
-                                                final newLikeState = !likedComments[commentId]!;
+                                                // Any user can like/unlike any comment
+                                                final currentLikeState = likedComments[commentId] ?? false;
+                                                final newLikeState = !currentLikeState;
                                                 final oldLikes = comment['comment_likes'] as List? ?? [];
-                                                
                                                 setState(() {
                                                   likedComments[commentId] = newLikeState;
                                                   if (newLikeState) {
@@ -801,7 +906,6 @@ void showEditPostModal(Map post) {
                                                     comment['comment_likes'] = oldLikes.where((like) => like['user_id'] != widget.userId).toList();
                                                   }
                                                 });
-
                                                 try {
                                                   if (newLikeState) {
                                                     await Supabase.instance.client
@@ -817,30 +921,32 @@ void showEditPostModal(Map post) {
                                                         .eq('comment_id', commentId)
                                                         .eq('user_id', widget.userId);
                                                   }
-
-                                                  // Fetch updated comment likes
                                                   final updatedComment = await Supabase.instance.client
                                                     .from('comments')
                                                     .select('comment_likes(*)')
                                                     .eq('id', commentId)
                                                     .single();
-                                                  
                                                   setState(() {
                                                     comment['comment_likes'] = updatedComment['comment_likes'];
                                                   });
                                                 } catch (e) {
                                                   print('Error updating comment like: $e');
-                                                  // Revert on error
                                                   setState(() {
-                                                    likedComments[commentId] = !newLikeState;
+                                                    likedComments[commentId] = currentLikeState;
                                                     comment['comment_likes'] = oldLikes;
                                                   });
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('Failed to update comment like. Please try again.'),
+                                                      duration: Duration(seconds: 2),
+                                                    )
+                                                  );
                                                 }
                                               },
                                               child: Icon(
-                                                likedComments[commentId]! ? Icons.favorite : Icons.favorite_border,
+                                                (likedComments[commentId] ?? false) ? Icons.favorite : Icons.favorite_border,
                                                 size: 16,
-                                                color: likedComments[commentId]! ? Colors.red : Colors.grey,
+                                                color: (likedComments[commentId] ?? false) ? Colors.red : Colors.grey,
                                               ),
                                             ),
                                             SizedBox(width: 4),
