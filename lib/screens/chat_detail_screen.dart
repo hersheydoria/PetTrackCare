@@ -380,6 +380,65 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   bool isSender(String id) => id == widget.userId;
 
+  DateTime? _parseMsgTime(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    return DateTime.tryParse(v.toString());
+  }
+
+  String _formatChatTimestamp(DateTime dt) {
+    final local = dt.toLocal();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final thatDay = DateTime(local.year, local.month, local.day);
+    final diff = thatDay.difference(today).inDays;
+
+    final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    final dayLabel = diff == 0
+        ? 'Today'
+        : (diff == -1 ? 'Yesterday' : '${months[local.month - 1]} ${local.day}, ${local.year}');
+
+    final hour12 = (local.hour % 12 == 0) ? 12 : (local.hour % 12);
+    final minute = local.minute.toString().padLeft(2, '0');
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
+
+    return '$dayLabel • $hour12:$minute $ampm';
+  }
+
+  void _openImageViewer(String url, {String? tag}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          body: SafeArea(
+            child: Stack(
+              children: [
+                Center(
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 4.0,
+                    child: tag != null
+                        ? Hero(tag: tag, child: Image.network(url))
+                        : Image.network(url),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     String? lastSeenMessageId;
@@ -425,6 +484,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 final isLastSeen = lastSeenMessageId != null &&
                     msg['id'].toString() == lastSeenMessageId;
 
+                final sentAt = _parseMsgTime(msg['sent_at']);
+                final tsLabel = sentAt != null ? _formatChatTimestamp(sentAt) : null;
+
                 Widget content;
                 if (msg['type'] == 'image' && msg['media_url'] != null) {
                   content = FutureBuilder<String?>(
@@ -438,12 +500,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                           child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
                         );
                       }
-                      return Image.network(
-                        url,
-                        fit: BoxFit.cover,
-                        width: 200,
-                        height: 200,
-                        errorBuilder: (_, __, ___) => const Icon(Icons.broken_image),
+                      final heroTag = 'chat_img_${msg['id'] ?? url}';
+                      return GestureDetector(
+                        onTap: () => _openImageViewer(url, tag: heroTag),
+                        child: Hero(
+                          tag: heroTag,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              url,
+                              fit: BoxFit.cover,
+                              width: 200,
+                              height: 200,
+                              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image),
+                            ),
+                          ),
+                        ),
                       );
                     },
                   );
@@ -464,27 +536,49 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   content = Text(msg['content'] ?? '[empty]');
                 }
 
-                return Align(
-                  alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Column(
-                    crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(12),
-                        margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                        decoration: BoxDecoration(
-                          color: sentByMe ? Color(0xFFCB4154).withOpacity(0.2) : Colors.grey.shade200,
-                          borderRadius: BorderRadius.circular(12),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (tsLabel != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6.0),
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.black12,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              tsLabel,
+                              style: const TextStyle(fontSize: 11, color: Colors.black54),
+                            ),
+                          ),
                         ),
-                        child: content,
                       ),
-                      if (sentByMe && isLastSeen)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 12.0),
-                          child: Text('Seen', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                        ),
-                    ],
-                  ),
+                    Align(
+                      alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Column(
+                        crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: EdgeInsets.all(12),
+                            margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: sentByMe ? Color(0xFFCB4154).withOpacity(0.2) : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: content,
+                          ),
+                          if (sentByMe && isLastSeen)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 12.0),
+                              child: Text('Seen', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
