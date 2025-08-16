@@ -55,6 +55,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String? _illnessRisk;
   // numeric sleep forecast (7 days) returned by backend
   List<double> _backendSleepForecast = [];
+  bool _isUnhealthy = false; // <-- add
+  List<String> _careActions = [];        // <-- add
+  List<String> _careExpectations = [];   // <-- add
 
   final List<String> moods = [
     "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
@@ -69,8 +72,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   // map of date -> list of event markers (used by TableCalendar)
   Map<DateTime, List<String>> _events = {};
-  // list of recent prediction records fetched from Supabase
-  List<Map<String, dynamic>> _recentPredictions = [];
 
   // emoji mappings for mood & activity
   final Map<String, String> _moodEmojis = {
@@ -138,9 +139,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _loadingPets = false;
         });
         // Trigger additional fetches in background so UI can render immediately.
-        // We intentionally do NOT await these so they don't keep the loader visible.
+        // We intentionally do NOT await these so they don't keep the loader visible
         _fetchBehaviorDates();
-        _fetchRecentPredictions();
         _fetchAnalyzeFromBackend();
         _fetchLatestAnalysis();
       } else {
@@ -170,28 +170,35 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     final data = response as List?;
     if (data != null && data.isNotEmpty) {
       final analysis = data.first as Map<String, dynamic>;
+      // Safely read DB fields; only assign if present
+      final pred = (analysis['prediction_text'] ?? analysis['prediction'] ?? analysis['trend'])?.toString();
+      final rec = (analysis['suggestions'] ?? analysis['recommendation'])?.toString();
+      final trends = analysis['trends'] as Map<String, dynamic>?; // may be absent
+
       setState(() {
-        _prediction = analysis['prediction'];
-        _recommendation = analysis['recommendation'];
-        final trends = analysis['trends'] ?? {};
-        _sleepTrend = (trends['sleep_forecast'] as List<dynamic>?)
-                ?.map((e) => (e as num).toDouble())
-                .toList() ??
-            [];
-        _moodProb =
-            (trends['mood_probabilities'] as Map?)?.map((k, v) =>
-                    MapEntry(k.toString(), (v as num).toDouble())) ??
-                {};
-        _activityProb =
-            (trends['activity_probabilities'] as Map?)?.map((k, v) =>
-                    MapEntry(k.toString(), (v as num).toDouble())) ??
-                {};
+        if (pred != null && pred.isNotEmpty) {
+          _prediction = pred;
+        }
+        if (rec != null && rec.isNotEmpty) {
+          _recommendation = rec;
+        }
+        if (trends != null) {
+          _sleepTrend = (trends['sleep_forecast'] as List<dynamic>?)
+                  ?.map((e) => (e as num).toDouble())
+                  .toList() ??
+              _sleepTrend; // keep existing if missing
+          _moodProb = (trends['mood_probabilities'] as Map?)
+                  ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
+              _moodProb;
+          _activityProb = (trends['activity_probabilities'] as Map?)
+                  ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
+              _activityProb;
+        }
       });
     }
 
-    // also refresh calendar markers and recent predictions
+    // also refresh calendar markers
     await _fetchBehaviorDates();
-    await _fetchRecentPredictions();
   }
 
   // fetch behavior log dates for the selected pet and populate _events with a marker
@@ -225,26 +232,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
-  // fetch recent predictions (latest 5) for the selected pet
-  Future<void> _fetchRecentPredictions() async {
-    if (_selectedPet == null) return;
-    try {
-      final petId = _selectedPet!['id'];
-      final response = await Supabase.instance.client
-          .from('predictions')
-          .select()
-          .eq('pet_id', petId)
-          .order('prediction_date', ascending: false)
-          .limit(5);
-      final data = response as List? ?? [];
-      setState(() {
-        _recentPredictions = List<Map<String, dynamic>>.from(data);
-      });
-    } catch (e) {
-      // ignore / optionally log
-    }
-  }
-
   // Call backend /analyze to get illness risk and numeric sleep forecast (and analysis summary).
   Future<void> _fetchAnalyzeFromBackend() async {
     if (_selectedPet == null) return;
@@ -256,17 +243,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       );
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
-        // backend keys: "trend" / "recommendation" / "sleep_forecast" (numeric) / "illness_risk"
         setState(() {
           _prediction = (body['trend'] ?? body['prediction_text'] ?? body['prediction'])?.toString();
           _recommendation = (body['recommendation'] ?? body['suggestions'])?.toString();
-          // numeric sleep forecast (list)
           final sf = body['sleep_forecast'];
           if (sf is List) {
             _backendSleepForecast = sf.map((e) => (e as num).toDouble()).toList();
-            _sleepTrend = _backendSleepForecast; // use for chart
+            _sleepTrend = _backendSleepForecast;
           }
-          // mood/activity prob: backend may return dicts
           final moodProb = body['mood_prob'] ?? body['mood_probabilities'];
           final actProb = body['activity_prob'] ?? body['activity_probabilities'];
           if (moodProb is Map) {
@@ -275,7 +259,27 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           if (actProb is Map) {
             _activityProb = actProb.map((k, v) => MapEntry(k.toString(), (v as num).toDouble()));
           }
-          _illnessRisk = body['illness_risk']?.toString();
+          final riskRaw = body['illness_risk']?.toString().toLowerCase();
+          _illnessRisk = riskRaw;
+          final unhealthyResp = body['is_unhealthy'];
+          _isUnhealthy = unhealthyResp is bool
+              ? unhealthyResp
+              : (riskRaw == 'high' || riskRaw == 'medium');
+
+          // parse care recommendations
+          _careActions = [];
+          _careExpectations = [];
+          final care = body['care_recommendations'];
+          if (care is Map) {
+            final a = care['actions'];
+            final e = care['expectations'];
+            if (a is List) {
+              _careActions = a.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
+            }
+            if (e is List) {
+              _careExpectations = e.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
+            }
+          }
         });
       } else {
         // non-200 response: ignore for now
@@ -326,9 +330,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               setState(() {
                 _selectedPet = pet;
               });
-              // update calendar markers and recent predictions right away
+              // update calendar markers right away
               await _fetchBehaviorDates();
-              await _fetchRecentPredictions();
               // fetch backend analysis (illness risk + numeric sleep forecast) immediately
               await _fetchAnalyzeFromBackend();
               await _fetchLatestAnalysis();
@@ -414,12 +417,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                           children: [
                             Column(
                               children: [
-                                Icon(Icons.favorite, color: _illnessRisk != null ? deepRed : Colors.green),
+                                Icon(Icons.favorite, color: _isUnhealthy ? deepRed : Colors.green),
                                 SizedBox(height: 4),
-                                Text('Health',
-                                    style: TextStyle(fontWeight: FontWeight.bold)),
-                                Text(_illnessRisk != null ? 'Bad' : 'Good',
-                                    style: TextStyle(color: _illnessRisk != null ? deepRed : Colors.green)),
+                                Text('Health', style: TextStyle(fontWeight: FontWeight.bold)),
+                                Text(_isUnhealthy ? 'Bad' : 'Good',
+                                    style: TextStyle(color: _isUnhealthy ? deepRed : Colors.green)),
                               ],
                             ),
                             Column(
@@ -595,8 +597,179 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     );
   }
 
+  // Fetch behavior log for a specific date (returns the latest if multiple exist)
+  Future<Map<String, dynamic>?> _fetchBehaviorForDate(DateTime day) async {
+    if (_selectedPet == null) return null;
+    try {
+      final petId = _selectedPet!['id'];
+      final ymd = DateFormat('yyyy-MM-dd').format(day);
+      final response = await Supabase.instance.client
+          .from('behavior_logs')
+          .select()
+          .eq('pet_id', petId)
+          .eq('log_date', ymd)
+          .order('id', ascending: false) // pick latest if multiple
+          .limit(1);
+      final data = response as List?;
+      if (data != null && data.isNotEmpty) {
+        return Map<String, dynamic>.from(data.first as Map);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  void _clearBehaviorForm() {
+    setState(() {
+      _selectedMood = null;
+      _activityLevel = null;
+      _sleepHours = null;
+      _notes = null;
+      _sleepController.text = '';
+    });
+  }
+
+  // Read-only modal showing existing behavior with Edit/Delete
+  void _showExistingBehaviorModal(BuildContext context, Map<String, dynamic> log) {
+    final mood = (log['mood'] ?? '').toString();
+    final activity = (log['activity_level'] ?? '').toString();
+    final sleep = (log['sleep_hours'] ?? '').toString();
+    final notes = (log['notes'] ?? '').toString();
+    final rawDate = (log['log_date'] ?? '').toString();
+    DateTime date;
+    try {
+      date = DateTime.parse(rawDate);
+    } catch (_) {
+      date = _selectedDate ?? DateTime.now();
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.6,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    DateFormat('MMMM d, yyyy').format(date),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              Divider(),
+              // Details
+              ListTile(
+                dense: true,
+                title: Text('Mood', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(mood.isEmpty ? '-' : mood),
+              ),
+              ListTile(
+                dense: true,
+                title: Text('Activity Level', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(activity.isEmpty ? '-' : activity),
+              ),
+              ListTile(
+                dense: true,
+                title: Text('Sleep Hours', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(sleep.isEmpty ? '-' : sleep),
+              ),
+              if (notes.isNotEmpty)
+                ListTile(
+                  dense: true,
+                  title: Text('Notes', style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(notes),
+                ),
+              Spacer(),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: Icon(Icons.edit, color: deepRed),
+                      label: Text('Edit', style: TextStyle(color: deepRed)),
+                      onPressed: () {
+                        Navigator.pop(context); // close details
+                        // preload form state then open edit modal
+                        setState(() {
+                          _selectedDate = date;
+                          _selectedMood = mood.isNotEmpty ? mood : null;
+                          _activityLevel = activity.isNotEmpty ? activity : null;
+                          _sleepHours = double.tryParse(sleep);
+                          _sleepController.text = _sleepHours?.toString() ?? '';
+                          _notes = notes.isNotEmpty ? notes : null;
+                        });
+                        _showBehaviorModal(context, date, existing: log);
+                      },
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      icon: Icon(Icons.delete, color: Colors.white),
+                      label: Text('Delete', style: TextStyle(color: Colors.white)),
+                      onPressed: () async {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: Text('Delete entry?'),
+                            content: Text('This will remove the behavior log for this day.'),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel')),
+                              TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text('Delete')),
+                            ],
+                          ),
+                        );
+                        if (confirm == true) {
+                          try {
+                            await Supabase.instance.client
+                                .from('behavior_logs')
+                                .delete()
+                                .eq('id', log['id']);
+                            if (mounted) Navigator.pop(context); // close bottom sheet
+                            // Refresh events and analysis
+                            await _fetchBehaviorDates();
+                            await _fetchAnalyzeFromBackend();
+                            await _fetchLatestAnalysis();
+                            if (mounted) {
+                              ScaffoldMessenger.of(this.context).showSnackBar(
+                                SnackBar(content: Text('Behavior deleted')),
+                              );
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(this.context).showSnackBar(
+                                SnackBar(content: Text('Delete failed: $e')),
+                              );
+                            }
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildBehaviorTab() {
-    // Make the behavior tab scrollable to prevent RenderFlex overflow
     return SingleChildScrollView(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4.0),
@@ -633,13 +806,20 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                   return SizedBox.shrink();
                 },
               ),
-              onDaySelected: (selectedDay, focusedDay) {
+              onDaySelected: (selectedDay, focusedDay) async {
                 setState(() {
                   _selectedDay = selectedDay;
                   _focusedDay = focusedDay;
-                  _selectedDate = selectedDay; // ensure modal/save uses tapped date
+                  _selectedDate = selectedDay;
                 });
-                _showBehaviorModal(context, selectedDay);
+                // If there's already a log on this date, show it instead of allowing another insert
+                final existingLog = await _fetchBehaviorForDate(selectedDay);
+                if (existingLog != null) {
+                  _showExistingBehaviorModal(context, existingLog);
+                } else {
+                  _clearBehaviorForm();
+                  _showBehaviorModal(context, selectedDay);
+                }
               },
               onFormatChanged: (format) {
                 setState(() {
@@ -648,43 +828,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               },
             ),
             SizedBox(height: 12),
-            // Recent predictions list (fetched from Supabase)
-            // show recent predictions only when there is NOT a latest analysis
-            if (_prediction == null && _recentPredictions.isNotEmpty) ...[
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                  child: Text("Recent Predictions",
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
-              ),
-              SizedBox(height: 8),
-              ListView.builder(
-                shrinkWrap: true,
-                physics: NeverScrollableScrollPhysics(),
-                itemCount: _recentPredictions.length,
-                itemBuilder: (context, idx) {
-                  final p = _recentPredictions[idx];
-                  final date = p['prediction_date']?.toString() ?? '';
-                  final text = p['prediction_text'] ?? p['trend'] ?? '';
-                  final suggest = p['suggestions'] ?? p['recommendations'] ?? '';
-                  return Card(
-                    margin: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    child: ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      title: Text(text, style: TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(suggest.toString()),
-                      trailing: Text(
-                        date,
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
             // Always show illness status: risk if present, otherwise a healthy message
             SizedBox(height: 12),
             Container(
@@ -697,12 +840,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               ),
               child: Row(
                 children: [
-                  Icon(_illnessRisk != null ? Icons.health_and_safety : Icons.check_circle,
-                      color: _illnessRisk != null ? deepRed : Colors.green),
+                  Icon(_isUnhealthy ? Icons.health_and_safety : Icons.check_circle,
+                      color: _isUnhealthy ? deepRed : Colors.green),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      _illnessRisk != null
+                      _isUnhealthy
                           ? "Illness risk: ${_illnessRisk}"
                           : "No illness predicted — pet appears healthy",
                       style: TextStyle(fontWeight: FontWeight.bold),
@@ -732,8 +875,43 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                     Text("Recommendation: $_recommendation"),
                     if (_backendSleepForecast.isNotEmpty) ...[
                       SizedBox(height: 8),
-                      Text("Sleep forecast (hrs): ${_backendSleepForecast.map((d) => d.toStringAsFixed(1)).join(', ')}",
-                        style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+                      Text(
+                        "Sleep forecast (hrs): ${_backendSleepForecast.map((d) => d.toStringAsFixed(1)).join(', ')}",
+                        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                      ),
+                    ],
+                    // Care Tips (only when risk is bad: medium/high)
+                    if (_isUnhealthy && (_careActions.isNotEmpty || _careExpectations.isNotEmpty)) ...[
+                      SizedBox(height: 12),
+                      Text("Care Tips", style: TextStyle(fontWeight: FontWeight.bold)),
+                      if (_careActions.isNotEmpty) ...[
+                        SizedBox(height: 6),
+                        Text("What to do", style: TextStyle(fontWeight: FontWeight.w600)),
+                        ..._careActions.take(6).map((t) => Padding(
+                              padding: const EdgeInsets.only(top: 4.0),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("• "),
+                                  Expanded(child: Text(t)),
+                                ],
+                              ),
+                            )),
+                      ],
+                      if (_careExpectations.isNotEmpty) ...[
+                        SizedBox(height: 8),
+                        Text("What to expect", style: TextStyle(fontWeight: FontWeight.w600)),
+                        ..._careExpectations.take(6).map((t) => Padding(
+                              padding: const EdgeInsets.only(top: 4.0),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("• "),
+                                  Expanded(child: Text(t)),
+                                ],
+                              ),
+                            )),
+                      ],
                     ],
                   ],
                 ),
@@ -815,6 +993,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                  ),
                ),
              ],
+
+            // Add a small bottom spacer so the last card isn't flush with the edge
+            SizedBox(height: 16),
           ],
           ],
         ),
@@ -822,14 +1003,16 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     );
   }
 
-  void _showBehaviorModal(BuildContext context, DateTime selectedDate) {
+  // Extend logging modal to support edit/update when 'existing' is provided
+  void _showBehaviorModal(BuildContext context, DateTime selectedDate, {Map<String, dynamic>? existing}) {
     // ensure controller shows current value when modal opens
-    _sleepController.text = _sleepHours != null ? _sleepHours.toString() : '';
+    _sleepController.text = _sleepHours != null ? _sleepHours.toString() : (_sleepController.text);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
+        final isEdit = existing != null && existing['id'] != null;
         return Container(
           height: MediaQuery.of(context).size.height * 0.8,
           decoration: BoxDecoration(
@@ -1030,121 +1213,118 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
-                          icon: Icon(Icons.save, color: Colors.white),
-                          label: Text("Log Behavior", style: TextStyle(color: Colors.white)),
+                          icon: Icon(isEdit ? Icons.check : Icons.save, color: Colors.white),
+                          label: Text(isEdit ? "Update Behavior" : "Log Behavior", style: TextStyle(color: Colors.white)),
                           onPressed: (_selectedMood == null ||
                                       _selectedDate == null ||
                                       _activityLevel == null ||
                                       _sleepHours == null)
                               ? null
                               : () async {
-                                  // 1) Insert to Supabase with error handling
                                   try {
-                                    await Supabase.instance.client
-                                        .from('behavior_logs')
-                                        .insert({
-                                          'pet_id': _selectedPet!['id'],
-                                          'user_id': user?.id ?? '',
-                                          'log_date': DateFormat('yyyy-MM-dd').format(_selectedDate!),
-                                          'notes': _notes,
-                                          'mood': _selectedMood,
-                                          'sleep_hours': _sleepHours,
-                                          'activity_level': _activityLevel,
-                                        });
+                                    final payload = {
+                                      'pet_id': _selectedPet!['id'],
+                                      'user_id': user?.id ?? '',
+                                      'log_date': DateFormat('yyyy-MM-dd').format(_selectedDate!),
+                                      'notes': _notes,
+                                      'mood': _selectedMood,
+                                      'sleep_hours': _sleepHours,
+                                      'activity_level': _activityLevel,
+                                    };
+                                    if (isEdit) {
+                                      await Supabase.instance.client
+                                          .from('behavior_logs')
+                                          .update(payload)
+                                          .eq('id', existing!['id']);
+                                    } else {
+                                      await Supabase.instance.client
+                                          .from('behavior_logs')
+                                          .insert(payload);
+                                    }
 
                                     // Close the modal after successful save
-                                    Navigator.of(context).pop();
-                                    // Refresh calendar markers and recent predictions
-                                    await _fetchBehaviorDates();
-                                    await _fetchRecentPredictions();
+                                    if (mounted) Navigator.of(context).pop();
 
-                                    // 2) Call backend analyze endpoint
+                                    // Refresh calendar markers
+                                    await _fetchBehaviorDates();
+
+                                    // Call backend analyze endpoint to refresh analysis
                                     try {
                                       final resp = await http.post(
                                         Uri.parse("http://192.168.100.23:5000/analyze"),
                                         headers: {'Content-Type': 'application/json'},
                                         body: jsonEncode({
                                           'pet_id': _selectedPet!['id'],
-                                          'mood': _selectedMood,
-                                          'sleep_hours': _sleepHours,
-                                          'activity_level': _activityLevel,
+                                          // optional: pass current inputs (not required for /analyze)
                                         }),
                                       );
-
                                       if (resp.statusCode == 200) {
-                                        final body = jsonDecode(resp.body);
+                                        final body = jsonDecode(resp.body) as Map<String, dynamic>;
                                         setState(() {
-                                          _prediction = body['prediction'];
-                                          _recommendation = body['recommendation'];
-                                          final trends = body['trends'] ?? {};
-                                          _sleepTrend = (trends['sleep_forecast'] as List<dynamic>?)
-                                                  ?.map((e) => (e as num).toDouble())
-                                                  .toList() ??
-                                              [];
-                                          _moodProb =
-                                              (trends['mood_probabilities'] as Map?)?.map((k, v) =>
-                                                      MapEntry(k.toString(), (v as num).toDouble())) ??
-                                                  {};
-                                          _activityProb =
-                                              (trends['activity_probabilities'] as Map?)?.map((k, v) =>
-                                                      MapEntry(k.toString(), (v as num).toDouble())) ??
-                                                  {};
+                                          _prediction = (body['trend'] ?? body['prediction_text'] ?? body['prediction'])?.toString();
+                                          _recommendation = (body['recommendation'] ?? body['suggestions'])?.toString();
+                                          final sf = body['sleep_forecast'];
+                                          if (sf is List) {
+                                            _backendSleepForecast = sf.map((e) => (e as num).toDouble()).toList();
+                                            _sleepTrend = _backendSleepForecast;
+                                          }
+                                          final moodProb = body['mood_prob'] ?? body['mood_probabilities'];
+                                          final actProb = body['activity_prob'] ?? body['activity_probabilities'];
+                                          if (moodProb is Map) {
+                                            _moodProb = moodProb.map((k, v) => MapEntry(k.toString(), (v as num).toDouble()));
+                                          }
+                                          if (actProb is Map) {
+                                            _activityProb = actProb.map((k, v) => MapEntry(k.toString(), (v as num).toDouble()));
+                                          }
+                                          final riskRaw = body['illness_risk']?.toString().toLowerCase();
+                                          _illnessRisk = riskRaw;
+                                          final unhealthyResp = body['is_unhealthy'];
+                                          _isUnhealthy = unhealthyResp is bool
+                                              ? unhealthyResp
+                                              : (riskRaw == 'high' || riskRaw == 'medium');
+
+                                          // care tips
+                                          _careActions = [];
+                                          _careExpectations = [];
+                                          final care = body['care_recommendations'];
+                                          if (care is Map) {
+                                            final a = care['actions'];
+                                            final e = care['expectations'];
+                                            if (a is List) {
+                                              _careActions = a.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
+                                            }
+                                            if (e is List) {
+                                              _careExpectations = e.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
+                                            }
+                                          }
                                         });
-
-                                       if (mounted) ScaffoldMessenger.of(this.context).showSnackBar(
-                                         SnackBar(content: Text('Behavior logged and analyzed!')),
-
-                                       );
-                                      } else {
-                                       if (mounted) ScaffoldMessenger.of(this.context).showSnackBar(
-                                         SnackBar(content: Text('Analysis unavailable (status ${resp.statusCode})')),
-                                       );
                                       }
-                                    } catch (e) {
-                                     if (mounted) ScaffoldMessenger.of(this.context).showSnackBar(
-                                      SnackBar(content: Text('Analysis failed: $e')),
-                                     );
+                                    } catch (_) {}
+
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(this.context).showSnackBar(
+                                        SnackBar(content: Text(isEdit ? 'Behavior updated!' : 'Behavior logged and analyzed!')),
+                                      );
                                     }
                                   } on PostgrestException catch (e) {
-                                   if (mounted) ScaffoldMessenger.of(this.context).showSnackBar(
-                                      SnackBar(content: Text('Failed to save log: ${e.message}')),
-                                   );
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(this.context).showSnackBar(
+                                        SnackBar(content: Text('Save failed: ${e.message}')),
+                                      );
+                                    }
                                   } catch (e) {
-                                   if (mounted) ScaffoldMessenger.of(this.context).showSnackBar(
-                                      SnackBar(content: Text('Unexpected error: $e')),
-                                   );
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(this.context).showSnackBar(
+                                        SnackBar(content: Text('Unexpected error: $e')),
+                                      );
+                                    }
                                   }
                                 },
-                        ),
-                      ),
-
-                      SizedBox(height: 24),
-
-                      // Prediction Output
-                      if (_prediction != null)
-                        Container(
-                          width: double.infinity,
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("Prediction:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                              SizedBox(height: 4),
-                              Text(_prediction!, style: TextStyle(fontSize: 14, color: Colors.black87)),
-                              SizedBox(height: 12),
-                              Text("Recommendation:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                              SizedBox(height: 4),
-                              Text(_recommendation!, style: TextStyle(fontSize: 14, color: Colors.black87)),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
+                ),
+              ),
+              // ...existing code...
+            ],
+          ),
                 ),
               ),
             ],

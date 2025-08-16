@@ -22,6 +22,11 @@ BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Flask(__name__)
 
+# Ensure a stable models directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+os.makedirs(MODELS_DIR, exist_ok=True)
+
 # ------------------- Data Fetch & Model Logic -------------------
 
 def fetch_logs_df(pet_id, limit=200):
@@ -36,7 +41,7 @@ def fetch_logs_df(pet_id, limit=200):
     df['activity_level'] = df['activity_level'].fillna('Unknown').astype(str)
     return df
 
-def train_illness_model(df, model_path="illness_model.pkl"):
+def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     if df.shape[0] < 5:
         return None, None
     le_mood = LabelEncoder()
@@ -47,69 +52,237 @@ def train_illness_model(df, model_path="illness_model.pkl"):
     y = ((df['mood'].str.lower().isin(['lethargic','aggressive'])) | 
          (df['sleep_hours'] < 5) | 
          (df['activity_level'].str.lower()=='low')).astype(int).values
+
+    # Guard: need both classes to train a classifier
+    if len(np.unique(y)) < 2:
+        return None, None
+
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
     clf.fit(X, y)
-    # Save model and encoders
     joblib.dump({'model': clf, 'le_mood': le_mood, 'le_activity': le_activity}, model_path)
     return clf, (le_mood, le_activity)
 
-def load_illness_model(model_path="illness_model.pkl"):
+def load_illness_model(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     if os.path.exists(model_path):
         data = joblib.load(model_path)
         return data['model'], (data['le_mood'], data['le_activity'])
     return None, None
 
-def forecast_sleep_with_tf(series, days_ahead=7, model_path="sleep_model.keras"):
-    arr = np.array(series).astype(float)
-    if len(arr) < 3:
-        last = float(arr[-1]) if len(arr)>0 else 8.0
-        return [last for _ in range(days_ahead)]
-    window = 7
-    X, y = [], []
-    for i in range(len(arr)-window):
-        X.append(arr[i:i+window])
-        y.append(arr[i+window])
-    if len(X) < 2:
-        lr = LinearRegression()
-        idx = np.arange(len(arr)).reshape(-1,1)
-        lr.fit(idx, arr)
-        next_idx = np.arange(len(arr), len(arr)+days_ahead).reshape(-1,1)
-        return lr.predict(next_idx).clip(0,24).tolist()
-    X, y = np.array(X), np.array(y)
-    if os.path.exists(model_path):
-        model = tf.keras.models.load_model(model_path)
-    else:
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(X.shape[1],)),
-            tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dense(16, activation='relu'),
-            tf.keras.layers.Dense(1)
-        ])
-        model.compile(optimizer='adam', loss='mse')
-    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
-    model.save(model_path)
-    preds, last_window = [], arr[-window:].copy()
-    for _ in range(days_ahead):
-        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0,0])
-        p = max(0.0, min(24.0, p))
-        preds.append(p)
-        last_window = np.concatenate([last_window[1:], [p]])
-    return preds
+def is_illness_model_trained(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    """Return True if a trained illness model (with encoders) exists on disk."""
+    try:
+        if not os.path.exists(model_path):
+            return False
+        data = joblib.load(model_path)
+        return bool(data and data.get("model") and data.get("le_mood") and data.get("le_activity"))
+    except Exception:
+        return False
 
-def calc_mood_activity_trends(df, days=7):
-    today = datetime.utcnow().date()
-    all_days = [today - timedelta(days=i) for i in range(days-1, -1, -1)]
-    mood_counts, activity_counts = {}, {}
-    for _, row in df.iterrows():
-        if row['log_date'] in all_days:
-            mood = row['mood'].lower()
-            act = row['activity_level'].lower()
-            mood_counts[mood] = mood_counts.get(mood, 0) + 1
-            activity_counts[act] = activity_counts.get(act, 0) + 1
-    total_m, total_a = sum(mood_counts.values()) or 1, sum(activity_counts.values()) or 1
-    mood_prob = {k: v/total_m for k,v in mood_counts.items()}
-    activity_prob = {k: v/total_a for k,v in activity_counts.items()}
-    return mood_prob, activity_prob
+def get_latest_prediction_risk(pet_id: str):
+    """Read the latest risk_level from predictions table for a pet (prediction_date or created_at)."""
+    try:
+        resp = supabase.table("predictions").select("risk_level").eq("pet_id", pet_id).order("prediction_date", desc=True).limit(1).execute()
+        rows = resp.data or []
+        if not rows:
+            resp = supabase.table("predictions").select("risk_level").eq("pet_id", pet_id).order("created_at", desc=True).limit(1).execute()
+            rows = resp.data or []
+        if rows:
+            val = rows[0].get("risk_level") or rows[0].get("risk")
+            return str(val).lower() if val else None
+    except Exception:
+        pass
+    return None
+
+def forecast_sleep_with_tf(series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """
+    Backward-compatible wrapper that delegates to predict_future_sleep.
+    Ensures migration and scheduler code that calls this keep working.
+    """
+    try:
+        return predict_future_sleep(series, days_ahead=days_ahead, model_path=model_path)
+    except Exception:
+        # conservative fallback
+        last = float(series[-1]) if series else 8.0
+        return [last for _ in range(days_ahead)]
+
+def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep, sleep_trend):
+    """Return structured care tips: actions to take and what to expect."""
+    risk = (str(illness_risk or "low")).lower()
+    mood_prob = mood_prob or {}
+    activity_prob = activity_prob or {}
+    avg_sleep = float(avg_sleep) if avg_sleep is not None else 8.0
+    s_trend = (sleep_trend or "").lower()
+
+    actions, expectations = [], []
+
+    # Risk-based guidance
+    if risk == "high":
+        actions += [
+            "Book a veterinary check within 24–48 hours.",
+            "Provide a quiet, stress‑free resting area.",
+            "Limit strenuous activity and supervise closely."
+        ]
+        expectations += [
+            "Energy and appetite may fluctuate for 1–2 days.",
+            "Behavior may be atypical while recovering/resting."
+        ]
+    elif risk == "medium":
+        actions += [
+            "Monitor behavior for 48 hours and reduce intense play.",
+            "Prioritize calm enrichment (sniff walks, puzzle feeders)."
+        ]
+        expectations += [
+            "Minor mood/activity changes may persist for a few days."
+        ]
+    else:
+        actions += [
+            "Maintain regular routine with daily exercise and enrichment."
+        ]
+        expectations += [
+            "Normal behavior; continue routine monitoring."
+        ]
+
+    # Mood-focused tips
+    top_mood = max(mood_prob, key=mood_prob.get) if mood_prob else None
+    if top_mood == "lethargic":
+        actions += [
+            "Offer short, low‑impact play sessions (2–3× for 10–15 min).",
+            "Encourage hydration and balanced meals."
+        ]
+        expectations += [
+            "Lower play interest; energy should improve with rest and routine."
+        ]
+    elif top_mood == "aggressive":
+        actions += [
+            "Avoid triggers and high‑arousal games; use calm routines.",
+            "Consult a trainer/behavior professional if aggression persists."
+        ]
+        expectations += [
+            "Irritability around stressors; consistency reduces incidents."
+        ]
+    elif top_mood == "anxious":
+        actions += [
+            "Create a safe space (crate/quiet room) and predictable schedule.",
+            "Use gradual exposure to stressors; avoid flooding."
+        ]
+        expectations += [
+            "Anxiety may spike with change; tends to settle with routine."
+        ]
+    elif top_mood == "sad":
+        actions += [
+            "Increase engagement (gentle play, short training, sniff walks).",
+            "Provide social time and novel but low‑stress enrichment."
+        ]
+        expectations += [
+            "Mood should lift with stimulation and consistent interaction."
+        ]
+
+    # Activity level tips
+    if activity_prob.get("low", 0) > 0.5:
+        actions += [
+            "Schedule 2–3 short play sessions spaced through the day.",
+            "Mix physical and mental enrichment to boost motivation."
+        ]
+        expectations += [
+            "Gradual energy improvement with consistent play."
+        ]
+    elif activity_prob.get("high", 0) > 0.5:
+        actions += [
+            "Build in calm downtime after exercise and ensure water access."
+        ]
+        expectations += [
+            "Temporary restlessness can settle with a consistent routine."
+        ]
+
+    # Sleep tips
+    if avg_sleep < 6 or ("depriv" in s_trend):
+        actions += [
+            "Set a consistent sleep routine; avoid late‑night stimulation."
+        ]
+        expectations += [
+            "Sleep should normalize within 2–3 nights with routine."
+        ]
+    elif avg_sleep > 9 or ("oversleep" in s_trend):
+        actions += [
+            "Break up long naps with gentle activity and enrichment."
+        ]
+        expectations += [
+            "Oversleeping often eases with more engaging daytime activity."
+        ]
+
+    # General best practices
+    actions += [
+        "Keep fresh water available at all times.",
+        "Use puzzle feeders or sniff walks for mental enrichment.",
+        "Continue logging mood, activity, and sleep daily."
+    ]
+    if risk == "high":
+        actions += ["Contact your vet immediately if symptoms worsen."]
+
+    # De‑duplicate while preserving order
+    def _dedup(seq):
+        seen, out = set(), []
+        for item in seq:
+            key = item.strip().lower()
+            if key and key not in seen:
+                out.append(item)
+                seen.add(key)
+        return out
+
+    return {
+        "actions": _dedup(actions)[:10],
+        "expectations": _dedup(expectations)[:8]
+    }
+
+def compute_contextual_risk(df: pd.DataFrame) -> str:
+    """
+    Compute a smoothed illness risk ('low'/'medium'/'high') from recent logs
+    by combining mood/activity proportions and recent sleep averages.
+    De-escalates if the last few days look healthy.
+    """
+    if df is None or df.empty:
+        return "low"
+    try:
+        recent = df.copy()
+        recent['log_date'] = pd.to_datetime(recent['log_date'])
+        recent = recent.sort_values('log_date').tail(14)
+
+        mood_counts = recent['mood'].str.lower().value_counts(normalize=True)
+        act_counts = recent['activity_level'].str.lower().value_counts(normalize=True)
+
+        last7 = recent.tail(7)
+        last3 = recent.tail(3)
+
+        avg_sleep7 = float(last7['sleep_hours'].mean()) if not last7.empty else float(recent['sleep_hours'].mean())
+        avg_sleep3 = float(last3['sleep_hours'].mean()) if not last3.empty else avg_sleep7
+
+        p_aggr = float(mood_counts.get('aggressive', 0))
+        p_leth = float(mood_counts.get('lethargic', 0))
+        p_anx  = float(mood_counts.get('anxious', 0))
+        p_low_act = float(act_counts.get('low', 0))
+
+        last3_moods = [str(m).lower() for m in last3['mood'].tolist()]
+        happy_calm_count = sum(1 for m in last3_moods if m in ('happy', 'calm'))
+
+        risk = "low"
+        # Strong signals -> high
+        if (avg_sleep7 < 5.0) or (avg_sleep3 < 5.0) or (p_aggr > 0.25):
+            risk = "high"
+        # Moderate signals -> medium
+        elif (p_leth > 0.35) or (p_anx > 0.35) or (p_low_act > 0.6) or (avg_sleep7 < 6.5):
+            risk = "medium"
+
+        # De-escalation: if most recent days are healthy, dial back
+        if risk == "high":
+            if (happy_calm_count >= 2) and (avg_sleep3 >= 6.0) and (p_aggr <= 0.25):
+                risk = "medium"
+        if risk == "medium":
+            if (happy_calm_count >= 2) and (avg_sleep3 >= 6.0) and (p_low_act <= 0.6) and (p_leth <= 0.35) and (p_anx <= 0.35):
+                risk = "low"
+
+        return risk
+    except Exception:
+        return "low"
 
 # ------------------- Core Analysis -------------------
 def forecast_sleep_trend(df):
@@ -332,19 +505,17 @@ def analyze_endpoint():
     result = analyze_pet(pet_id)
 
     # Also provide a numeric 7-day sleep forecast (if possible) and an illness risk
-    # using the latest log entry (if a trained illness model exists).
     df = fetch_logs_df(pet_id)
 
-    # sleep_forecast: numeric list (uses predict_future_sleep which loads/trains the TF model)
+    # sleep_forecast
     try:
         sleep_series = df["sleep_hours"].tolist() if not df.empty else []
         sleep_forecast = predict_future_sleep(sleep_series)
     except Exception:
-        # fallback: empty or repeated last value
         last = sleep_series[-1] if sleep_series else 8.0
         sleep_forecast = [last for _ in range(7)]
 
-    # illness_risk: try to get latest log and run predict_illness_risk (returns "high"/"low" or None)
+    # initial illness_risk from model/rules on latest log (may be None)
     illness_risk = None
     try:
         if not df.empty:
@@ -356,10 +527,40 @@ def analyze_endpoint():
     except Exception:
         illness_risk = None
 
+    # fallback to latest prediction risk; default to "low"
+    if illness_risk is None:
+        latest_pred_risk = get_latest_prediction_risk(pet_id)
+        illness_risk = latest_pred_risk if latest_pred_risk in ("high", "medium", "low") else "low"
+
+    # Contextual override: smooth risk using recent logs so it reflects improving behavior
+    contextual_risk = compute_contextual_risk(df)
+    illness_risk = contextual_risk  # prefer contextual view for UI
+
+    # model status and derived health status
+    illness_model_trained = is_illness_model_trained()
+    is_unhealthy = isinstance(illness_risk, str) and illness_risk.lower() in ("high", "medium")
+    health_status = "unhealthy" if is_unhealthy else "healthy"
+
+    # Care tips based on current context
+    avg_sleep_val = float(df["sleep_hours"].mean()) if not df.empty else 8.0
+    tips = build_care_recommendations(
+        illness_risk,
+        result.get("mood_probabilities") or result.get("mood_prob"),
+        result.get("activity_probabilities") or result.get("activity_prob"),
+        avg_sleep_val,
+        result.get("sleep_trend"),
+    )
+
     # Merge into response
     merged = dict(result)
     merged["illness_risk"] = illness_risk
     merged["sleep_forecast"] = sleep_forecast
+    merged["illness_model_trained"] = illness_model_trained
+    merged["health_status"] = health_status
+    merged["illness_prediction"] = illness_risk
+    merged["is_unhealthy"] = is_unhealthy
+    merged["illness_status_text"] = "Unhealthy" if is_unhealthy else "Healthy"
+    merged["care_recommendations"] = tips
     return jsonify(merged)
 
 @app.route("/predict", methods=["POST"])
@@ -374,15 +575,31 @@ def predict_endpoint():
 
     # Illness risk prediction
     illness_risk = predict_illness_risk(mood, sleep_hours, activity_level)
+    illness_model_trained = is_illness_model_trained()
+    is_unhealthy = isinstance(illness_risk, str) and illness_risk.lower() in ("high", "medium")
+    health_status = "unhealthy" if is_unhealthy else "healthy"
 
     # Sleep forecast prediction
     df = fetch_logs_df(pet_id)
     sleep_series = df["sleep_hours"].tolist() if not df.empty else []
     sleep_forecast = predict_future_sleep(sleep_series)
 
+    # Build pseudo-probabilities from input to drive tips
+    mood_prob = {str(mood).lower(): 1.0}
+    activity_prob = {str(activity_level).lower(): 1.0}
+    avg_sleep_val = float(sleep_hours) if sleep_hours is not None else 8.0
+    tips = build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep_val, None)
+
     return jsonify({
         "illness_risk": illness_risk,
-        "sleep_forecast": sleep_forecast
+        "sleep_forecast": sleep_forecast,
+        "illness_model_trained": illness_model_trained,
+        "health_status": health_status,
+        # aliases for UI
+        "illness_prediction": illness_risk,
+        "is_unhealthy": is_unhealthy,
+        "illness_status_text": "Unhealthy" if is_unhealthy else "Healthy",
+        "care_recommendations": tips
     })
 
 # ------------------- Public pet info page -------------------
@@ -495,6 +712,37 @@ def public_pet_page(pet_id):
         else:
             risk_color = "#2ECC71"  # healthy default (green)
 
+        illness_model_trained = is_illness_model_trained()
+        status_text = "Healthy"
+        try:
+            lr = str(latest_risk).lower() if latest_risk else ""
+            if ("high" in lr) or ("medium" in lr):
+                status_text = "Unhealthy"
+        except Exception:
+            status_text = "Healthy"
+
+        # Build care tips for display using recent logs + latest risk
+        df_recent = fetch_logs_df(pet_id, limit=60)
+        if df_recent.empty:
+            mood_prob_recent, activity_prob_recent = {}, {}
+            avg_sleep_recent = 8.0
+            sleep_trend_recent = ""
+        else:
+            mood_prob_recent = df_recent['mood'].str.lower().value_counts(normalize=True).to_dict()
+            activity_prob_recent = df_recent['activity_level'].str.lower().value_counts(normalize=True).to_dict()
+            avg_sleep_recent = float(df_recent["sleep_hours"].mean())
+            sleep_trend_recent = forecast_sleep_trend(df_recent)
+
+        care_tips = build_care_recommendations(
+            latest_risk or "low",
+            mood_prob_recent,
+            activity_prob_recent,
+            avg_sleep_recent,
+            sleep_trend_recent
+        )
+        actions_html = "".join(f"<li>{a}</li>" for a in (care_tips.get("actions") or [])[:6]) or "<li>Ensure fresh water and rest today.</li>"
+        expectations_html = "".join(f"<li>{e}</li>" for e in (care_tips.get("expectations") or [])[:6]) or "<li>Expect normal behavior with routine care.</li>"
+
         # Simple HTML with modal dialog - auto-open on load
         html = f"""
         <!doctype html>
@@ -526,8 +774,9 @@ def public_pet_page(pet_id):
             <p class="label">Owner</p><p class="value">{owner_name}</p>
             <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;">
               <div>
-                <span class="label">Illness Risk</span><br/>
-                <span class="badge" style="background:{risk_color};">{(latest_risk or 'No risk detected').capitalize() if latest_risk else 'Healthy'}</span>
+                <span class="label">Health Status</span><br/>
+                <span class="badge" style="background:{risk_color};">{status_text}</span>
+                <p style="margin-top:6px;color:#666;font-size:12px;">Model: {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
                 <p style="margin-top:8px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
               </div>
               <div style="text-align:right;">
@@ -548,9 +797,17 @@ def public_pet_page(pet_id):
               <p><strong>Owner:</strong> {owner_name}</p>
               <hr/>
               <h4>Latest Analysis</h4>
+              <p><strong>Status:</strong> {status_text}</p>
               <p><strong>Risk:</strong> {(latest_risk or 'None')}</p>
+              <p><strong>Model:</strong> {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
               <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
               <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
+              <!-- Care Tips -->
+              <h4>Care Tips</h4>
+              <p><strong>What to do</strong></p>
+              <ul>{actions_html}</ul>
+              <p><strong>What to expect</strong></p>
+              <ul>{expectations_html}</ul>
               <div style="margin-top:12px;text-align:right;">
                 <button class="close-btn" onclick="closeModal()">Close</button>
               </div>
@@ -617,30 +874,90 @@ def store_prediction(pet_id, prediction, risk_level, recommendation):
         "suggestions": recommendation
     }).execute()
 
-def predict_illness_risk(mood, sleep_hours, activity_level, model_path="illness_model.pkl"):
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
     if model is None or encoders is None:
-        return None  # Model not trained yet
+        return "high" if rule_flag else "low"
+
     le_mood, le_activity = encoders
-    # Encode inputs safely
     mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
     act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
     X = np.array([[mood_enc, float(sleep_hours), act_enc]])
     pred = model.predict(X)[0]
-    risk = "high" if pred == 1 else "low"
-    return risk
+    return "high" if pred == 1 else "low"
 
-def predict_future_sleep(sleep_series, days_ahead=7, model_path="sleep_model.keras"):
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
     arr = np.array(sleep_series).astype(float)
-    window = 7
-    if len(arr) < window:
-        last = float(arr[-1]) if len(arr)>0 else 8.0
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
         return [last for _ in range(days_ahead)]
-    model = tf.keras.models.load_model(model_path)
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
     preds, last_window = [], arr[-window:].copy()
     for _ in range(days_ahead):
-        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0,0])
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
         p = max(0.0, min(24.0, p))
         preds.append(p)
         last_window = np.concatenate([last_window[1:], [p]])
     return preds
+
+# Force-train endpoint (useful in dev)
+@app.route("/train", methods=["POST"])
+def train_endpoint():
+    data = request.get_json(silent=True) or {}
+    pet_id = data.get("pet_id")
+    try:
+        if pet_id:
+            df = fetch_logs_df(pet_id, limit=10000)
+            if df.empty:
+                return jsonify({"status":"no_data","message":"No behavior_logs for pet_id"}), 200
+            train_illness_model(df)  # saves models/models.pkl
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # saves models/sleep_model.keras
+        else:
+            # train on all pets combined
+            resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
+            logs = resp.data or []
+            if not logs:
+                return jsonify({"status":"no_data","message":"No behavior_logs found"}), 200
+            df_all = pd.DataFrame(logs)
+            df_all['log_date'] = pd.to_datetime(df_all['log_date']).dt.date
+            df_all['sleep_hours'] = pd.to_numeric(df_all.get('sleep_hours', 0), errors='coerce').fillna(0.0)
+            df_all['mood'] = df_all['mood'].fillna('Unknown').astype(str)
+            df_all['activity_level'] = df_all['activity_level'].fillna('Unknown').astype(str)
+            train_illness_model(df_all)
+            forecast_sleep_with_tf(df_all["sleep_hours"].tolist())
+        return jsonify({"status":"ok","message":"Models trained"}), 200
+    except Exception as e:
+        return jsonify({"status":"error","message":str(e)}), 500
