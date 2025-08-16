@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'chat_detail_screen.dart';
 import 'notification_screen.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 
 class ChatListScreen extends StatefulWidget {
   @override
@@ -12,24 +14,61 @@ class _ChatListScreenState extends State<ChatListScreen> {
   final supabase = Supabase.instance.client;
   List<Map<String, dynamic>> messages = [];
 
-  // Subscribe to user name changes
-  RealtimeChannel? _usersChannel;
-  Set<String> _contactIds = {};
+  // Track prompted call_ids to avoid duplicate dialogs
+  final Set<String> _promptedCallIds = {};
+
+  // Zego app credentials (same as in chat_detail_screen.dart)
+  static const int appID = 1445580868;
+  static const String appSign = '2136993e53a5a7926531f24e693db2403af6e916e1f6dca8970c71c21e4b29be';
+
+  String _sanitizeId(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '').isEmpty
+      ? 'user'
+      : s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '');
+
+  Future<void> _joinZegoCall({required String callId, required bool video}) async {
+    final meRaw = supabase.auth.currentUser?.id ?? '';
+    final me = _sanitizeId(meRaw);
+
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
+      }
+      return;
+    }
+    if (video) {
+      final cam = await Permission.camera.request();
+      if (!cam.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
+        }
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ZegoUIKitPrebuiltCall(
+          appID: appID,
+          appSign: appSign,
+          userID: me,
+          userName: me, // or fetch/display your own name here if needed
+          callID: callId,
+          config: video
+              ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
+              : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall(),
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     fetchMessages();
     setupRealtimeSubscription();
-  }
-
-  @override
-  void dispose() {
-    if (_usersChannel != null) {
-      supabase.removeChannel(_usersChannel!);
-      _usersChannel = null;
-    }
-    super.dispose();
   }
 
   void setupRealtimeSubscription() {
@@ -40,56 +79,73 @@ class _ChatListScreenState extends State<ChatListScreen> {
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'messages',
-          callback: (payload, [ref]) {
-            fetchMessages(); // Refresh the messages list on new insert
+          callback: (payload, [ref]) async {
+            fetchMessages(); // Refresh list on new message
+
+            // Handle call invite globally (even when not inside ChatDetailScreen)
+            final newRow = payload.newRecord;
+            if (newRow == null) return;
+
+            final me = supabase.auth.currentUser?.id;
+            if (me == null) return;
+
+            final String type = (newRow['type'] ?? '').toString();
+            final String to = (newRow['receiver_id'] ?? '').toString();
+            final String from = (newRow['sender_id'] ?? '').toString();
+            final String callId = (newRow['call_id'] ?? '').toString();
+            final String mode = (newRow['call_mode'] ?? 'voice').toString();
+
+            // Only prompt when this user is the callee and it's a new call invite
+            if (type == 'call' && to == me && callId.isNotEmpty) {
+              if (_promptedCallIds.contains(callId)) return;
+              _promptedCallIds.add(callId);
+
+              if (!mounted) return;
+              final accept = await showDialog<bool>(
+                context: context,
+                barrierDismissible: true,
+                builder: (_) => AlertDialog(
+                  title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
+                  content: const Text('Join this call?'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Decline')),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Accept')),
+                  ],
+                ),
+              );
+
+              if (accept == true && mounted) {
+                // Notify caller
+                try {
+                  await supabase.from('messages').insert({
+                    'sender_id': me,
+                    'receiver_id': from,
+                    'type': 'call_accept',
+                    'call_id': callId,
+                    'call_mode': mode,
+                    'content': '[call_accept]',
+                    'is_seen': false,
+                  });
+                } catch (_) {}
+                await _joinZegoCall(callId: callId, video: mode == 'video');
+              } else {
+                // Notify decline
+                try {
+                  await supabase.from('messages').insert({
+                    'sender_id': me,
+                    'receiver_id': from,
+                    'type': 'call_decline',
+                    'call_id': callId,
+                    'call_mode': mode,
+                    'content': '[call_decline]',
+                    'is_seen': false,
+                  });
+                } catch (_) {}
+              }
+            }
           },
         )
         .subscribe();
-  }
-
-  // Subscribe to name updates for the current contacts
-  void _subscribeToUserNames(Set<String> ids) {
-    // Reset previous channel
-    if (_usersChannel != null) {
-      supabase.removeChannel(_usersChannel!);
-      _usersChannel = null;
-    }
-    if (ids.isEmpty) return;
-
-    _usersChannel = supabase.channel('chat_list_users');
-
-    for (final userId in ids) {
-      _usersChannel!.onPostgresChanges(
-        event: PostgresChangeEvent.update,
-        schema: 'public',
-        table: 'users',
-        filter: PostgresChangeFilter(
-          type: PostgresChangeFilterType.eq,
-          column: 'id',
-          value: userId,
-        ),
-        callback: (payload) {
-          final newRow = payload.newRecord;
-          if (newRow == null) return;
-          final id = newRow['id']?.toString();
-          final name = newRow['name']?.toString();
-          if (id == null || name == null) return;
-
-          // Update in-place
-          final idx = messages.indexWhere((m) => m['contactId'] == id);
-          if (idx != -1) {
-            setState(() {
-              messages[idx] = {
-                ...messages[idx],
-                'contactName': name,
-              };
-            });
-          }
-        },
-      );
-    }
-
-    _usersChannel!.subscribe();
   }
 
   Future<void> fetchMessages() async {
@@ -103,12 +159,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
         .order('sent_at', ascending: false);
 
     final grouped = <String, Map<String, dynamic>>{};
-    final contactIds = <String>{};
 
     for (var msg in response) {
       final isSender = msg['sender_id'] == userId;
-      final contactId = (isSender ? msg['receiver_id'] : msg['sender_id']).toString();
-      final contactName = isSender ? (msg['receiver']?['name'] ?? '') : (msg['sender']?['name'] ?? '');
+      final contactId = isSender ? msg['receiver_id'] : msg['sender_id'];
+      final contactName = isSender ? msg['receiver']['name'] : msg['sender']['name'];
 
       if (!grouped.containsKey(contactId)) {
         grouped[contactId] = {
@@ -118,17 +173,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
           'isSeen': msg['is_seen'],
           'isSender': isSender,
         };
-        contactIds.add(contactId);
       }
     }
 
     setState(() {
       messages = grouped.values.toList();
-      _contactIds = contactIds;
     });
-
-    // Ensure we listen to current contacts' name updates
-    _subscribeToUserNames(_contactIds);
   }
 
   @override
@@ -158,22 +208,20 @@ class _ChatListScreenState extends State<ChatListScreen> {
           return ListTile(
             leading: CircleAvatar(
               child: Text(
-                (chat['contactName'] ?? '?').toString().isNotEmpty
-                    ? chat['contactName'][0].toUpperCase()
-                    : '?',
+                chat['contactName'][0].toUpperCase(),
                 style: TextStyle(
                   fontWeight: !isSeen && !isSender ? FontWeight.bold : FontWeight.normal,
                 ),
               ),
             ),
             title: Text(
-              chat['contactName'] ?? '',
+              chat['contactName'],
               style: TextStyle(
                 fontWeight: !isSeen && !isSender ? FontWeight.bold : FontWeight.normal,
               ),
             ),
             subtitle: Text(
-              chat['lastMessage'] ?? '',
+              chat['lastMessage'],
               style: TextStyle(
                 color: !isSeen && !isSender ? Colors.black : Colors.grey,
               ),
@@ -186,11 +234,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   builder: (_) => ChatDetailScreen(
                     userId: supabase.auth.currentUser!.id,
                     receiverId: chat['contactId'],
-                    userName: chat['contactName'] ?? '',
+                    userName: chat['contactName'],
                   ),
                 ),
               );
-              fetchMessages(); // Refresh the list on return
+              fetchMessages();
             },
           );
         },
