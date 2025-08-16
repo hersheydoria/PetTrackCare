@@ -520,7 +520,7 @@ void showEditPostModal(Map post) {
                     ),
                     if (post['user_id'] == widget.userId)
                       Container(
-                        width: 120, // Match IconButton size for alignment
+                        width: 85, // Match IconButton size for alignment
                         alignment: Alignment.topCenter,
                         child: PopupMenuButton<String>(
                           onSelected: (value) {
