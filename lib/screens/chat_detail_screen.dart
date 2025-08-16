@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
+import 'package:realtime_client/realtime_client.dart' as r;
+import 'package:realtime_client/src/types.dart' as rt; // NEW: import enum from internal types to match the channel.send signature
 
 const int appID = 1445580868; // Replace with your ZEGOCLOUD App ID
 const String appSign = '2136993e53a5a7926531f24e693db2403af6e916e1f6dca8970c71c21e4b29be'; // Replace with your ZEGOCLOUD App Sign
@@ -45,6 +47,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   bool _awaitingAccept = false;
   bool _callingDialogOpen = false;
 
+  // NEW: realtime signaling channels cache
+  RealtimeChannel? _callRx;
+  final Map<String, RealtimeChannel> _sigChans = {};
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +62,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     subscribeToTyping();
     listenToTyping();
     _loadSelfName(); // load my display name for calls
+    _initCallSignals(); // NEW: subscribe to my signaling channel
   }
 
   // Initialize recorder/player with permission
@@ -183,6 +190,149 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     } catch (_) {}
   }
 
+  // NEW: setup realtime signaling
+  void _initCallSignals() {
+    final myKey = _sanitizeId(widget.userId);
+    _callRx = supabase.channel('call_sig:$myKey');
+    _callRx!
+        .onBroadcast(
+          event: 'call_invite',
+          callback: (payload, [ref]) async {
+            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            if (body == null) return;
+            final to = (body['to'] ?? '').toString();
+            final from = (body['from'] ?? '').toString();
+            final callId = (body['call_id'] ?? '').toString();
+            final mode = (body['mode'] ?? 'voice').toString();
+            if (to != widget.userId || callId.isEmpty) return;
+            if (_incomingPromptedCallId == callId) return;
+            _incomingPromptedCallId = callId;
+
+            if (!mounted) return;
+            final accept = await showDialog<bool>(
+              context: context,
+              barrierDismissible: true,
+              builder: (_) => AlertDialog(
+                title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
+                content: const Text('Join this call?'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Decline')),
+                  TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Accept')),
+                ],
+              ),
+            );
+
+            if (accept == true) {
+              // DB record for history
+              try {
+                await supabase.from('messages').insert({
+                  'sender_id': widget.userId,
+                  'receiver_id': from,
+                  'type': 'call_accept',
+                  'call_id': callId,
+                  'call_mode': mode,
+                  'content': '[call_accept]',
+                  'is_seen': false,
+                });
+              } catch (_) {}
+              // Realtime acknowledge
+              await _sendSignal(from, 'call_accept', {
+                'from': widget.userId,
+                'to': from,
+                'call_id': callId,
+                'mode': mode,
+              });
+              await _joinZegoCall(callId: callId, video: mode == 'video');
+            } else {
+              // DB record for history
+              try {
+                await supabase.from('messages').insert({
+                  'sender_id': widget.userId,
+                  'receiver_id': from,
+                  'type': 'call_decline',
+                  'call_id': callId,
+                  'call_mode': mode,
+                  'content': '[call_decline]',
+                  'is_seen': false,
+                });
+              } catch (_) {}
+              // Realtime decline
+              await _sendSignal(from, 'call_decline', {
+                'from': widget.userId,
+                'to': from,
+                'call_id': callId,
+                'mode': mode,
+              });
+            }
+          },
+        )
+        .onBroadcast(
+          event: 'call_accept',
+          callback: (payload, [ref]) async {
+            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            if (body == null) return;
+            final to = (body['to'] ?? '').toString();
+            final callId = (body['call_id'] ?? '').toString();
+            final mode = (body['mode'] ?? 'voice').toString();
+            if (to != widget.userId || callId.isEmpty) return;
+            if (_awaitingAccept && _outgoingCallId == callId) {
+              _dismissCallingDialog();
+              _awaitingAccept = false;
+              await _joinZegoCall(callId: callId, video: mode == 'video');
+            }
+          },
+        )
+        .onBroadcast(
+          event: 'call_decline',
+          callback: (payload, [ref]) {
+            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            if (body == null) return;
+            final to = (body['to'] ?? '').toString();
+            final callId = (body['call_id'] ?? '').toString();
+            if (to != widget.userId || callId.isEmpty) return;
+            if (_awaitingAccept && _outgoingCallId == callId) {
+              _dismissCallingDialog();
+              _awaitingAccept = false;
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call declined')));
+              }
+            }
+          },
+        )
+        .onBroadcast(
+          event: 'call_cancel',
+          callback: (payload, [ref]) {
+            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            if (body == null) return;
+            final to = (body['to'] ?? '').toString();
+            final callId = (body['call_id'] ?? '').toString();
+            if (to != widget.userId || callId.isEmpty) return;
+            // If the caller canceled before accept, just clear prompt (if any)
+            if (_incomingPromptedCallId == callId) {
+              _incomingPromptedCallId = null;
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  // NEW: send a broadcast signal to a user's channel
+  Future<void> _sendSignal(String userId, String event, Map<String, dynamic> payload) async {
+    final key = _sanitizeId(userId);
+    var ch = _sigChans[key];
+    ch ??= supabase.channel('call_sig:$key')..subscribe();
+    _sigChans[key] = ch;
+    try {
+      await ch.send(
+        type: rt.RealtimeListenTypes.broadcast,
+        event: event,
+        payload: payload,
+      );
+    } catch (_) {
+      // ignore; DB insert path still delivers signaling via onPostgresChanges
+    }
+  }
+
   @override
   void dispose() {
     _messageController.dispose();
@@ -192,6 +342,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       _player?.closePlayer();
     } catch (_) {}
     supabase.removeAllChannels();
+    // No-op: removeAllChannels() already cleans up _callRx/_sigChans
     super.dispose();
   }
 
@@ -265,7 +416,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               );
 
               if (accept == true && mounted) {
-                // Notify caller that callee accepted
+                // Notify caller that callee accepted (DB + realtime)
                 try {
                   await supabase.from('messages').insert({
                     'sender_id': widget.userId,
@@ -277,9 +428,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     'is_seen': false,
                   });
                 } catch (_) {}
+                await _sendSignal(callerId!, 'call_accept', {
+                  'from': widget.userId,
+                  'to': callerId,
+                  'call_id': callId,
+                  'mode': mode,
+                });
                 await _joinZegoCall(callId: callId, video: mode == 'video');
               } else {
-                // Optionally notify decline
+                // Notify decline (DB + realtime)
                 try {
                   await supabase.from('messages').insert({
                     'sender_id': widget.userId,
@@ -291,6 +448,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     'is_seen': false,
                   });
                 } catch (_) {}
+                await _sendSignal(callerId!, 'call_decline', {
+                  'from': widget.userId,
+                  'to': callerId,
+                  'call_id': callId,
+                  'mode': mode,
+                });
               }
             }
 
@@ -346,7 +509,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           actions: [
             TextButton(
               onPressed: () async {
-                // Send cancel to recipient
+                // Send cancel to recipient (DB + realtime)
                 try {
                   await supabase.from('messages').insert({
                     'sender_id': widget.userId,
@@ -358,6 +521,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     'is_seen': false,
                   });
                 } catch (_) {}
+                await _sendSignal(widget.receiverId, 'call_cancel', {
+                  'from': widget.userId,
+                  'to': widget.receiverId,
+                  'call_id': callId,
+                  'mode': video ? 'video' : 'voice',
+                });
                 _awaitingAccept = false;
                 _callingDialogOpen = false;
                 if (mounted) Navigator.of(context, rootNavigator: true).pop();
@@ -397,12 +566,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'is_seen': false,
       });
     } catch (_) {}
+    // NEW: realtime call invite
+    await _sendSignal(widget.receiverId, 'call_invite', {
+      'from': widget.userId,
+      'to': widget.receiverId,
+      'call_id': callId,
+      'mode': video ? 'video' : 'voice',
+    });
 
     _outgoingCallId = callId;
     _outgoingCallMode = video ? 'video' : 'voice';
     _awaitingAccept = true;
     _openCallingDialog(callId, video);
-    // Caller will join when 'call_accept' is received
   }
 
   void subscribeToTyping() {
