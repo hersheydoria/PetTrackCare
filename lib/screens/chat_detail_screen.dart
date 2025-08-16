@@ -346,21 +346,44 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   String _sanitizeId(String s) {
-    // Allow only letters, numbers, underscore (ZEGOCLOUD safe)
-    return s.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '');
+    // Allow only letters, numbers, underscore (ZEGOCLOUD safe) and lowercase to avoid case drift
+    final cleaned = s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '');
+    return cleaned.isEmpty ? 'user' : cleaned;
   }
 
   String _sharedCallId(String userA, String userB) {
+    // Sort to make it order-independent
     final sorted = [userA, userB]..sort();
     final left = _sanitizeId(sorted[0]);
     final right = _sanitizeId(sorted[1]);
-    final id = '${left}_$right';
-    // Keep under a reasonable length
-    return id.length > 64 ? id.substring(0, 64) : id;
+
+    // Keep a compact, deterministic ID: prefix + 12 chars from each side
+    final leftShort = (left.length >= 12) ? left.substring(0, 12) : left.padRight(12, '0');
+    final rightShort = (right.length >= 12) ? right.substring(0, 12) : right.padRight(12, '0');
+
+    final id = 'ptc_${leftShort}_${rightShort}';
+    // Max 64 characters (we are well under)
+    return id;
   }
 
-  void _startZegoCall(bool video) {
+  void _startZegoCall(bool video) async {
+    // Ensure permissions before entering call page
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
+      return;
+    }
+    if (video) {
+      final cam = await Permission.camera.request();
+      if (!cam.isGranted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
+        return;
+      }
+    }
+
     final callId = _sharedCallId(widget.userId, widget.receiverId);
+    debugPrint('Starting Zego call, callID=$callId, me=${_sanitizeId(widget.userId)}');
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -368,7 +391,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           appID: appID,
           appSign: appSign,
           userID: _sanitizeId(widget.userId),
-          userName: widget.userName, // better display name
+          userName: widget.userName,
           callID: callId,
           config: video
               ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
