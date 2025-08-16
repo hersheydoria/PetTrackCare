@@ -36,6 +36,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // NEW: player state for voice playback
   FlutterSoundPlayer? _player;
   String? _playingMessageId;
+  String? _incomingPromptedCallId;
+  bool _joiningCall = false;
 
   @override
   void initState() {
@@ -202,14 +204,115 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             final from = msg['sender_id'];
             final to = msg['receiver_id'];
 
+            // Refresh chat list
             if ((from == widget.userId && to == widget.receiverId) ||
                 (from == widget.receiverId && to == widget.userId)) {
               await fetchMessages();
               await markMessagesAsSeen();
             }
+
+            // Handle call invite when I am the receiver
+            if (to == widget.userId && msg['type'] == 'call') {
+              final callId = (msg['call_id'] ?? '').toString().trim();
+              final mode = (msg['call_mode'] ?? 'voice').toString();
+              if (callId.isEmpty) return;
+              if (_incomingPromptedCallId == callId) return; // avoid duplicate dialogs
+              _incomingPromptedCallId = callId;
+
+              if (!mounted) return;
+              final accept = await showDialog<bool>(
+                context: context,
+                barrierDismissible: true,
+                builder: (_) => AlertDialog(
+                  title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
+                  content: const Text('Join this call?'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Decline')),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Accept')),
+                  ],
+                ),
+              );
+
+              if (accept == true && mounted) {
+                await _joinZegoCall(callId: callId, video: mode == 'video');
+              }
+            }
           },
         )
         .subscribe();
+  }
+
+  // Join an existing call room (used by both caller and callee)
+  Future<void> _joinZegoCall({required String callId, required bool video}) async {
+    if (_joiningCall) return;
+    _joiningCall = true;
+
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
+      }
+      _joiningCall = false;
+      return;
+    }
+    if (video) {
+      final cam = await Permission.camera.request();
+      if (!cam.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
+        }
+        _joiningCall = false;
+        return;
+      }
+    }
+
+    final me = _sanitizeId(widget.userId);
+    debugPrint('Joining Zego call, callID=$callId, me=$me');
+
+    if (!mounted) {
+      _joiningCall = false;
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ZegoUIKitPrebuiltCall(
+          appID: appID,
+          appSign: appSign,
+          userID: me,
+          userName: widget.userName,
+          callID: callId,
+          config: video
+              ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
+              : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall(),
+        ),
+      ),
+    );
+
+    _joiningCall = false;
+  }
+
+  // Caller flow: send invite then join
+  void _startZegoCall(bool video) async {
+    final callId = _sharedCallId(widget.userId, widget.receiverId);
+
+    // Send a lightweight invite so the recipient can join the exact same room
+    try {
+      await supabase.from('messages').insert({
+        'sender_id': widget.userId,
+        'receiver_id': widget.receiverId,
+        'type': 'call',
+        'content': video ? '[video_call]' : '[voice_call]',
+        'call_id': callId,
+        'call_mode': video ? 'video' : 'voice',
+        'is_seen': false,
+      });
+    } catch (_) {
+      // Even if insert fails, allow caller to proceed
+    }
+
+    await _joinZegoCall(callId: callId, video: video);
   }
 
   void subscribeToTyping() {
@@ -366,40 +469,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     return id;
   }
 
-  void _startZegoCall(bool video) async {
-    // Ensure permissions before entering call page
-    final mic = await Permission.microphone.request();
-    if (!mic.isGranted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
-      return;
-    }
-    if (video) {
-      final cam = await Permission.camera.request();
-      if (!cam.isGranted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
-        return;
-      }
-    }
-
-    final callId = _sharedCallId(widget.userId, widget.receiverId);
-    debugPrint('Starting Zego call, callID=$callId, me=${_sanitizeId(widget.userId)}');
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ZegoUIKitPrebuiltCall(
-          appID: appID,
-          appSign: appSign,
-          userID: _sanitizeId(widget.userId),
-          userName: widget.userName,
-          callID: callId,
-          config: video
-              ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
-              : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall(),
-        ),
-      ),
-    );
-  }
+  // Caller flow: send invite then join
+  // NOTE: Duplicate definition removed to fix "already declared" error.
+  // The valid _startZegoCall(bool video) is defined earlier in this file.
+  // void _startZegoCall(bool video) async {
+  //   final callId = _sharedCallId(widget.userId, widget.receiverId);
+  //   try {
+  //     await supabase.from('messages').insert({
+  //       'sender_id': widget.userId,
+  //       'receiver_id': widget.receiverId,
+  //       'type': 'call',
+  //       'content': video ? '[video_call]' : '[voice_call]',
+  //       'call_id': callId,
+  //       'call_mode': video ? 'video' : 'voice',
+  //       'is_seen': false,
+  //     });
+  //   } catch (_) {}
+  //   await _joinZegoCall(callId: callId, video: video);
+  // }
 
   bool isSender(String id) => id == widget.userId;
 
