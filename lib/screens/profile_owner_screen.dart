@@ -15,11 +15,18 @@ class OwnerProfileScreen extends StatefulWidget {
   State<OwnerProfileScreen> createState() => _OwnerProfileScreenState();
 }
 
-class _OwnerProfileScreenState extends State<OwnerProfileScreen>
-    with SingleTickerProviderStateMixin {
-  final user = Supabase.instance.client.auth.currentUser;
-  final metadata =
-      Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTickerProviderStateMixin {
+  bool _isReloading = false;
+  User? user = Supabase.instance.client.auth.currentUser;
+  Map<String, dynamic> metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+  // Helper to refresh user and metadata after update
+  Future<void> _refreshUserMetadata() async {
+    final updatedUser = Supabase.instance.client.auth.currentUser;
+    setState(() {
+      user = updatedUser;
+      metadata = updatedUser?.userMetadata ?? {};
+    });
+  }
 
   late TabController _tabController;
 
@@ -540,7 +547,7 @@ SizedBox(height: 16),
                           padding: EdgeInsets.all(16),
                           children: [
                             // Account entry now contains name, address, password and delete actions
-                            _settingsTile(Icons.person, 'Account (Name / Address / Security)', onTap: _openAccountSettings),
+                            _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
                             _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
                             _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
                             _settingsTile(Icons.palette, 'App Theme', onTap: _openThemeSettings),
@@ -581,175 +588,198 @@ SizedBox(height: 16),
 
   // Open dialog for account settings (name / address / optional password / inline delete)
   void _openAccountSettings() async {
-    String newName = name;
-    String newAddress = address == 'No address provided' ? '' : address;
-    String newPassword = '';
+  String newName = name;
+  String newAddress = address == 'No address provided' ? '' : address;
+  String newPassword = '';
+  bool isLoading = false;
 
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setSt) {
+  await showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) {
+      return StatefulBuilder(
+        builder: (ctx, setSt) {
           return SafeArea(
             child: Padding(
               padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
               child: SizedBox(
-                height: MediaQuery.of(ctx).size.height * 0.9,
-                child: Column(
-                  children: [
-                    Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('Account', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+                // Reduce modal height to remove excess space
+                height: MediaQuery.of(ctx).size.height * 0.6,
+                child: Container(
+                  color: lightBlush,
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.arrow_back, color: deepRed),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                          Expanded(
+                            child: Center(
+                              child: Text(
+                                'Account',
+                                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed, letterSpacing: 0.5),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 48),
+                        ],
                       ),
-                    ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Column(
+                      Expanded(
+                        child: SingleChildScrollView(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 4, bottom: 2),
+                                    child: Text(
+                                      'Email',
+                                      style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500, letterSpacing: 0.1),
+                                    ),
+                                  ),
+                                  Container(
+                                    width: double.infinity,
+                                    margin: EdgeInsets.only(bottom: 8),
+                                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade400, width: 1.2),
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.grey[50],
+                                    ),
+                                    child: Text(
+                                      email,
+                                      style: TextStyle(fontSize: 15, color: Colors.grey[800], fontWeight: FontWeight.w500, letterSpacing: 0.1),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400, width: 1.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.white,
+                                ),
+                                margin: EdgeInsets.only(bottom: 8),
+                                child: TextFormField(
+                                  initialValue: newName,
+                                  decoration: InputDecoration(
+                                    labelText: 'Name',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                  ),
+                                  onChanged: (v) => setSt(() => newName = v),
+                                ),
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400, width: 1.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.white,
+                                ),
+                                margin: EdgeInsets.only(bottom: 8),
+                                child: TextFormField(
+                                  initialValue: newAddress,
+                                  decoration: InputDecoration(
+                                    labelText: 'Address',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                  ),
+                                  onChanged: (v) => setSt(() => newAddress = v),
+                                ),
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400, width: 1.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.white,
+                                ),
+                                margin: EdgeInsets.only(bottom: 8),
+                                child: TextFormField(
+                                  obscureText: true,
+                                  decoration: InputDecoration(
+                                    labelText: 'New password (optional)',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                  ),
+                                  onChanged: (v) => setSt(() => newPassword = v),
+                                ),
+                              ),
+                              // Removed extra space and divider below fields
+                            ],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
                           children: [
-                            TextFormField(
-                              initialValue: newName,
-                              decoration: InputDecoration(labelText: 'Name', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
-                              onChanged: (v) => setSt(() => newName = v),
-                            ),
-                            SizedBox(height: 12),
-                            TextFormField(
-                              initialValue: newAddress,
-                              decoration: InputDecoration(labelText: 'Address', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
-                              onChanged: (v) => setSt(() => newAddress = v),
-                            ),
-                            SizedBox(height: 12),
-                            TextFormField(
-                              obscureText: true,
-                              decoration: InputDecoration(labelText: 'New password (optional)', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
-                              onChanged: (v) => setSt(() => newPassword = v),
-                            ),
-                            SizedBox(height: 16),
-                            Divider(),
-                            SizedBox(height: 8),
-                            Align(
-                              alignment: Alignment.centerLeft,
+                            Expanded(
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
                                 child: Text('Delete Account', style: TextStyle(color: Colors.white)),
                                 onPressed: () async {
-                                  final confirmed = await showModalBottomSheet<bool>(
-                                    context: ctx,
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-                                    isScrollControlled: true,
-                                    builder: (c) {
-                                      return SafeArea(
-                                        child: SizedBox(
-                                          height: MediaQuery.of(c).size.height * 0.4,
-                                          child: Column(
-                                            children: [
-                                              Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                                              Padding(
-                                                padding: const EdgeInsets.all(16),
-                                                child: Align(
-                                                  alignment: Alignment.centerLeft,
-                                                  child: Text('Confirm delete', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                                                ),
-                                              ),
-                                              Padding(
-                                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                                child: Text('Deleting your account is permanent. Continue?'),
-                                              ),
-                                              Spacer(),
-                                              Padding(
-                                                padding: const EdgeInsets.all(16),
-                                                child: Row(
-                                                  children: [
-                                                    Expanded(
-                                                      child: OutlinedButton(
-                                                        onPressed: () => Navigator.pop(c, false),
-                                                        child: Text('Cancel'),
-                                                      ),
-                                                    ),
-                                                    SizedBox(width: 12),
-                                                    Expanded(
-                                                      child: ElevatedButton(
-                                                        style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                                                        onPressed: () => Navigator.pop(c, true),
-                                                        child: Text('Delete'),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                  if (confirmed == true) {
-                                    try {
-                                      await Supabase.instance.client.auth.signOut();
-                                      await Supabase.instance.client.from('users').delete().eq('id', user!.id);
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
-                                      Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
-                                    } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting account: $e')));
-                                    }
+                                  try {
+                                    await Supabase.instance.client.auth.signOut();
+                                    await Supabase.instance.client.from('users').delete().eq('id', user!.id);
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
+                                    Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting account: $e')));
                                   }
                                 },
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                                onPressed: () async {
+                                  setSt(() => isLoading = true);
+                                  try {
+                                    final supabase = Supabase.instance.client;
+                                    if (newPassword.isNotEmpty) {
+                                      await supabase.auth.updateUser(UserAttributes(password: newPassword, data: {
+                                        'name': newName,
+                                        'address': newAddress,
+                                      }));
+                                    } else {
+                                      await supabase.auth.updateUser(UserAttributes(data: {
+                                        'name': newName,
+                                        'address': newAddress,
+                                      }));
+                                    }
+                                    await _refreshUserMetadata();
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account updated.')));
+                                    Navigator.pop(ctx);
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating account: $e')));
+                                  }
+                                  setSt(() => isLoading = false);
+                                },
+                                child: isLoading ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text('Save'),
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        children: [
-                          Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                              onPressed: () async {
-                                Navigator.pop(ctx);
-                                try {
-                                  final supabase = Supabase.instance.client;
-                                  if (newPassword.isNotEmpty) {
-                                    await supabase.auth.updateUser(UserAttributes(password: newPassword, data: {
-                                      'name': newName,
-                                      'address': newAddress,
-                                    }));
-                                  } else {
-                                    await supabase.auth.updateUser(UserAttributes(data: {
-                                      'name': newName,
-                                      'address': newAddress,
-                                    }));
-                                  }
-                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account updated.')));
-                                  setState(() {}); // refresh metadata display
-                                } catch (e) {
-                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating account: $e')));
-                                }
-                              },
-                              child: Text('Save'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           );
-        });
-      },
-    );
+        },
+      );
+    },
+  );
   }
 
   // Open dialog for notification preferences
