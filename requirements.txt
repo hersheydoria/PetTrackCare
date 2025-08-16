@@ -8,4 +8,4 @@ scikit-learn==1.5.1
 APScheduler==3.10.4
 joblib==1.4.2
 # Optional on free tier; if builds fail or memory is tight, remove this line (fallback will be used)
-tensorflow-cpu==2.15.0
+#tensorflow-cpu==2.15.0
