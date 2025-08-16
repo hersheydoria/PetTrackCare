@@ -475,6 +475,7 @@ void showEditPostModal(Map post) {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     CircleAvatar(
                       radius: 20,
@@ -483,47 +484,53 @@ void showEditPostModal(Map post) {
                           : AssetImage('assets/logo.png') as ImageProvider,
                     ),
                     SizedBox(width: 10),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          userName,
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: userRole == 'Pet Owner' ? sitterColor : ownerColor,
-                            borderRadius: BorderRadius.circular(12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                userName,
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                timeAgo,
+                                style: TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
                           ),
-                          child: Text(
-                            userRole,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white,
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: userRole == 'Pet Owner' ? sitterColor : ownerColor,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              userRole,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                    Spacer(),
-                      if (post['user_id'] == widget.userId)
-                        PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              showEditPostModal(post);
-                            } else if (value == 'delete') {
-                              deletePost(context, post['id']);
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
-                      Text(
-                        timeAgo,
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                    if (post['user_id'] == widget.userId)
+                      PopupMenuButton<String>(
+                        onSelected: (value) {
+                          if (value == 'edit') {
+                            showEditPostModal(post);
+                          } else if (value == 'delete') {
+                            deletePost(context, post['id']);
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          PopupMenuItem(value: 'edit', child: Text('Edit')),
+                          PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        ],
                       ),
                   ],
                 ),
@@ -601,8 +608,8 @@ void showEditPostModal(Map post) {
                             }
                           },
                         ),
-                            if (likeCount > 0)
-                              Text('$likeCount'),
+                        if (likeCount > 0)
+                          Text('$likeCount'),
                       ],
                     ),
                     Row(
@@ -616,10 +623,13 @@ void showEditPostModal(Map post) {
                             });
                           },
                         ),
-                            Text('${(postComments[postId]?.length ?? 0)} comments'),
+                        Text('${(postComments[postId]?.length ?? 0)} comments'),
                       ],
                     ),
-                    IconButton(icon: Icon(Icons.bookmark_border, color: deepRed), onPressed: () {}),
+                    IconButton(
+                      icon: Icon(Icons.bookmark_border, color: deepRed),
+                      onPressed: () {},
+                    ),
                   ],
                 ),
                 if (showCommentInput[postId] == true)
