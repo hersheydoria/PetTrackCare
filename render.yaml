@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: pettrackcare-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn analyze_services.analyze_behavior:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: ENABLE_SCHEDULER
+        value: "false"
+      - key: RUN_MIGRATION_ON_STARTUP
+        value: "false"
+      - key: PYTHON_VERSION
+        value: 3.10.10
+    healthCheckPath: /health

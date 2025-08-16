@@ -13,11 +13,22 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import json
 import joblib
 
+# TensorFlow is optional on free hosts
+try:
+    import tensorflow as tf
+except Exception:
+    tf = None
+
 # Load environment variables
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
+# Use Render's PORT if present
+BACKEND_PORT = int(os.getenv("PORT", os.getenv("BACKEND_PORT", "5000")))
+
+# Feature flags for hosted environments
+ENABLE_SCHEDULER = os.getenv("ENABLE_SCHEDULER", "false").lower() == "true"
+RUN_MIGRATION_ON_STARTUP = os.getenv("RUN_MIGRATION_ON_STARTUP", "false").lower() == "true"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Flask(__name__)
@@ -852,17 +863,25 @@ def daily_analysis_job():
         result = analyze_pet(pet["id"])
         print(f"📊 Pet {pet['id']} analysis stored:", result)
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(daily_analysis_job, 'interval', days=1)  # runs every 24h
-scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)  # ensure daily migration/analysis
-scheduler.start()
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
-    # Run a one-time migration at startup (safe and idempotent)
-    try:
-        migrate_behavior_logs_to_predictions()
-    except Exception as e:
-        print(f"Startup migration error: {e}")
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
     app.run(host="0.0.0.0", port=BACKEND_PORT)
 
 def store_prediction(pet_id, prediction, risk_level, recommendation):
@@ -912,6 +931,14 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
 
     X, y = np.array(X), np.array(y)
 
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
     if os.path.exists(model_path):
         model = tf.keras.models.load_model(model_path)
     else:
@@ -934,31 +961,695 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
         last_window = np.concatenate([last_window[1:], [p]])
     return preds
 
-# Force-train endpoint (useful in dev)
-@app.route("/train", methods=["POST"])
-def train_endpoint():
-    data = request.get_json(silent=True) or {}
-    pet_id = data.get("pet_id")
-    try:
-        if pet_id:
-            df = fetch_logs_df(pet_id, limit=10000)
-            if df.empty:
-                return jsonify({"status":"no_data","message":"No behavior_logs for pet_id"}), 200
-            train_illness_model(df)  # saves models/models.pkl
-            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # saves models/sleep_model.keras
-        else:
-            # train on all pets combined
-            resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
-            logs = resp.data or []
-            if not logs:
-                return jsonify({"status":"no_data","message":"No behavior_logs found"}), 200
-            df_all = pd.DataFrame(logs)
-            df_all['log_date'] = pd.to_datetime(df_all['log_date']).dt.date
-            df_all['sleep_hours'] = pd.to_numeric(df_all.get('sleep_hours', 0), errors='coerce').fillna(0.0)
-            df_all['mood'] = df_all['mood'].fillna('Unknown').astype(str)
-            df_all['activity_level'] = df_all['activity_level'].fillna('Unknown').astype(str)
-            train_illness_model(df_all)
-            forecast_sleep_with_tf(df_all["sleep_hours"].tolist())
-        return jsonify({"status":"ok","message":"Models trained"}), 200
-    except Exception as e:
-        return jsonify({"status":"error","message":str(e)}), 500
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
+
+def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
+    supabase.table("predictions").insert({
+        "pet_id": pet_id,
+        "prediction_date": datetime.utcnow().date().isoformat(),
+        "prediction_text": prediction,
+        "risk_level": risk_level,
+        "suggestions": recommendation
+    }).execute()
+
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
+    if model is None or encoders is None:
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
+    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
+    pred = model.predict(X)[0]
+    return "high" if pred == 1 else "low"
+
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
+    arr = np.array(sleep_series).astype(float)
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
+        return [last for _ in range(days_ahead)]
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
+    preds, last_window = [], arr[-window:].copy()
+    for _ in range(days_ahead):
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        p = max(0.0, min(24.0, p))
+        preds.append(p)
+        last_window = np.concatenate([last_window[1:], [p]])
+    return preds
+
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
+
+def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
+    supabase.table("predictions").insert({
+        "pet_id": pet_id,
+        "prediction_date": datetime.utcnow().date().isoformat(),
+        "prediction_text": prediction,
+        "risk_level": risk_level,
+        "suggestions": recommendation
+    }).execute()
+
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
+    if model is None or encoders is None:
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
+    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
+    pred = model.predict(X)[0]
+    return "high" if pred == 1 else "low"
+
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
+    arr = np.array(sleep_series).astype(float)
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
+        return [last for _ in range(days_ahead)]
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
+    preds, last_window = [], arr[-window:].copy()
+    for _ in range(days_ahead):
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        p = max(0.0, min(24.0, p))
+        preds.append(p)
+        last_window = np.concatenate([last_window[1:], [p]])
+    return preds
+
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
+
+def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
+    supabase.table("predictions").insert({
+        "pet_id": pet_id,
+        "prediction_date": datetime.utcnow().date().isoformat(),
+        "prediction_text": prediction,
+        "risk_level": risk_level,
+        "suggestions": recommendation
+    }).execute()
+
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
+    if model is None or encoders is None:
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
+    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
+    pred = model.predict(X)[0]
+    return "high" if pred == 1 else "low"
+
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
+    arr = np.array(sleep_series).astype(float)
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
+        return [last for _ in range(days_ahead)]
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
+    preds, last_window = [], arr[-window:].copy()
+    for _ in range(days_ahead):
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        p = max(0.0, min(24.0, p))
+        preds.append(p)
+        last_window = np.concatenate([last_window[1:], [p]])
+    return preds
+
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
+
+def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
+    supabase.table("predictions").insert({
+        "pet_id": pet_id,
+        "prediction_date": datetime.utcnow().date().isoformat(),
+        "prediction_text": prediction,
+        "risk_level": risk_level,
+        "suggestions": recommendation
+    }).execute()
+
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
+    if model is None or encoders is None:
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
+    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
+    pred = model.predict(X)[0]
+    return "high" if pred == 1 else "low"
+
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
+    arr = np.array(sleep_series).astype(float)
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
+        return [last for _ in range(days_ahead)]
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
+    preds, last_window = [], arr[-window:].copy()
+    for _ in range(days_ahead):
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        p = max(0.0, min(24.0, p))
+        preds.append(p)
+        last_window = np.concatenate([last_window[1:], [p]])
+    return preds
+
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
+
+def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
+    supabase.table("predictions").insert({
+        "pet_id": pet_id,
+        "prediction_date": datetime.utcnow().date().isoformat(),
+        "prediction_text": prediction,
+        "risk_level": risk_level,
+        "suggestions": recommendation
+    }).execute()
+
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
+    if model is None or encoders is None:
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
+    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
+    pred = model.predict(X)[0]
+    return "high" if pred == 1 else "low"
+
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
+    arr = np.array(sleep_series).astype(float)
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
+        return [last for _ in range(days_ahead)]
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
+    preds, last_window = [], arr[-window:].copy()
+    for _ in range(days_ahead):
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        p = max(0.0, min(24.0, p))
+        preds.append(p)
+        last_window = np.concatenate([last_window[1:], [p]])
+    return preds
+
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
+
+def store_prediction(pet_id, prediction, risk_level, recommendation):
+    # kept for backward compatibility
+    supabase.table("predictions").insert({
+        "pet_id": pet_id,
+        "prediction_date": datetime.utcnow().date().isoformat(),
+        "prediction_text": prediction,
+        "risk_level": risk_level,
+        "suggestions": recommendation
+    }).execute()
+
+def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+    model, encoders = load_illness_model(model_path)
+    # Rule-based fallback if model not trained
+    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
+    if model is None or encoders is None:
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders
+    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
+    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
+    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
+    pred = model.predict(X)[0]
+    return "high" if pred == 1 else "low"
+
+def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
+    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
+    arr = np.array(sleep_series).astype(float)
+    if len(arr) < 3:
+        last = float(arr[-1]) if len(arr) > 0 else 8.0
+        return [last for _ in range(days_ahead)]
+
+    window = 7
+    X, y = [], []
+    for i in range(len(arr) - window):
+        X.append(arr[i:i + window])
+        y.append(arr[i + window])
+
+    if len(X) < 2:
+        # fallback to linear trend if not enough windows
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    X, y = np.array(X), np.array(y)
+
+    # If TensorFlow isn't available (or disabled), fall back to linear regression
+    if tf is None:
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        return lr.predict(next_idx).clip(0, 24).tolist()
+
+    if os.path.exists(model_path):
+        model = tf.keras.models.load_model(model_path)
+    else:
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(X.shape[1],)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(16, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+
+    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
+    model.save(model_path)
+
+    preds, last_window = [], arr[-window:].copy()
+    for _ in range(days_ahead):
+        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        p = max(0.0, min(24.0, p))
+        preds.append(p)
+        last_window = np.concatenate([last_window[1:], [p]])
+    return preds
+
+# ------------------- Daily Scheduler -------------------
+def daily_analysis_job():
+    print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
+    pets_resp = supabase.table("pets").select("id").execute()
+    for pet in pets_resp.data or []:
+        df = fetch_logs_df(pet["id"])
+        if not df.empty:
+            train_illness_model(df)  # retrain and persist illness model
+            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
+        result = analyze_pet(pet["id"])
+        print(f"📊 Pet {pet['id']} analysis stored:", result)
+
+# Start scheduler only when explicitly enabled (avoid multiple schedulers on gunicorn)
+if ENABLE_SCHEDULER:
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(daily_analysis_job, 'interval', days=1)
+    scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)
+    scheduler.start()
+
+# Simple health check for Render
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    # Optional one-time migration on startup (disabled by default on Render)
+    if RUN_MIGRATION_ON_STARTUP:
+        try:
+            migrate_behavior_logs_to_predictions()
+        except Exception as e:
+            print(f"Startup migration error: {e}")
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
