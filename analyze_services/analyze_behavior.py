@@ -284,6 +284,13 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
     except Exception:
         return "low"
 
+def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
+    """Pick the higher severity between ML and contextual ('low' < 'medium' < 'high')."""
+    sev = {"low": 0, "medium": 1, "high": 2}
+    a = str(ml_risk or "low").lower()
+    b = str(contextual_risk or "low").lower()
+    return a if sev.get(a, 0) >= sev.get(b, 0) else b
+
 # ------------------- Core Analysis -------------------
 def forecast_sleep_trend(df):
     # Example placeholder logic — replace with your real forecasting logic
@@ -479,18 +486,7 @@ def migrate_behavior_logs_to_predictions(limit_per_pet=1000):
         print(f"Unexpected error during migration: {e}")
 
 # ------------------- Core Analysis -------------------
-def forecast_sleep_trend(df):
-    # Example placeholder logic — replace with your real forecasting logic
-    if df.empty:
-        return "No sleep data available"
-
-    avg_sleep = df["sleep_hours"].mean()
-    if avg_sleep < 6:
-        return "Pet might be sleep deprived"
-    elif avg_sleep > 9:
-        return "Pet is oversleeping"
-    else:
-        return "Pet sleep is normal"
+# Duplicate forecast_sleep_trend removed (the original one above analyze_pet_df is kept)
 
 # ------------------- Flask API -------------------
  
@@ -515,36 +511,38 @@ def analyze_endpoint():
         last = sleep_series[-1] if sleep_series else 8.0
         sleep_forecast = [last for _ in range(7)]
 
-    # initial illness_risk from model/rules on latest log (may be None)
-    illness_risk = None
+    # ML illness_risk on latest log (or fallback)
+    illness_risk_ml = None
     try:
         if not df.empty:
             latest = df.sort_values("log_date", ascending=False).iloc[0]
             mood = str(latest.get("mood", "") or "")
             sleep_hours = float(latest.get("sleep_hours") or 0.0)
             activity_level = str(latest.get("activity_level", "") or "")
-            illness_risk = predict_illness_risk(mood, sleep_hours, activity_level)
+            illness_risk_ml = predict_illness_risk(mood, sleep_hours, activity_level)
     except Exception:
-        illness_risk = None
+        illness_risk_ml = None
 
-    # fallback to latest prediction risk; default to "low"
-    if illness_risk is None:
+    # fallback to latest stored prediction or "low"
+    if illness_risk_ml is None:
         latest_pred_risk = get_latest_prediction_risk(pet_id)
-        illness_risk = latest_pred_risk if latest_pred_risk in ("high", "medium", "low") else "low"
+        illness_risk_ml = latest_pred_risk if latest_pred_risk in ("high", "medium", "low") else "low"
 
-    # Contextual override: smooth risk using recent logs so it reflects improving behavior
+    # Contextual risk from recent logs
     contextual_risk = compute_contextual_risk(df)
-    illness_risk = contextual_risk  # prefer contextual view for UI
 
-    # model status and derived health status
+    # Blend: choose higher severity so spikes are not hidden
+    illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
+
+    # model status and derived health status (based on blended risk)
     illness_model_trained = is_illness_model_trained()
-    is_unhealthy = isinstance(illness_risk, str) and illness_risk.lower() in ("high", "medium")
+    is_unhealthy = isinstance(illness_risk_final, str) and illness_risk_final.lower() in ("high", "medium")
     health_status = "unhealthy" if is_unhealthy else "healthy"
 
-    # Care tips based on current context
+    # Care tips based on blended risk
     avg_sleep_val = float(df["sleep_hours"].mean()) if not df.empty else 8.0
     tips = build_care_recommendations(
-        illness_risk,
+        illness_risk_final,
         result.get("mood_probabilities") or result.get("mood_prob"),
         result.get("activity_probabilities") or result.get("activity_prob"),
         avg_sleep_val,
@@ -553,11 +551,14 @@ def analyze_endpoint():
 
     # Merge into response
     merged = dict(result)
-    merged["illness_risk"] = illness_risk
+    merged["illness_risk_ml"] = illness_risk_ml
+    merged["illness_risk_contextual"] = contextual_risk
+    merged["illness_risk_blended"] = illness_risk_final
+    merged["illness_risk"] = illness_risk_final  # backward compatibility
     merged["sleep_forecast"] = sleep_forecast
     merged["illness_model_trained"] = illness_model_trained
     merged["health_status"] = health_status
-    merged["illness_prediction"] = illness_risk
+    merged["illness_prediction"] = illness_risk_final
     merged["is_unhealthy"] = is_unhealthy
     merged["illness_status_text"] = "Unhealthy" if is_unhealthy else "Healthy"
     merged["care_recommendations"] = tips
