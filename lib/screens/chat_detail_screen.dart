@@ -885,112 +885,116 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       body: Column(
         children: [
           Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.only(top: 12),
-              itemCount: messages.length,
-              itemBuilder: (_, index) {
-                final msg = messages[index];
-                final sentByMe = isSender(msg['sender_id']);
-                final isLastSeen = lastSeenMessageId != null &&
-                    msg['id'].toString() == lastSeenMessageId;
+            child: RefreshIndicator(
+              onRefresh: _refreshAll,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.only(top: 12),
+                itemCount: messages.length,
+                itemBuilder: (_, index) {
+                  final msg = messages[index];
+                  final sentByMe = isSender(msg['sender_id']);
+                  final isLastSeen = lastSeenMessageId != null &&
+                      msg['id'].toString() == lastSeenMessageId;
 
-                final sentAt = _parseMsgTime(msg['sent_at']);
-                final tsLabel = sentAt != null ? _formatChatTimestamp(sentAt) : null;
+                  final sentAt = _parseMsgTime(msg['sent_at']);
+                  final tsLabel = sentAt != null ? _formatChatTimestamp(sentAt) : null;
 
-                Widget content;
-                if (msg['type'] == 'image' && msg['media_url'] != null) {
-                  content = FutureBuilder<String?>(
-                    future: _mediaUrl(msg),
-                    builder: (context, snap) {
-                      final url = snap.data;
-                      if (url == null) {
-                        return const SizedBox(
-                          width: 160,
-                          height: 120,
-                          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  Widget content;
+                  if (msg['type'] == 'image' && msg['media_url'] != null) {
+                    content = FutureBuilder<String?>(
+                      future: _mediaUrl(msg),
+                      builder: (context, snap) {
+                        final url = snap.data;
+                        if (url == null) {
+                          return const SizedBox(
+                            width: 160,
+                            height: 120,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                          );
+                        }
+                        final heroTag = 'chat_img_${msg['id'] ?? url}';
+                        return GestureDetector(
+                          onTap: () => _openImageViewer(url, tag: heroTag),
+                          child: Hero(
+                            tag: heroTag,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                url,
+                                fit: BoxFit.cover,
+                                width: 200,
+                                height: 200,
+                                errorBuilder: (_, __, ___) => const Icon(Icons.broken_image),
+                              ),
+                            ),
+                          ),
                         );
-                      }
-                      final heroTag = 'chat_img_${msg['id'] ?? url}';
-                      return GestureDetector(
-                        onTap: () => _openImageViewer(url, tag: heroTag),
-                        child: Hero(
-                          tag: heroTag,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              url,
-                              fit: BoxFit.cover,
-                              width: 200,
-                              height: 200,
-                              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image),
+                      },
+                    );
+                  } else if (msg['type'] == 'voice' && msg['media_url'] != null) {
+                    final playing = _playingMessageId == msg['id']?.toString();
+                    content = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
+                          onPressed: () => _togglePlay(msg),
+                          color: const Color(0xFFCB4154),
+                        ),
+                        const Text('Voice message'),
+                      ],
+                    );
+                  } else {
+                    content = Text(msg['content'] ?? '[empty]');
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (tsLabel != null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6.0),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.black12,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                tsLabel,
+                                style: const TextStyle(fontSize: 11, color: Colors.black54),
+                              ),
                             ),
                           ),
                         ),
-                      );
-                    },
-                  );
-                } else if (msg['type'] == 'voice' && msg['media_url'] != null) {
-                  final playing = _playingMessageId == msg['id']?.toString();
-                  content = Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
-                        onPressed: () => _togglePlay(msg),
-                        color: const Color(0xFFCB4154),
+                      Align(
+                        alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Column(
+                          crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(12),
+                              margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                              decoration: BoxDecoration(
+                                color: sentByMe ? Color(0xFFCB4154).withOpacity(0.2) : Colors.grey.shade200,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: content,
+                            ),
+                            if (sentByMe && isLastSeen)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 12.0),
+                                child: Text('Seen', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                              ),
+                          ],
+                        ),
                       ),
-                      const Text('Voice message'),
                     ],
                   );
-                } else {
-                  content = Text(msg['content'] ?? '[empty]');
-                }
-
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (tsLabel != null)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6.0),
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
-                            decoration: BoxDecoration(
-                              color: Colors.black12,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              tsLabel,
-                              style: const TextStyle(fontSize: 11, color: Colors.black54),
-                            ),
-                          ),
-                        ),
-                      ),
-                    Align(
-                      alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Column(
-                        crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            padding: EdgeInsets.all(12),
-                            margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                            decoration: BoxDecoration(
-                              color: sentByMe ? Color(0xFFCB4154).withOpacity(0.2) : Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: content,
-                          ),
-                          if (sentByMe && isLastSeen)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 12.0),
-                              child: Text('Seen', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
+                },
+              ),
             ),
           ),
           Divider(height: 1),
@@ -1014,5 +1018,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ],
       ),
     );
+  }
+
+  // New: pull-to-refresh handler
+  Future<void> _refreshAll() async {
+    await fetchMessages();
+    await markMessagesAsSeen();
   }
 }

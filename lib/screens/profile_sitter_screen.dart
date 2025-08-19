@@ -187,39 +187,50 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
     }
   }
 
+  // New: pull-to-refresh handler
+  Future<void> _refreshAll() async {
+    await fetchAssignedPets();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
       return Center(child: CircularProgressIndicator(color: deepRed));
     }
 
-    if (assignedPets.isEmpty) {
-      return Center(
-          child: Text('No assigned pets yet.', style: TextStyle(color: Colors.grey)));
-    }
-
-    return ListView.builder(
-      itemCount: assignedPets.length,
-      itemBuilder: (context, index) {
-        final pet = assignedPets[index]['pets'];
-        final owner = pet['users'];
-
-        return Container(
-          margin: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(12),
-            color: Colors.white,
-          ),
-          child: ListTile(
-            leading: Icon(Icons.pets, color: deepRed),
-            title: Text(pet['name'] ?? 'Unnamed'),
-            subtitle: Text(
-              'Breed: ${pet['breed'] ?? 'N/A'} | Age: ${pet['age'] ?? 'N/A'}\nOwner: ${owner?['name'] ?? 'Unknown'}',
+    return RefreshIndicator(
+      onRefresh: _refreshAll,
+      child: assignedPets.isEmpty
+          ? ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                SizedBox(height: 120),
+                Center(child: Text('No assigned pets yet.', style: TextStyle(color: Colors.grey))),
+              ],
+            )
+          : ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: assignedPets.length,
+              itemBuilder: (context, index) {
+                final pet = assignedPets[index]['pets'];
+                final owner = pet['users'];
+                return Container(
+                  margin: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(12),
+                    color: Colors.white,
+                  ),
+                  child: ListTile(
+                    leading: Icon(Icons.pets, color: deepRed),
+                    title: Text(pet['name'] ?? 'Unnamed'),
+                    subtitle: Text(
+                      'Breed: ${pet['breed'] ?? 'N/A'} | Age: ${pet['age'] ?? 'N/A'}\nOwner: ${owner?['name'] ?? 'Unknown'}',
+                    ),
+                  ),
+                );
+              },
             ),
-          ),
-        );
-      },
     );
   }
 }

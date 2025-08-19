@@ -14,6 +14,31 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool isLoading = false;
   bool showPassword = false;
+  bool isCheckingSession = true; // New: flag to gate UI while checking existing session
+
+  @override
+  void initState() {
+    super.initState();
+    _checkExistingSession();
+  }
+
+  // New: check persisted Supabase session and skip login if present
+  Future<void> _checkExistingSession() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    final user = session?.user;
+    if (user != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MainNavigation(userId: user.id),
+          ),
+        );
+      });
+    } else {
+      if (mounted) setState(() => isCheckingSession = false);
+    }
+  }
 
   void _login() async {
     if (!_formKey.currentState!.validate()) return;
@@ -50,30 +75,37 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _resetPassword() async {
-  final email = emailController.text.trim();
+    final email = emailController.text.trim();
 
-  if (email.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Please enter your email to reset your password')),
-    );
-    return;
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please enter your email to reset your password')),
+      );
+      return;
+    }
+
+    try {
+      await Supabase.instance.client.auth.resetPasswordForEmail(email);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Password reset email sent')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reset failed: ${e.toString()}')),
+      );
+    }
   }
-
-  try {
-    await Supabase.instance.client.auth.resetPasswordForEmail(email);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Password reset email sent')),
-    );
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Reset failed: ${e.toString()}')),
-    );
-  }
-}
-
 
   @override
   Widget build(BuildContext context) {
+    // New: show a loader while verifying existing session
+    if (isCheckingSession) {
+      return Scaffold(
+        backgroundColor: Color(0xFFF6DED8),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Color(0xFFF6DED8),
       body: Center(
