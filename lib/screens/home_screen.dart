@@ -139,7 +139,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> fetchSittingJobs() async {
     final jobsRes = await supabase
         .from('sitting_jobs')
-        .select('*, pets(name)')
+        // include owner_id to enable "Chat with owner"
+        .select('*, pets(name, owner_id)')
         .eq('sitter_id', widget.userId)
         .order('start_date', ascending: false);
     setState(() => sittingJobs = jobsRes);
@@ -158,6 +159,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         setState(() => summary = summaryRes);
       }
     } catch (_) {}
+  }
+
+  // Update job status (Accept/Decline)
+  Future<void> _updateJobStatus(String jobId, String status) async {
+    try {
+      await supabase.from('sitting_jobs').update({'status': status}).eq('id', jobId);
+      await fetchSittingJobs();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Job $status.')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+      }
+    }
+  }
+
+  // Open chat with owner
+  void _openChatWithOwner(String ownerId, {String? ownerName}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatDetailScreen(
+          userId: widget.userId,
+          receiverId: ownerId,
+          userName: ownerName ?? 'Owner',
+        ),
+      ),
+    );
   }
 
   Future<void> _showHireModal(Map<String, dynamic> sitter) async {
@@ -391,7 +421,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             margin: EdgeInsets.only(bottom: 16),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(16.0), // FIX: add named argument
               child: Column(
                 children: [
                   Center(
@@ -513,8 +543,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ],
               ),
             ),
-          );
-        },
+            );
+          },
       ),
     );
   }
@@ -537,17 +567,95 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           title: "Assigned Jobs",
           child: Column(
             children: sittingJobs.take(3).map((job) {
-              final petName = job['pets']['name'] ?? 'Pet';
-              final petType = job['pets']['type'] ?? 'Pet';
+              final petName = job['pets']?['name'] ?? 'Pet';
+              final petType = job['pets']?['type'] ?? 'Pet';
               final startTime = job['start_date'] ?? 'Time not set';
+              final status = (job['status'] ?? 'Pending').toString();
+              final String? ownerId = job['pets']?['owner_id'] as String?;
+              final String jobId = job['id'].toString();
+
               return Card(
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 elevation: 3,
                 margin: EdgeInsets.symmetric(vertical: 6),
-                child: ListTile(
-                  leading: Icon(Icons.pets, color: deepRed),
-                  title: Text('$petName ($petType)'),
-                  subtitle: Text('Start: $startTime'),
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: Icon(Icons.pets, color: deepRed),
+                        title: Text('$petName ($petType)'),
+                        subtitle: Text('Start: $startTime'),
+                        trailing: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: status == 'Accepted'
+                                ? Colors.green.withOpacity(0.15)
+                                : status == 'Declined'
+                                    ? Colors.red.withOpacity(0.15)
+                                    : Colors.orange.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            status,
+                            style: TextStyle(
+                              color: status == 'Accepted'
+                                  ? Colors.green[800]
+                                  : status == 'Declined'
+                                      ? Colors.red[800]
+                                      : Colors.orange[800],
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: status == 'Pending'
+                                  ? () => _updateJobStatus(jobId, 'Accepted')
+                                  : null,
+                              icon: Icon(Icons.check),
+                              label: Text('Accept'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: deepRed,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: status == 'Pending'
+                                  ? () => _updateJobStatus(jobId, 'Declined')
+                                  : null,
+                              icon: Icon(Icons.close, color: deepRed),
+                              label: Text('Decline', style: TextStyle(color: deepRed)),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: deepRed),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: ownerId != null
+                                  ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
+                                  : null,
+                              icon: Icon(Icons.message),
+                              label: Text('Chat'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: coral,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               );
             }).toList(),
