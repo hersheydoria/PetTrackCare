@@ -26,6 +26,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<dynamic> sittingJobs = [];
   List<dynamic> availableSitters = [];
   List<dynamic> ownerPendingRequests = [];
+  List<dynamic> ownerActiveJobs = []; // track owner's active jobs
   Set<String> pendingSitterIds = {};
   Map<String, dynamic> summary = {};
   // NEW: sitter reviews and completed jobs count
@@ -35,12 +36,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   bool isLoading = true;
 
   late TabController _sitterTabController;
+  RealtimeChannel? _jobsChannel; // realtime subscription channel
 
   @override
   void initState() {
     super.initState();
     fetchUserData();
     _sitterTabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _sitterTabController.dispose();
+    // unsubscribe realtime channel
+    _jobsChannel?.unsubscribe();
+    super.dispose();
   }
 
   // New: unified pull-to-refresh handler
@@ -56,15 +66,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           fetchOwnedPets(),          // will also update pending requests
           fetchAvailableSitters(),
           fetchDailySummary(),
+          fetchOwnerPendingRequests(),
+          fetchOwnerActiveJobs(), // added
         ]);
       }
     } catch (_) {}
-  }
-
-  @override
-  void dispose() {
-    _sitterTabController.dispose();
-    super.dispose();
   }
 
   Future<void> fetchUserData() async {
@@ -90,6 +96,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (userRole == 'Pet Owner') fetchAvailableSitters(),
         fetchDailySummary()
       ]);
+
+      // subscribe to realtime after initial data load (pets and jobs ready)
+      _setupRealtime();
 
       setState(() => isLoading = false);
     } catch (e) {
@@ -184,6 +193,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         // include owner_id to enable "Chat with owner"
         .select('*, pets(name, owner_id, type)')
         .eq('sitter_id', widget.userId)
+        .neq('status', 'Cancelled') // exclude declined/cancelled jobs from Assigned Jobs
         .order('start_date', ascending: false);
 
     // Compute completed jobs count from fetched jobs
@@ -201,7 +211,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> fetchSitterReviews() async {
     try {
       final res = await supabase
-          .from('reviews')
+          .from('sitter_reviews')
           .select()
           .eq('sitter_id', widget.userId)
           .order('created_at', ascending: false)
@@ -228,11 +238,72 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     } catch (_) {}
   }
 
-  // Update job status (Accept/Decline)
+  // Realtime: listen for INSERT/UPDATE/DELETE on sitting_jobs and refresh view when relevant
+  void _setupRealtime() {
+    _jobsChannel?.unsubscribe();
+    _jobsChannel = supabase
+        .channel('sitting_jobs_${widget.userId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'sitting_jobs',
+          callback: (payload) {
+            final newRow = payload.newRecord as Map<String, dynamic>?;
+            final oldRow = payload.oldRecord as Map<String, dynamic>?;
+            final row = newRow ?? oldRow;
+            if (row == null) return;
+
+            final sitterMatches = (row['sitter_id']?.toString() ?? '') == widget.userId;
+            final jobPetId = row['pet_id']?.toString();
+            final ownerMatches = jobPetId != null && pets.any((p) => p['id']?.toString() == jobPetId);
+
+            if (sitterMatches || ownerMatches) {
+              // Fetch the latest data segments that could be affected
+              fetchSittingJobs();
+              fetchOwnerPendingRequests();
+              fetchOwnerActiveJobs();
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  // Update job status: return updated row (if allowed) and patch UI safely
   Future<void> _updateJobStatus(String jobId, String status) async {
     try {
-      await supabase.from('sitting_jobs').update({'status': status}).eq('id', jobId);
-      await fetchSittingJobs();
+      final update = <String, dynamic>{'status': status};
+      if (status == 'Active') {
+        update['start_date'] = DateTime.now().toIso8601String().substring(0, 10);
+      }
+      if (status == 'Completed') {
+        update['end_date'] = DateTime.now().toIso8601String().substring(0, 10);
+      }
+
+      // Perform update without select() to avoid PostgREST single-object errors on 0 rows
+      await supabase.from('sitting_jobs').update(update).eq('id', jobId);
+
+      // Optimistically patch local UI
+      setState(() {
+        final idx = sittingJobs.indexWhere((j) => j['id']?.toString() == jobId);
+        if (idx != -1) {
+          if (status == 'Cancelled') {
+            sittingJobs.removeAt(idx);
+          } else {
+            sittingJobs[idx] = { ...sittingJobs[idx], ...update, 'id': jobId };
+          }
+        }
+        completedJobsCount = sittingJobs
+            .where((j) => (j['status'] ?? '').toString().toLowerCase() == 'completed')
+            .length;
+      });
+
+      // Refresh lists to stay in sync with backend/RLS
+      await Future.wait([
+        fetchSittingJobs(),
+        fetchOwnerPendingRequests(),
+        fetchOwnerActiveJobs(),
+      ]);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Job $status.')));
       }
@@ -257,6 +328,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+  // Simplified Hire modal: remove start/end date selection
   Future<void> _showHireModal(Map<String, dynamic> sitter) async {
     if (pets.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -266,8 +338,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
 
     String? selectedPetId = pets.isNotEmpty ? pets.first['id'] as String? : null;
-    DateTime selectedStart = DateTime.now();
-    DateTime? selectedEnd;
 
     await showModalBottomSheet(
       context: context,
@@ -283,84 +353,55 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 right: 16,
                 top: 16,
               ),
-              child: Wrap(
-                children: [
-                  Center(
-                    child: Container(
-                      height: 6,
-                      width: 60,
-                      margin: EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
-                    ),
-                  ),
-                  Text('Hire ${sitter['name'] ?? 'Sitter'}', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                  SizedBox(height: 12),
-
-                  Text('Select which pet this sitter will look after:', style: TextStyle(color: deepRed)),
-                  SizedBox(height: 8),
-
-                  DropdownButtonFormField<String>(
-                    value: selectedPetId,
-                    items: pets.map<DropdownMenuItem<String>>((p) {
-                      return DropdownMenuItem(value: p['id'] as String?, child: Text(p['name'] ?? 'Unnamed'));
-                    }).toList(),
-                    onChanged: (v) => setModalState(() => selectedPetId = v),
-                    decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
-                  ),
-                  SizedBox(height: 12),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: selectedStart,
-                              firstDate: DateTime.now().subtract(Duration(days: 365)),
-                              lastDate: DateTime.now().add(Duration(days: 365 * 2)),
-                            );
-                            if (picked != null) setModalState(() => selectedStart = picked);
-                          },
-                          child: Text('Start: ${selectedStart.toLocal().toString().split(' ')[0]}'),
-                        ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        height: 6,
+                        width: 60,
+                        margin: EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
                       ),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: selectedEnd ?? selectedStart,
-                              firstDate: selectedStart,
-                              lastDate: DateTime.now().add(Duration(days: 365 * 2)),
-                            );
-                            if (picked != null) setModalState(() => selectedEnd = picked);
-                          },
-                          child: Text('End: ${selectedEnd != null ? selectedEnd!.toLocal().toString().split(' ')[0] : 'Not set'}'),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () async {
-                        if (selectedPetId == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please select a pet.')));
-                          return;
-                        }
-                        Navigator.of(context).pop();
-                        await _createSittingJob(sitter['id'] as String, selectedPetId!, selectedStart, selectedEnd);
-                      },
-                      child: Text('Confirm Hire'),
-                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
                     ),
-                  ),
-                  SizedBox(height: 12),
-                ],
+                    Text(
+                      'Hire ${sitter['name'] ?? 'Sitter'}',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed),
+                    ),
+                    SizedBox(height: 8),
+                    Divider(),
+                    SizedBox(height: 8),
+                    Text('Select which pet this sitter will look after:', style: TextStyle(color: deepRed)),
+                    SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: selectedPetId,
+                      items: pets.map<DropdownMenuItem<String>>((p) {
+                        return DropdownMenuItem(value: p['id'] as String?, child: Text(p['name'] ?? 'Unnamed'));
+                      }).toList(),
+                      onChanged: (v) => setModalState(() => selectedPetId = v),
+                      decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
+                    ),
+                    SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          if (selectedPetId == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please select a pet.')));
+                            return;
+                          }
+                          Navigator.of(context).pop();
+                          await _createSittingJob(sitter['id'] as String, selectedPetId!);
+                        },
+                        child: Text('Confirm Hire'),
+                        style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                  ],
+                ),
               ),
             );
           },
@@ -369,31 +410,176 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Future<void> _createSittingJob(String sitterId, String petId, DateTime start, DateTime? end) async {
+  // Create a pending job (start_date provisional; overwritten on accept)
+  Future<void> _createSittingJob(String sitterId, String petId) async {
     try {
       final payload = {
         'sitter_id': sitterId,
         'pet_id': petId,
-        'start_date': start.toIso8601String().substring(0, 10),
-        'end_date': end != null ? end.toIso8601String().substring(0, 10) : null,
+        'start_date': DateTime.now().toIso8601String().substring(0, 10), // will be set again on accept
+        'end_date': null,
         'status': 'Pending',
       };
-
       await supabase.from('sitting_jobs').insert(payload);
-
-      // Optimistically update UI so the Hire button immediately shows "Pending"
       setState(() {
         pendingSitterIds.add(sitterId);
       });
-
-      // Give user feedback
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sitter hired — request sent.')));
-      // Refresh pending requests so UI stays in sync with backend
-      await fetchOwnerPendingRequests();
+      await Future.wait([fetchOwnerPendingRequests(), fetchOwnerActiveJobs()]);
     } catch (e) {
       print('❌ createSittingJob ERROR: $e');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create sitting job.')));
     }
+  }
+
+  // Fetch owner's Active jobs (for "Mark Finished")
+  Future<void> fetchOwnerActiveJobs() async {
+    try {
+      if (pets.isEmpty) {
+        setState(() => ownerActiveJobs = []);
+        return;
+      }
+      final petIds = pets
+          .map((p) => p['id'])
+          .where((id) => id != null && id.toString().isNotEmpty)
+          .map<String>((id) => id.toString())
+          .toList();
+      if (petIds.isEmpty) {
+        setState(() => ownerActiveJobs = []);
+        return;
+      }
+
+      // Include pets(name) so we can display the pet's name in the UI
+      final a = await supabase
+          .from('sitting_jobs')
+          .select('id, sitter_id, pet_id, status, start_date, end_date, created_at, pets(name)')
+          .eq('status', 'Active')
+          .inFilter('pet_id', petIds);
+
+      final b = await supabase
+          .from('sitting_jobs')
+          .select('id, sitter_id, pet_id, status, start_date, end_date, created_at, pets!inner(id, owner_id, name)')
+          .eq('status', 'Active')
+          .eq('pets.owner_id', widget.userId);
+
+      final List<dynamic> listA = (a as List?) ?? [];
+      final List<dynamic> listB = (b as List?) ?? [];
+      final Map<String, Map<String, dynamic>> byId = {};
+      for (final row in [...listA, ...listB]) {
+        final id = row['id']?.toString();
+        if (id != null && id.isNotEmpty) {
+          byId[id] = Map<String, dynamic>.from(row as Map);
+        }
+      }
+      setState(() => ownerActiveJobs = byId.values.toList());
+    } catch (e) {
+      print('❌ fetchOwnerActiveJobs ERROR: $e');
+    }
+  }
+
+  // Modal to finish job and add a quick review
+  Future<void> _showFinishJobModal(Map<String, dynamic> job) async {
+    double rating = 5;
+    String comment = '';
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            left: 16, right: 16, top: 16,
+          ),
+          child: Wrap(
+            children: [
+              Center(
+                child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
+              ),
+              Text('Finish Job & Review', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed)),
+              SizedBox(height: 12),
+              Row(
+                children: [
+                  Text('Rating:', style: TextStyle(color: deepRed)),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Slider(
+                      min: 1, max: 5, divisions: 4, // integer steps only
+                      label: rating.round().toString(),
+                      value: rating,
+                      onChanged: (v) => setState(() => rating = v),
+                    ),
+                  ),
+                  Text(rating.round().toString()),
+                ],
+              ),
+              SizedBox(height: 8),
+              TextField(
+                maxLines: 3,
+                decoration: InputDecoration(
+                  hintText: 'Optional comment',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  filled: true, fillColor: Colors.white,
+                ),
+                onChanged: (v) => comment = v,
+              ),
+              SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                  onPressed: () async {
+                    // Close the modal immediately
+                    Navigator.of(ctx).pop();
+                    try {
+                      // 1) complete job
+                      await _updateJobStatus(job['id'].toString(), 'Completed');
+
+                      // 2) resolve sitter_id for FK and insert review with integer rating + reviewer_id
+                      final sitterIdForReview = await _resolveSitterIdForReview(job['sitter_id'].toString());
+                      await supabase.from('sitter_reviews').insert({
+                        'sitter_id': sitterIdForReview,
+                        'reviewer_id': widget.userId,
+                        'rating': rating.round(),
+                        'comment': comment.isEmpty ? null : comment,
+                        'owner_name': userName,
+                      });
+
+                      await fetchOwnerActiveJobs();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Job finished and review posted.')),
+                        );
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Finish failed: $e')),
+                        );
+                      }
+                    }
+                  },
+                  child: Text('Submit'),
+                ),
+              ),
+              SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Resolve sitter_id for sitter_reviews FK (tries sitters.id then sitters.user_id)
+  Future<String> _resolveSitterIdForReview(String sitterId) async {
+    try {
+      final s1 = await supabase.from('sitters').select('id').eq('id', sitterId).maybeSingle();
+      if (s1 != null && s1['id'] != null) return s1['id'].toString();
+      final s2 = await supabase.from('sitters').select('id').eq('user_id', sitterId).maybeSingle();
+      if (s2 != null && s2['id'] != null) return s2['id'].toString();
+    } catch (_) {}
+    return sitterId; // fallback
   }
 
   // New: Greeting header with gradient and time-aware salutation
@@ -539,7 +725,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           Text(label, style: TextStyle(color: (fg ?? deepRed).withOpacity(0.8))),
         ],
       ),
-    );
+      );
   }
 
   // Owner: Summary chips (Pets, Pending Requests, Available Now)
@@ -575,23 +761,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: lightBlush,
-      body: isLoading
-          ? Center(child: CircularProgressIndicator(color: deepRed))
-          : RefreshIndicator(
-              onRefresh: _refreshAll,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(16),
-                child: userRole == 'Pet Sitter' ? _buildSitterHome() : _buildOwnerHome(),
-              ),
-            ),
-    );
-  }
-
   Widget _buildOwnerHome() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -615,6 +784,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
         ),
+        SizedBox(height: 16),
+
+        // New: Owner Active Jobs section with Finish button
+        _sectionWithBorder(
+          title: "Active Jobs",
+          child: ownerActiveJobs.isEmpty
+              ? Text('No active jobs right now.', style: TextStyle(color: Colors.grey[700]))
+              : Column(
+                  children: ownerActiveJobs.map((job) {
+                    final petName = (job['pets']?['name'] ?? job['pet_id'] ?? 'Pet').toString();
+                    final start = (job['start_date'] ?? '').toString();
+                    return Card(
+                      margin: EdgeInsets.symmetric(vertical: 6),
+                      child: ListTile(
+                        leading: Icon(Icons.pets, color: deepRed),
+                        title: Text('Pet: $petName'),
+                        subtitle: Text('Started: ${start.isEmpty ? '-' : start}'),
+                        trailing: ElevatedButton(
+                          onPressed: () => _showFinishJobModal(job),
+                          style: ElevatedButton.styleFrom(backgroundColor: deepRed, foregroundColor: Colors.white),
+                          child: Text('Mark Finished'),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+        ),
+
         SizedBox(height: 16),
 
         // ...existing code... (TabBar + TabBarView)
@@ -841,9 +1038,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         trailing: Container(
                           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: status == 'Accepted'
+                            color: status == 'Active'
                                 ? Colors.green.withOpacity(0.15)
-                                : status == 'Declined'
+                                : status == 'Cancelled'
                                     ? Colors.red.withOpacity(0.15)
                                     : status == 'Completed'
                                         ? Colors.blue.withOpacity(0.15)
@@ -853,9 +1050,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           child: Text(
                             status,
                             style: TextStyle(
-                              color: status == 'Accepted'
+                              color: status == 'Active'
                                   ? Colors.green[800]
-                                  : status == 'Declined'
+                                  : status == 'Cancelled'
                                       ? Colors.red[800]
                                       : status == 'Completed'
                                           ? Colors.blue[800]
@@ -866,36 +1063,50 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ),
                       ),
                       SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: status == 'Pending'
-                                  ? () => _updateJobStatus(jobId, 'Accepted')
-                                  : null,
-                              icon: Icon(Icons.check),
-                              label: Text('Accept'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: deepRed,
-                                foregroundColor: Colors.white,
+                      if (status == 'Pending')
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () => _updateJobStatus(jobId, 'Active'),
+                                icon: Icon(Icons.check),
+                                label: Text('Accept'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: deepRed,
+                                  foregroundColor: Colors.white,
+                                ),
                               ),
                             ),
-                          ),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: status == 'Pending'
-                                  ? () => _updateJobStatus(jobId, 'Declined')
-                                  : null,
-                              icon: Icon(Icons.close, color: deepRed),
-                              label: Text('Decline', style: TextStyle(color: deepRed)),
-                              style: OutlinedButton.styleFrom(
-                                side: BorderSide(color: deepRed),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _updateJobStatus(jobId, 'Cancelled'),
+                                icon: Icon(Icons.close, color: deepRed),
+                                label: Text('Decline', style: TextStyle(color: deepRed)),
+                                style: OutlinedButton.styleFrom(side: BorderSide(color: deepRed)),
                               ),
                             ),
-                          ),
-                          SizedBox(width: 8),
-                          Expanded(
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: ownerId != null
+                                    ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
+                                    : null,
+                                icon: Icon(Icons.message),
+                                label: Text('Chat'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: coral,
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: SizedBox(
+                            width: double.infinity,
                             child: ElevatedButton.icon(
                               onPressed: ownerId != null
                                   ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
@@ -908,8 +1119,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               ),
                             ),
                           ),
-                        ],
-                      ),
+                        ),
                     ],
                   ),
                 ),
@@ -1078,6 +1288,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text('$time – $petName ($task)', style: TextStyle(color: deepRed)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: lightBlush,
+      body: isLoading
+          ? Center(child: CircularProgressIndicator(color: deepRed))
+          : RefreshIndicator(
+              onRefresh: _refreshAll,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.all(16),
+                child: userRole == 'Pet Sitter' ? _buildSitterHome() : _buildOwnerHome(),
+              ),
+            ),
     );
   }
 }
