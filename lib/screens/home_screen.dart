@@ -28,6 +28,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<dynamic> ownerPendingRequests = [];
   Set<String> pendingSitterIds = {};
   Map<String, dynamic> summary = {};
+  // NEW: sitter reviews and completed jobs count
+  List<dynamic> sitterReviews = [];
+  int completedJobsCount = 0;
 
   bool isLoading = true;
 
@@ -82,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
       await Future.wait([
         if (userRole == 'Pet Sitter') fetchSittingJobs(),
+        if (userRole == 'Pet Sitter') fetchSitterReviews(),
         if (userRole == 'Pet Owner') fetchOwnedPets(),
         if (userRole == 'Pet Owner') fetchAvailableSitters(),
         fetchDailySummary()
@@ -140,10 +144,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final jobsRes = await supabase
         .from('sitting_jobs')
         // include owner_id to enable "Chat with owner"
-        .select('*, pets(name, owner_id)')
+        .select('*, pets(name, owner_id, type)')
         .eq('sitter_id', widget.userId)
         .order('start_date', ascending: false);
-    setState(() => sittingJobs = jobsRes);
+
+    // Compute completed jobs count from fetched jobs
+    final completed = (jobsRes as List)
+        .where((j) => (j['status'] ?? '').toString().toLowerCase() == 'completed')
+        .length;
+
+    setState(() {
+      sittingJobs = jobsRes;
+      completedJobsCount = completed;
+    });
+  }
+
+  // NEW: fetch latest sitter reviews
+  Future<void> fetchSitterReviews() async {
+    try {
+      final res = await supabase
+          .from('reviews')
+          .select()
+          .eq('sitter_id', widget.userId)
+          .order('created_at', ascending: false)
+          .limit(10);
+      setState(() => sitterReviews = res ?? []);
+    } catch (e) {
+      print('❌ fetchSitterReviews ERROR: $e');
+      setState(() => sitterReviews = []);
+    }
   }
 
   Future<void> fetchDailySummary() async {
@@ -327,6 +356,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       print('❌ createSittingJob ERROR: $e');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create sitting job.')));
     }
+  }
+
+  // New: Greeting header with gradient and time-aware salutation
+  Widget _buildSitterGreeting() {
+    final hour = DateTime.now().hour;
+    final salutation = hour < 12
+        ? 'Good morning'
+        : hour < 17
+            ? 'Good afternoon'
+            : 'Good evening';
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [deepRed, coral]),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 3))],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.pets, color: Colors.white, size: 24),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$salutation, $userName',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  "Your sitter dashboard is ready.",
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.9),
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -551,15 +638,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // 👩‍⚕️ Pet Sitter Home
   Widget _buildSitterHome() {
+    // derive today’s jobs from sittingJobs (based on start_date)
+    final today = DateTime.now();
+    final todayStr = "${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}";
+    final todaysJobs = sittingJobs.where((job) {
+      final sd = job['start_date']?.toString();
+      return sd == todayStr;
+    }).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Hi, $userName!',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
-        ),
-        SizedBox(height: 8),
-        Text("Here’s your sitter dashboard today:", style: TextStyle(color: deepRed)),
+        // REPLACED old header texts with redesigned greeting
+        _buildSitterGreeting(),
         SizedBox(height: 24),
 
         // ✅ Assigned Jobs
@@ -593,7 +684,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 ? Colors.green.withOpacity(0.15)
                                 : status == 'Declined'
                                     ? Colors.red.withOpacity(0.15)
-                                    : Colors.orange.withOpacity(0.15),
+                                    : status == 'Completed'
+                                        ? Colors.blue.withOpacity(0.15)
+                                        : Colors.orange.withOpacity(0.15),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
@@ -603,7 +696,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   ? Colors.green[800]
                                   : status == 'Declined'
                                       ? Colors.red[800]
-                                      : Colors.orange[800],
+                                      : status == 'Completed'
+                                          ? Colors.blue[800]
+                                          : Colors.orange[800],
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -664,50 +759,128 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
         SizedBox(height: 24),
 
-        // ⭐ Reviews
+        // ⭐ Reviews (data-driven)
         _sectionWithBorder(
           title: "Reviews",
           child: SizedBox(
-            height: 140,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: [
-                _buildReviewCard("Very caring and always on time!", "Maria D."),
-                _buildReviewCard("Loves animals like family!", "John P."),
-                _buildReviewCard("Always punctual and friendly!", "Lisa M."),
-              ],
-            ),
+            height: 160,
+            child: sitterReviews.isEmpty
+                ? Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600])))
+                : ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: sitterReviews.length,
+                    separatorBuilder: (_, __) => SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final rev = sitterReviews[index] as Map<String, dynamic>;
+                      return _buildReviewCardFromData(rev);
+                    },
+                  ),
           ),
         ),
 
         SizedBox(height: 24),
 
-        // 🗓️ Today’s Schedule
+        // 🗓️ Today’s Schedule (data-driven)
         _sectionWithBorder(
           title: "Today’s Schedule",
-          child: Column(
-            children: [
-              _buildScheduleItem("9:00 AM", "Luna", "Feed and walk"),
-              _buildScheduleItem("2:00 PM", "Max", "Play session"),
-            ],
-          ),
+          child: todaysJobs.isEmpty
+              ? Text("No jobs scheduled for today.", style: TextStyle(color: Colors.grey[700]))
+              : Column(
+                  children: todaysJobs.map((job) {
+                    final petName = job['pets']?['name'] ?? 'Pet';
+                    final start = job['start_date']?.toString() ?? todayStr;
+                    final task = (job['status'] ?? 'Scheduled').toString();
+                    return _buildScheduleItem(start, petName, task);
+                  }).toList(),
+                ),
         ),
 
         SizedBox(height: 24),
 
-        // 🧾 Completed Jobs
+        // 🧾 Completed Jobs (data-driven)
         _sectionWithBorder(
           title: "Completed Jobs",
           child: Row(
             children: [
-              Icon(Icons.check_circle, color: Colors.green),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green[700]),
+                    SizedBox(width: 8),
+                    Text(
+                      "$completedJobsCount",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green[800]),
+                    ),
+                  ],
+                ),
+              ),
               SizedBox(width: 12),
-              Text("You’ve completed 12 jobs", style: TextStyle(fontSize: 16, color: deepRed)),
+              Expanded(
+                child: Text(
+                  completedJobsCount == 1
+                      ? "You’ve completed 1 job"
+                      : "You’ve completed $completedJobsCount jobs",
+                  style: TextStyle(fontSize: 16, color: deepRed),
+                ),
+              ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  // Replace the old dummy card builder with a data-driven one
+  Widget _buildReviewCardFromData(Map<String, dynamic> review) {
+    final ratingNum = (review['rating'] is num) ? (review['rating'] as num).toDouble() : 0.0;
+    final comment = (review['comment'] ?? '').toString();
+    final owner = (review['owner_name'] ?? 'Pet Owner').toString();
+
+    return Container(
+      width: 260,
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: _buildRatingStars(ratingNum)),
+          SizedBox(height: 8),
+          Expanded(
+            child: Text(
+              comment.isEmpty ? "(No comment)" : '"$comment"',
+              style: TextStyle(fontStyle: FontStyle.italic),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text('– $owner', style: TextStyle(color: Colors.grey[600])),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildRatingStars(double rating) {
+    final full = rating.floor();
+    final half = (rating - full) >= 0.5;
+    return List<Widget>.generate(5, (i) {
+      if (i < full) {
+        return Icon(Icons.star, size: 18, color: Colors.orange);
+      } else if (i == full && half) {
+        return Icon(Icons.star_half, size: 18, color: Colors.orange);
+      }
+      return Icon(Icons.star_border, size: 18, color: Colors.orange);
+    });
   }
 
   Widget _sectionWithBorder({required String title, required Widget child}) {
@@ -733,30 +906,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _sectionTitle(String title) {
     return Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: coral));
-  }
-
-  Widget _buildReviewCard(String review, String owner) {
-    return Container(
-      width: 250,
-      margin: EdgeInsets.only(right: 12),
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: List.generate(5, (index) => Icon(Icons.star, size: 18, color: Colors.orange))),
-          SizedBox(height: 8),
-          Text('"$review"', style: TextStyle(fontStyle: FontStyle.italic)),
-          Spacer(),
-          Text('– $owner', style: TextStyle(color: Colors.grey[600])),
-        ],
-      ),
-    );
   }
 
   Widget _buildScheduleItem(String time, String petName, String task) {
