@@ -124,16 +124,54 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         return;
       }
 
-      // Query sitting_jobs and include pets; filter on the related pet's owner_id
-      final reqs = await supabase
-        .from('sitting_jobs')
-        .select('*, pets(owner_id)')
-        .eq('status', 'Pending')
-        .eq('pets.owner_id', widget.userId);
+      // Build pet_id list owned by the user
+      final petIds = pets
+          .map((p) => p['id'])
+          .where((id) => id != null && id.toString().isNotEmpty)
+          .map<String>((id) => id.toString())
+          .toList();
+
+      if (petIds.isEmpty) {
+        setState(() {
+          ownerPendingRequests = [];
+          pendingSitterIds = {};
+        });
+        return;
+      }
+
+      // Query A: filter by pet_id IN (...) + status = Pending
+      final a = await supabase
+          .from('sitting_jobs')
+          .select('id, sitter_id, pet_id, status, created_at')
+          .eq('status', 'Pending')
+          .inFilter('pet_id', petIds);
+
+      // Query B: inner join pets and filter by pets.owner_id (covers cases where policies rely on join)
+      final b = await supabase
+          .from('sitting_jobs')
+          .select('id, sitter_id, pet_id, status, created_at, pets!inner(id, owner_id)')
+          .eq('status', 'Pending')
+          .eq('pets.owner_id', widget.userId);
+
+      // Merge and dedupe by id
+      final List<dynamic> listA = (a as List?) ?? [];
+      final List<dynamic> listB = (b as List?) ?? [];
+      final Map<String, Map<String, dynamic>> byId = {};
+      for (final row in [...listA, ...listB]) {
+        final id = row['id']?.toString();
+        if (id != null && id.isNotEmpty) {
+          byId[id] = Map<String, dynamic>.from(row as Map);
+        }
+      }
+      final merged = byId.values.toList();
 
       setState(() {
-        ownerPendingRequests = reqs ?? [];
-        pendingSitterIds = ownerPendingRequests.map((r) => r['sitter_id'] as String).toSet();
+        ownerPendingRequests = merged;
+        pendingSitterIds = merged
+            .map((r) => r['sitter_id'])
+            .where((id) => id != null && id.toString().isNotEmpty)
+            .map<String>((id) => id.toString())
+            .toSet();
       });
     } catch (e) {
       print('❌ fetchOwnerPendingRequests ERROR: $e');
@@ -416,6 +454,127 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+  // Owner: Greeting header with gradient and time-aware salutation
+  Widget _buildOwnerGreeting() {
+    final hour = DateTime.now().hour;
+    final salutation = hour < 12
+        ? 'Good morning'
+        : hour < 17
+            ? 'Good afternoon'
+            : 'Good evening';
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [deepRed, coral]),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 3))],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.pets, color: Colors.white, size: 24),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$salutation, $userName',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  "Find trusted sitters and manage your requests.",
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.9),
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Small stat chip used by owner's summary section
+  Widget _ownerStatChip({
+    required IconData icon,
+    required String label,
+    required String value,
+    Color? bg,
+    Color? fg,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      margin: EdgeInsets.only(right: 8, bottom: 8),
+      decoration: BoxDecoration(
+        color: (bg ?? Colors.white),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: fg ?? deepRed, size: 18),
+          SizedBox(width: 8),
+          Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: fg ?? deepRed)),
+          SizedBox(width: 6),
+          Text(label, style: TextStyle(color: (fg ?? deepRed).withOpacity(0.8))),
+        ],
+      ),
+    );
+  }
+
+  // Owner: Summary chips (Pets, Pending Requests, Available Now)
+  Widget _buildOwnerSummaryChips() {
+    final petsCount = pets.length;
+    final pendingCount = ownerPendingRequests.length;
+    final availableNow = availableSitters.where((s) => (s['is_available'] == true)).length;
+
+    return Wrap(
+      children: [
+        _ownerStatChip(
+          icon: Icons.pets,
+          label: 'Pets',
+          value: '$petsCount',
+          bg: Colors.white,
+          fg: deepRed,
+        ),
+        _ownerStatChip(
+          icon: Icons.hourglass_top,
+          label: 'Pending',
+          value: '$pendingCount',
+          bg: Colors.white,
+          fg: Colors.orange[800],
+        ),
+        _ownerStatChip(
+          icon: Icons.person_pin_circle,
+          label: 'Available',
+          value: '$availableNow',
+          bg: Colors.white,
+          fg: Colors.green[800],
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -437,13 +596,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Center(
-          child: Text(
-            'Find Pet Sitters',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed),
-          ),
-        ),
+        // New greeting and summary for owners
+        _buildOwnerGreeting(),
+        SizedBox(height: 12),
+        _buildOwnerSummaryChips(),
         SizedBox(height: 16),
+
+        // Search bar stays, below the greeting/summary
         TextField(
           decoration: InputDecoration(
             hintText: 'Search Sitters by Location',
@@ -457,6 +616,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         ),
         SizedBox(height: 16),
+
+        // ...existing code... (TabBar + TabBarView)
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -478,7 +639,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
               Divider(height: 1, color: Colors.grey.shade300),
               SizedBox(
-                height: 600, // Adjust height if needed
+                height: 600,
                 child: TabBarView(
                   controller: _sitterTabController,
                   children: [
@@ -487,7 +648,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     _buildSitterList(availableSitters.where((s) => (s['rating'] ?? 0) >= 4.5).toList()),
                   ],
                 ),
-              )
+              ),
             ],
           ),
         ),
