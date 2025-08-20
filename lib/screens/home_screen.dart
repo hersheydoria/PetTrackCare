@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:PetTrackCare/screens/calendar_screen.dart';
 import 'package:PetTrackCare/screens/chat_detail_screen.dart';
 
 const deepRed = Color(0xFFB82132);
@@ -34,6 +33,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int completedJobsCount = 0;
 
   bool isLoading = true;
+
+  // Add: sitter availability toggle state
+  bool? _isSitterAvailable;
+  bool _isUpdatingAvailability = false;
 
   // Add: jobs filter state
   String _jobsStatusFilter = 'Pending';
@@ -96,6 +99,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       await Future.wait([
         if (userRole == 'Pet Sitter') fetchSittingJobs(),
         if (userRole == 'Pet Sitter') fetchSitterReviews(),
+        if (userRole == 'Pet Sitter') fetchSitterAvailability(), // NEW: load availability
         if (userRole == 'Pet Owner') fetchOwnedPets(),
         if (userRole == 'Pet Owner') fetchAvailableSitters(),
         fetchDailySummary()
@@ -1187,6 +1191,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _buildSitterGreeting(),
         SizedBox(height: 24),
 
+        // NEW: Availability switch
+        Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          elevation: 2,
+          child: SwitchListTile(
+            title: Text('Available for jobs', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed)),
+            subtitle: Text(
+              (_isSitterAvailable ?? false) ? 'Owners can see and hire you' : 'You appear as busy',
+              style: TextStyle(color: Colors.grey[700]),
+            ),
+            secondary: Icon(
+              (_isSitterAvailable ?? false) ? Icons.check_circle : Icons.cancel,
+              color: (_isSitterAvailable ?? false) ? Colors.green[700] : Colors.red[700],
+            ),
+            value: _isSitterAvailable ?? false,
+            onChanged: (_isSitterAvailable == null || _isUpdatingAvailability) ? null : (v) => _setSitterAvailability(v),
+          ),
+        ),
+
+        SizedBox(height: 16),
+
         // ✅ Assigned Jobs
         _sectionWithBorder(
           title: "Assigned Jobs",
@@ -1499,6 +1524,46 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
       child: Text('$time – $petName ($task)', style: TextStyle(color: deepRed)),
     );
+  }
+
+  // NEW: load sitter availability from sitters by user_id
+  Future<void> fetchSitterAvailability() async {
+    try {
+      final row = await supabase
+          .from('sitters')
+          .select('is_available')
+          .eq('user_id', widget.userId)
+          .maybeSingle();
+      setState(() => _isSitterAvailable = (row?['is_available'] == true));
+    } catch (e) {
+      print('❌ fetchSitterAvailability ERROR: $e');
+      setState(() => _isSitterAvailable = false);
+    }
+  }
+
+  // NEW: toggle and persist sitter availability
+  Future<void> _setSitterAvailability(bool value) async {
+    if (_isUpdatingAvailability) return;
+    setState(() {
+      _isUpdatingAvailability = true;
+      _isSitterAvailable = value; // optimistic
+    });
+    try {
+      await supabase.from('sitters').update({'is_available': value}).eq('user_id', widget.userId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(value ? 'You are now Available.' : 'You are now Busy.')),
+        );
+      }
+    } catch (e) {
+      // revert on failure
+      setState(() => _isSitterAvailable = !value);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update availability: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdatingAvailability = false);
+    }
   }
 
   @override
