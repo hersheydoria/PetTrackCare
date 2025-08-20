@@ -35,6 +35,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   bool isLoading = true;
 
+  // Add: jobs filter state
+  String _jobsStatusFilter = 'Pending';
+  static const List<String> _jobStatusOptions = ['All', 'Pending', 'Active', 'Completed'];
+
   late TabController _sitterTabController;
   RealtimeChannel? _jobsChannel; // realtime subscription channel
 
@@ -109,8 +113,36 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> fetchAvailableSitters() async {
     try {
-      final sitters = await supabase.from('users').select().eq('role', 'Pet Sitter');
-      setState(() => availableSitters = sitters);
+      // Pull from sitters, join users for display name, join reviews to compute avg rating
+      final rows = await supabase
+          .from('sitters')
+          .select('id, user_id, is_available, hourly_rate, users!inner(id, name, role), sitter_reviews(rating)')
+          .eq('users.role', 'Pet Sitter');
+
+      final List<dynamic> list = (rows as List?) ?? [];
+      final mapped = list.map<Map<String, dynamic>>((raw) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final user = (m['users'] as Map?) ?? {};
+        final reviews = (m['sitter_reviews'] as List?) ?? [];
+        double? avgRating;
+        if (reviews.isNotEmpty) {
+          final num sum = reviews.fold<num>(0, (acc, e) => acc + ((e['rating'] ?? 0) as num));
+          avgRating = (sum / reviews.length).toDouble();
+        }
+        return {
+          // Keep users.id as 'id' for chat/hire flows
+          'id': (user['id'] ?? m['user_id'])?.toString(),
+          'user_id': (m['user_id'] ?? user['id'])?.toString(),
+          'sitter_id': m['id']?.toString(), // sitters.id
+          'name': (user['name'] ?? 'Sitter').toString(),
+          'is_available': m['is_available'],
+          // Map hourly_rate -> rate_per_hour so UI stays the same
+          'rate_per_hour': m['hourly_rate'],
+          'rating': avgRating, // may be null if no reviews
+        };
+      }).toList();
+
+      setState(() => availableSitters = mapped);
     } catch (e) {
       print('❌ fetchAvailableSitters ERROR: $e');
     }
@@ -210,13 +242,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // NEW: fetch latest sitter reviews
   Future<void> fetchSitterReviews() async {
     try {
-      final res = await supabase
+      // Try resolving sitters.id from current user's id (works when accessible)
+      final sitterId = await _resolveSitterIdForReview(widget.userId);
+
+      if (sitterId != null) {
+        final res = await supabase
+            .from('sitter_reviews')
+            .select()
+            .eq('sitter_id', sitterId)
+            .order('created_at', ascending: false)
+            .limit(10);
+        setState(() => sitterReviews = res ?? []);
+        return;
+      }
+
+      // Fallback: join sitter_reviews -> sitters and filter by sitters.user_id
+      // Useful when direct reads to sitters are restricted by RLS.
+      final fallback = await supabase
           .from('sitter_reviews')
-          .select()
-          .eq('sitter_id', widget.userId)
+          .select('id, rating, comment, created_at, owner_name, sitters!inner(user_id)')
+          .eq('sitters.user_id', widget.userId)
           .order('created_at', ascending: false)
           .limit(10);
-      setState(() => sitterReviews = res ?? []);
+      setState(() => sitterReviews = fallback ?? []);
     } catch (e) {
       print('❌ fetchSitterReviews ERROR: $e');
       setState(() => sitterReviews = []);
@@ -236,6 +284,87 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         setState(() => summary = summaryRes);
       }
     } catch (_) {}
+  }
+
+  // Fetch reviews for a sitter by their users.id (resolves to sitters.id, with join fallback)
+  Future<List<dynamic>> _fetchReviewsForSitterUser(String sitterUserId) async {
+    try {
+      final sitterId = await _resolveSitterIdForReview(sitterUserId);
+      if (sitterId != null) {
+        final res = await supabase
+            .from('sitter_reviews')
+            .select()
+            .eq('sitter_id', sitterId)
+            .order('created_at', ascending: false)
+            .limit(20);
+        return (res as List?) ?? [];
+      }
+      // Fallback join via sitters.user_id
+      final res = await supabase
+          .from('sitter_reviews')
+          .select('id, rating, comment, created_at, owner_name, sitters!inner(user_id)')
+          .eq('sitters.user_id', sitterUserId)
+          .order('created_at', ascending: false)
+          .limit(20);
+      return (res as List?) ?? [];
+    } catch (e) {
+      print('❌ _fetchReviewsForSitterUser ERROR: $e');
+      return [];
+    }
+  }
+
+  // Show a modal bottom sheet with the sitter's reviews
+  Future<void> _showSitterReviewsModal(Map<String, dynamic> sitter) async {
+    final sitterUserId = sitter['id']?.toString();
+    if (sitterUserId == null || sitterUserId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid sitter id.')));
+      return;
+    }
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (context) {
+        return FractionallySizedBox(
+          heightFactor: 0.7,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
+                ),
+                Text('Reviews for ${sitter['name'] ?? 'Sitter'}',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed)),
+                SizedBox(height: 12),
+                Expanded(
+                  child: FutureBuilder<List<dynamic>>(
+                    future: _fetchReviewsForSitterUser(sitterUserId),
+                    builder: (context, snap) {
+                      if (snap.connectionState != ConnectionState.done) {
+                        return Center(child: CircularProgressIndicator(color: deepRed));
+                      }
+                      final items = snap.data ?? [];
+                      if (items.isEmpty) {
+                        return Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600])));
+                      }
+                      return ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => SizedBox(height: 12),
+                        itemBuilder: (_, i) => _buildReviewCardFromData(items[i] as Map<String, dynamic>),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   // Realtime: listen for INSERT/UPDATE/DELETE on sitting_jobs and refresh view when relevant
@@ -468,6 +597,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       for (final row in [...listA, ...listB]) {
         final id = row['id']?.toString();
         if (id != null && id.isNotEmpty) {
+          // FIX: properly cast row to Map<String, dynamic>
           byId[id] = Map<String, dynamic>.from(row as Map);
         }
       }
@@ -486,100 +616,143 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       isScrollControlled: true,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom,
-            left: 16, right: 16, top: 16,
-          ),
-          child: Wrap(
-            children: [
-              Center(
-                child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
+        // Make the bottom sheet stateful so the Slider works properly
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                left: 16, right: 16, top: 16,
               ),
-              Text('Finish Job & Review', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed)),
-              SizedBox(height: 12),
-              Row(
+              child: Wrap(
                 children: [
-                  Text('Rating:', style: TextStyle(color: deepRed)),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Slider(
-                      min: 1, max: 5, divisions: 4, // integer steps only
-                      label: rating.round().toString(),
-                      value: rating,
-                      onChanged: (v) => setState(() => rating = v),
+                  Center(
+                    child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
+                  ),
+                  Text('Finish Job & Review', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed)),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Text('Rating:', style: TextStyle(color: deepRed)),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Slider(
+                          min: 1, max: 5, divisions: 4,
+                          label: rating.round().toString(),
+                          value: rating,
+                          onChanged: (v) => setModalState(() => rating = v),
+                        ),
+                      ),
+                      Text(rating.round().toString()),
+                    ],
+                  ),
+                  SizedBox(height: 8),
+                  TextField(
+                    maxLines: 3,
+                    decoration: InputDecoration(
+                      hintText: 'Optional comment',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      filled: true, fillColor: Colors.white,
+                    ),
+                    onChanged: (v) => setModalState(() => comment = v),
+                  ),
+                  SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      onPressed: () async {
+                        Navigator.of(ctx).pop();
+                        try {
+                          // 1) complete job
+                          await _updateJobStatus(job['id'].toString(), 'Completed');
+
+                          // 2) sitter_reviews.sitter_id must be sitters.id.
+                          final sitterUserId = job['sitter_id']?.toString();
+                          final sitterIdForReview = sitterUserId == null
+                              ? null
+                              : await _resolveSitterIdForReview(sitterUserId);
+
+                          if (sitterIdForReview == null) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Cannot post review: sitter profile not found.')),
+                              );
+                            }
+                            return;
+                          }
+
+                          // Force integer rating and request the inserted id back for verification.
+                          final inserted = await supabase
+                              .from('sitter_reviews')
+                              .insert({
+                                'sitter_id': sitterIdForReview,
+                                'reviewer_id': widget.userId,                    // users.id (uuid)
+                                'rating': rating.round(),                        // strict int 1..5
+                                'comment': comment.trim().isEmpty ? null : comment.trim(),
+                                'owner_name': (userName.isEmpty ? 'Pet Owner' : userName),
+                              })
+                              .select('id')
+                              .single();
+
+                          // Optional: refresh reviews (useful if current user is the sitter)
+                          await fetchSitterReviews();
+
+                          if (mounted) {
+                            final id = (inserted is Map && inserted['id'] != null) ? inserted['id'].toString() : '';
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(id.isEmpty ? 'Job finished and review posted.' : 'Review posted (id: $id).')),
+                            );
+                          }
+                        } catch (e) {
+                          // Show detailed error for easier debugging (e.g., FK violations, privileges)
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Finish failed: $e')),
+                            );
+                          }
+                          print('❌ Review insert failed: $e');
+                        }
+                      },
+                      child: Text('Submit'),
                     ),
                   ),
-                  Text(rating.round().toString()),
+                  SizedBox(height: 12),
                 ],
               ),
-              SizedBox(height: 8),
-              TextField(
-                maxLines: 3,
-                decoration: InputDecoration(
-                  hintText: 'Optional comment',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                  filled: true, fillColor: Colors.white,
-                ),
-                onChanged: (v) => comment = v,
-              ),
-              SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                  onPressed: () async {
-                    // Close the modal immediately
-                    Navigator.of(ctx).pop();
-                    try {
-                      // 1) complete job
-                      await _updateJobStatus(job['id'].toString(), 'Completed');
-
-                      // 2) resolve sitter_id for FK and insert review with integer rating + reviewer_id
-                      final sitterIdForReview = await _resolveSitterIdForReview(job['sitter_id'].toString());
-                      await supabase.from('sitter_reviews').insert({
-                        'sitter_id': sitterIdForReview,
-                        'reviewer_id': widget.userId,
-                        'rating': rating.round(),
-                        'comment': comment.isEmpty ? null : comment,
-                        'owner_name': userName,
-                      });
-
-                      await fetchOwnerActiveJobs();
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Job finished and review posted.')),
-                        );
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Finish failed: $e')),
-                        );
-                      }
-                    }
-                  },
-                  child: Text('Submit'),
-                ),
-              ),
-              SizedBox(height: 12),
-            ],
-          ),
+            );
+          },
         );
       },
     );
   }
 
-  // Resolve sitter_id for sitter_reviews FK (tries sitters.id then sitters.user_id)
-  Future<String> _resolveSitterIdForReview(String sitterId) async {
+  // Resolve sitter_id for sitter_reviews FK.
+  // Accepts either a users.id (preferred) or a sitters.id and returns sitters.id.
+  Future<String?> _resolveSitterIdForReview(String sitterIdentifier) async {
     try {
-      final s1 = await supabase.from('sitters').select('id').eq('id', sitterId).maybeSingle();
-      if (s1 != null && s1['id'] != null) return s1['id'].toString();
-      final s2 = await supabase.from('sitters').select('id').eq('user_id', sitterId).maybeSingle();
-      if (s2 != null && s2['id'] != null) return s2['id'].toString();
+      // Prefer mapping from user_id -> sitters.id
+      final viaUser = await supabase
+          .from('sitters')
+          .select('id')
+          .eq('user_id', sitterIdentifier)
+          .maybeSingle();
+      if (viaUser != null && viaUser['id'] != null) {
+        return viaUser['id'].toString();
+      }
+
+      // If the identifier is already a sitters.id, allow it
+      final viaId = await supabase
+          .from('sitters')
+          .select('id')
+          .eq('id', sitterIdentifier)
+          .maybeSingle();
+      if (viaId != null && viaId['id'] != null) {
+        return viaId['id'].toString();
+      }
     } catch (_) {}
-    return sitterId; // fallback
+    return null; // explicit null so callers can handle properly
   }
 
   // New: Greeting header with gradient and time-aware salutation
@@ -841,8 +1014,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   controller: _sitterTabController,
                   children: [
                     _buildSitterList(availableSitters),
-                    _buildSitterList(availableSitters.where((s) => s['is_available'] == true).toList()),
-                    _buildSitterList(availableSitters.where((s) => (s['rating'] ?? 0) >= 4.5).toList()),
+                    // Available Now = is_available true from DB
+                    _buildSitterList(
+                      availableSitters.where((s) => s['is_available'] == true).toList(),
+                    ),
+                    // Top Rated = avg rating >= 4.5 (nulls excluded)
+                    _buildSitterList(
+                      availableSitters.where((s) {
+                        final r = s['rating'];
+                        return r is num && r >= 4.5;
+                      }).toList(),
+                    ),
                   ],
                 ),
               ),
@@ -862,6 +1044,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         itemCount: sitters.length,
         itemBuilder: (context, index) {
           final sitter = sitters[index];
+          final num? ratingNum = sitter['rating'] == null ? null : (sitter['rating'] as num);
+          final bool isAvail = sitter['is_available'] == true;
+          final dynamic rateVal = sitter['rate_per_hour'];
+
           return Card(
             margin: EdgeInsets.only(bottom: 16),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -891,16 +1077,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               children: [
                                 Icon(Icons.star, color: Colors.orange, size: 18),
                                 SizedBox(width: 4),
-                                Text('${sitter['rating']?.toStringAsFixed(1) ?? '4.5'}'),
+                                Text(ratingNum == null ? '—' : ratingNum.toStringAsFixed(1)),
                               ],
                             ),
                             Text(
-                              'Status: ${sitter['is_available'] == true ? 'Available Now' : 'Busy'}',
-                              style: TextStyle(
-                                color: sitter['is_available'] == true ? Colors.green[700] : Colors.grey,
-                              ),
+                              'Status: ${isAvail ? 'Available Now' : 'Busy'}',
+                              style: TextStyle(color: isAvail ? Colors.green[700] : Colors.grey),
                             ),
-                            Text('Rate: ₱${sitter['rate_per_hour'] ?? 250} / hour'),
+                            Text(
+                              rateVal == null
+                                  ? 'Rate: —'
+                                  : 'Rate: ₱${(rateVal is num) ? rateVal.toStringAsFixed(2) : rateVal.toString()} / hour',
+                            ),
                           ],
                         ),
                       ),
@@ -912,21 +1100,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       SizedBox(
                         width: 180,
                         child: ElevatedButton.icon(
-                          onPressed: () {
-                            showModalBottomSheet(
-                              context: context,
-                              isScrollControlled: true,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-                              ),
-                              builder: (context) => FractionallySizedBox(
-                                heightFactor: 0.85,
-                                child: CalendarScreen(sitter: sitter),
-                              ),
-                            );
-                          },
-                          icon: Icon(Icons.calendar_today),
-                          label: Text('View Schedule'),
+                          onPressed: () => _showSitterReviewsModal(sitter),
+                          icon: Icon(Icons.reviews),
+                          label: Text('View Reviews'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: deepRed,
                             foregroundColor: Colors.white,
@@ -1015,116 +1191,151 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _sectionWithBorder(
           title: "Assigned Jobs",
           child: Column(
-            children: sittingJobs.take(3).map((job) {
-              final petName = job['pets']?['name'] ?? 'Pet';
-              final petType = job['pets']?['type'] ?? 'Pet';
-              final startTime = job['start_date'] ?? 'Time not set';
-              final status = (job['status'] ?? 'Pending').toString();
-              final String? ownerId = job['pets']?['owner_id'] as String?;
-              final String jobId = job['id'].toString();
+            children: [
+              // Filter controls
+              Row(
+                children: [
+                  Text('Filter:', style: TextStyle(color: deepRed, fontWeight: FontWeight.w600)),
+                  SizedBox(width: 8),
+                  DropdownButton<String>(
+                    value: _jobsStatusFilter,
+                    items: _jobStatusOptions
+                        .map((o) => DropdownMenuItem<String>(value: o, child: Text(o)))
+                        .toList(),
+                    onChanged: (v) => setState(() => _jobsStatusFilter = v ?? 'All'),
+                  ),
+                ],
+              ),
+              SizedBox(height: 8),
 
-              return Card(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                elevation: 3,
-                margin: EdgeInsets.symmetric(vertical: 6),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    children: [
-                      ListTile(
-                        leading: Icon(Icons.pets, color: deepRed),
-                        title: Text('$petName ($petType)'),
-                        subtitle: Text('Start: $startTime'),
-                        trailing: Container(
-                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: status == 'Active'
-                                ? Colors.green.withOpacity(0.15)
-                                : status == 'Cancelled'
-                                    ? Colors.red.withOpacity(0.15)
-                                    : status == 'Completed'
-                                        ? Colors.blue.withOpacity(0.15)
-                                        : Colors.orange.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            status,
-                            style: TextStyle(
-                              color: status == 'Active'
-                                  ? Colors.green[800]
-                                  : status == 'Cancelled'
-                                      ? Colors.red[800]
-                                      : status == 'Completed'
-                                          ? Colors.blue[800]
-                                          : Colors.orange[800],
-                              fontWeight: FontWeight.w600,
+              // Apply filter to jobs
+              Builder(builder: (context) {
+                final sel = _jobsStatusFilter.toLowerCase();
+                final filtered = _jobsStatusFilter == 'All'
+                    ? sittingJobs
+                    : sittingJobs.where((j) => (j['status'] ?? '').toString().toLowerCase() == sel).toList();
+
+                if (filtered.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text('No jobs for selected filter.', style: TextStyle(color: Colors.grey[700])),
+                  );
+                }
+
+                return Column(
+                  // Replace: sittingJobs.take(3) -> filtered (show all matching)
+                  children: filtered.map((job) {
+                    final petName = job['pets']?['name'] ?? 'Pet';
+                    final petType = job['pets']?['type'] ?? 'Pet';
+                    final startTime = job['start_date'] ?? 'Time not set';
+                    final status = (job['status'] ?? 'Pending').toString();
+                    final String? ownerId = job['pets']?['owner_id'] as String?;
+                    final String jobId = job['id'].toString();
+
+                    return Card(
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 3,
+                      margin: EdgeInsets.symmetric(vertical: 6),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          children: [
+                            ListTile(
+                              leading: Icon(Icons.pets, color: deepRed),
+                              title: Text('$petName ($petType)'),
+                              subtitle: Text('Start: $startTime'),
+                              trailing: Container(
+                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: status == 'Active'
+                                      ? Colors.green.withOpacity(0.15)
+                                      : status == 'Cancelled'
+                                          ? Colors.red.withOpacity(0.15)
+                                          : status == 'Completed'
+                                              ? Colors.blue.withOpacity(0.15)
+                                              : Colors.orange.withOpacity(0.15),
+                                ),
+                                child: Text(
+                                  status,
+                                  style: TextStyle(
+                                    color: status == 'Active'
+                                        ? Colors.green[800]
+                                        : status == 'Cancelled'
+                                            ? Colors.red[800]
+                                            : status == 'Completed'
+                                                ? Colors.blue[800]
+                                                : Colors.orange[800],
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
+                            SizedBox(height: 4),
+                            if (status == 'Pending')
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _updateJobStatus(jobId, 'Active'),
+                                      icon: Icon(Icons.check),
+                                      label: Text('Accept'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: deepRed,
+                                        foregroundColor: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: () => _updateJobStatus(jobId, 'Cancelled'),
+                                      icon: Icon(Icons.close, color: deepRed),
+                                      label: Text('Decline', style: TextStyle(color: deepRed)),
+                                      style: OutlinedButton.styleFrom(side: BorderSide(color: deepRed)),
+                                    ),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: ownerId != null
+                                          ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
+                                          : null,
+                                      icon: Icon(Icons.message),
+                                      label: Text('Chat'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: coral,
+                                        foregroundColor: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    onPressed: ownerId != null
+                                        ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
+                                        : null,
+                                    icon: Icon(Icons.message),
+                                    label: Text('Chat'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: coral,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                      SizedBox(height: 4),
-                      if (status == 'Pending')
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () => _updateJobStatus(jobId, 'Active'),
-                                icon: Icon(Icons.check),
-                                label: Text('Accept'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
-                                  foregroundColor: Colors.white,
-                                ),
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _updateJobStatus(jobId, 'Cancelled'),
-                                icon: Icon(Icons.close, color: deepRed),
-                                label: Text('Decline', style: TextStyle(color: deepRed)),
-                                style: OutlinedButton.styleFrom(side: BorderSide(color: deepRed)),
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: ownerId != null
-                                    ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
-                                    : null,
-                                icon: Icon(Icons.message),
-                                label: Text('Chat'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: coral,
-                                  foregroundColor: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      else
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: ownerId != null
-                                  ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
-                                  : null,
-                              icon: Icon(Icons.message),
-                              label: Text('Chat'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: coral,
-                                foregroundColor: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+                    );
+                  }).toList(),
+                );
+              }),
+            ],
           ),
         ),
 
@@ -1226,13 +1437,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         children: [
           Row(children: _buildRatingStars(ratingNum)),
           SizedBox(height: 8),
-          Expanded(
-            child: Text(
-              comment.isEmpty ? "(No comment)" : '"$comment"',
-              style: TextStyle(fontStyle: FontStyle.italic),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
+          // Removed Expanded to prevent unbounded height errors inside ListView items
+          Text(
+            comment.isEmpty ? "(No comment)" : '"$comment"',
+            style: TextStyle(fontStyle: FontStyle.italic),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
           ),
           SizedBox(height: 8),
           Text('– $owner', style: TextStyle(color: Colors.grey[600])),
