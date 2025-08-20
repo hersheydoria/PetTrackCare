@@ -1176,14 +1176,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // 👩‍⚕️ Pet Sitter Home
   Widget _buildSitterHome() {
-    // derive today’s jobs from sittingJobs (based on start_date)
-    final today = DateTime.now();
-    final todayStr = "${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}";
-    final todaysJobs = sittingJobs.where((job) {
-      final sd = job['start_date']?.toString();
-      return sd == todayStr;
-    }).toList();
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1387,23 +1379,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
         SizedBox(height: 24),
 
-        // 🗓️ Today’s Schedule (data-driven)
-        _sectionWithBorder(
-          title: "Today’s Schedule",
-          child: todaysJobs.isEmpty
-              ? Text("No jobs scheduled for today.", style: TextStyle(color: Colors.grey[700]))
-              : Column(
-                  children: todaysJobs.map((job) {
-                    final petName = job['pets']?['name'] ?? 'Pet';
-                    final start = job['start_date']?.toString() ?? todayStr;
-                    final task = (job['status'] ?? 'Scheduled').toString();
-                    return _buildScheduleItem(start, petName, task);
-                  }).toList(),
-                ),
-        ),
-
-        SizedBox(height: 24),
-
         // 🧾 Completed Jobs (data-driven)
         _sectionWithBorder(
           title: "Completed Jobs",
@@ -1512,18 +1487,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _sectionTitle(String title) {
     return Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: coral));
-  }
-
-  Widget _buildScheduleItem(String time, String petName, String task) {
-    return Container(
-      margin: EdgeInsets.symmetric(vertical: 6),
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: peach,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text('$time – $petName ($task)', style: TextStyle(color: deepRed)),
-    );
   }
 
   // NEW: load sitter availability from sitters by user_id
