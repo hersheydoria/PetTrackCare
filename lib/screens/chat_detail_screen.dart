@@ -1024,5 +1024,3 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     await markMessagesAsSeen();
   }
 }
-  }
-}
