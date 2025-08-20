@@ -334,10 +334,12 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                 return comment;
               }).toList();
 
-              // Sort comments by created_at date (newest first)
+              // Sort comments by created_at date (newest first) - SAFE parsing
               comments.sort((a, b) {
-                final dateA = DateTime.parse(a['created_at'] as String);
-                final dateB = DateTime.parse(b['created_at'] as String);
+                final dateA = DateTime.tryParse((a['created_at'] ?? '').toString()) ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                final dateB = DateTime.tryParse((b['created_at'] ?? '').toString()) ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
                 return dateB.compareTo(dateA);
               });
             }
@@ -505,19 +507,9 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         replyPage[commentId] = 1;
         replyHasMore[commentId] = true;
 
-        // Find the parent postId for this comment and increment its comment count
-        String? parentPostId;
-        postComments.forEach((pId, comments) {
-          if (comments.any((c) => c['id'].toString() == commentId)) {
-            parentPostId = pId;
-          }
-        });
-        if (parentPostId != null) {
-          // Add a dummy object to force UI update (or trigger a refresh)
-          postComments[parentPostId!]!.add({"reply_dummy": true});
-          // Update the comment count in the UI
-          _updateCommentCountInUI(parentPostId!);
-        }
+        // Removed: dummy insert and forced comment count updates for replies
+        // Replies do not change top-level comment counts
+
         // Hide the reply input after posting
         showReplyInput[commentId] = false;
       });
@@ -1120,7 +1112,10 @@ void showEditPostModal(Map post) {
                                                         ),
                                                         SizedBox(width: 8),
                                                         Text(
-                                                          _getTimeAgo(DateTime.parse(comment['created_at'])),
+                                                          _getTimeAgo(
+                                                            DateTime.tryParse((comment['created_at'] ?? '').toString()) ??
+                                                            DateTime.now(),
+                                                          ),
                                                           style: TextStyle(fontSize: 12, color: Colors.grey),
                                                         ),
                                                       ],
@@ -1213,14 +1208,19 @@ void showEditPostModal(Map post) {
                                                                   .delete()
                                                                   .eq('id', commentId);
                                                                 setState(() {
-                                                                  postComments[postId]!.removeAt(commentIndex);
-                                                                  commentCounts[postId] = postComments[postId]!.length;
+                                                                  // Remove from original storage so future renders stay clean
+                                                                  postComments[postId]?.removeWhere((c) =>
+                                                                      (c is Map && (c as Map)['id']?.toString() == commentId));
+                                                                  commentCounts[postId] = postComments[postId]?.length ?? 0;
                                                                   commentLoading[commentId] = false;
                                                                 });
                                                               } catch (e) {
                                                                 print('Error deleting comment: $e');
                                                                 setState(() {
-                                                                  postComments[postId]!.insert(commentIndex, deletedComment);
+                                                                  // Rollback visualization only
+                                                                  if (!postComments[postId]!.contains(deletedComment)) {
+                                                                    postComments[postId]!.insert(commentIndex, deletedComment);
+                                                                  }
                                                                   commentCounts[postId] = postComments[postId]!.length;
                                                                   commentLoading[commentId] = false;
                                                                 });
@@ -1348,7 +1348,7 @@ void showEditPostModal(Map post) {
                                                               children: [
                                                                 Text(r['users']?['name'] ?? 'Unknown', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                                                                 Text(
-                                                                  _getTimeAgo(DateTime.tryParse(r['created_at'] ?? '') ?? DateTime.now()),
+                                                                  _getTimeAgo(DateTime.tryParse(r['created_at']) ?? DateTime.now()),
                                                                   style: TextStyle(fontSize: 10, color: Colors.grey),
                                                                 ),
                                                                 if (r['user_id'] == widget.userId)
@@ -1517,7 +1517,7 @@ void showEditPostModal(Map post) {
                       (type) => DropdownMenuItem(
                         value: type,
                         child: Text(
-                          type.capitalizeEachWord(),
+                          type[0].toUpperCase() + type.substring(1),
                           style: TextStyle(color: Colors.black),
                         ),
                       ),
@@ -1535,7 +1535,7 @@ void showEditPostModal(Map post) {
                     return Align(
                       alignment: Alignment.center,
                       child: Text(
-                        type.capitalizeEachWord(),
+                        type[0].toUpperCase() + type.substring(1),
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                       ),
                     );
