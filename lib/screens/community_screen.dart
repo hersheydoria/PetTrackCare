@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'notification_screen.dart';
 
 Map<String, bool> likedPosts = {};
@@ -12,6 +13,15 @@ Map<String, int> commentCounts = {};
 Map<String, List<Map<String, dynamic>>> postComments = {};
 Map<String, bool> likedComments = {};
 Map<String, TextEditingController> editCommentControllers = {};
+Map<String, bool> commentLoading = {}; // commentId -> loading state
+Map<String, bool> showReplyInput = {};
+Map<String, TextEditingController> replyControllers = {};
+Map<String, List<Map<String, dynamic>>> commentReplies = {};
+Map<String, int> replyPage = {};
+Map<String, bool> replyHasMore = {};
+Map<String, bool> locallyUpdatedPosts = {}; // Track posts with local comment updates
+const int replyDisplayThreshold = 3; // only show "View more" when replies >= threshold
+
 
 const deepRed = Color(0xFFB82132);
 const lightBlush = Color(0xFFF6DED8);
@@ -27,28 +37,239 @@ class CommunityScreen extends StatefulWidget {
   _CommunityScreenState createState() => _CommunityScreenState();
 }
 
-class _CommunityScreenState extends State<CommunityScreen> {
+class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   List<dynamic> posts = [];
   bool isLoading = false;
   String selectedFilter = 'all';
   Map<String, bool> showCommentInput = {};
+  late ScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
-    // Reset all comment-related state when screen is initialized
-    showCommentInput.clear();
-    commentControllers.clear();
-    postComments.clear();
-    commentCounts.clear();
+    _scrollController = ScrollController();
     fetchPosts();
+    loadCommentCounts();
+    loadCommentReplies(); // Load replies on initialization
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Completely remove automatic refresh when navigating back
+    // The user can manually refresh if they want to see new posts
   }
 
   @override
   void dispose() {
     // Clean up the state when the widget is disposed
+    _scrollController.dispose();
     showCommentInput.clear();
     super.dispose();
+  }
+
+  // Save comment counts to persistent storage
+  Future<void> saveCommentCounts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final Map<String, String> countsToSave = {};
+      commentCounts.forEach((postId, count) {
+        countsToSave[postId] = count.toString();
+      });
+      await prefs.setString('comment_counts_${widget.userId}', 
+          countsToSave.entries.map((e) => '${e.key}:${e.value}').join(','));
+      print('Saved comment counts: $countsToSave');
+    } catch (e) {
+      print('Error saving comment counts: $e');
+    }
+  }
+
+  // Load comment counts from persistent storage
+  Future<void> loadCommentCounts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('comment_counts_${widget.userId}');
+      if (saved != null && saved.isNotEmpty) {
+        final Map<String, int> loadedCounts = {};
+        saved.split(',').forEach((entry) {
+          final parts = entry.split(':');
+          if (parts.length == 2) {
+            loadedCounts[parts[0]] = int.tryParse(parts[1]) ?? 0;
+          }
+        });
+        commentCounts.addAll(loadedCounts);
+        print('Loaded comment counts: $loadedCounts');
+      }
+    } catch (e) {
+      print('Error loading comment counts: $e');
+    }
+  }
+
+  // Save comment replies to persistent storage
+  Future<void> saveCommentReplies() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final Map<String, String> repliesToSave = {};
+      commentReplies.forEach((commentId, replies) {
+        repliesToSave[commentId] = replies
+            .map((reply) => '${reply['userId']}:${reply['text']}')
+            .join('|');
+      });
+      await prefs.setString('comment_replies_${widget.userId}', 
+          repliesToSave.entries.map((e) => '${e.key}=>${e.value}').join(','));
+      print('Saved comment replies: $repliesToSave');
+    } catch (e) {
+      print('Error saving comment replies: $e');
+    }
+  }
+
+  // Load comment replies from persistent storage
+  Future<void> loadCommentReplies() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('comment_replies_${widget.userId}');
+      if (saved != null && saved.isNotEmpty) {
+        final Map<String, List<Map<String, dynamic>>> loadedReplies = {};
+        saved.split(',').forEach((entry) {
+          final parts = entry.split('=>');
+          if (parts.length == 2) {
+            final commentId = parts[0];
+            final replies = parts[1]
+                .split('|')
+                .map((reply) {
+                  final replyParts = reply.split(':');
+                  if (replyParts.length == 2) {
+                    return {
+                      'userId': replyParts[0],
+                      'text': replyParts[1],
+                    };
+                  }
+                  return null;
+                })
+                .where((reply) => reply != null)
+                .toList();
+            loadedReplies[commentId] = List<Map<String, dynamic>>.from(replies);
+          }
+        });
+        commentReplies.addAll(loadedReplies);
+        print('Loaded comment replies: $loadedReplies');
+      }
+    } catch (e) {
+      print('Error loading comment replies: $e');
+    }
+  }
+
+  // Handle adding a new comment with proper state management
+  Future<void> addComment(String postId, String commentText) async {
+    print('ADDCOMMENT CALLED - PostId: $postId, Text: "$commentText"');
+    if (commentText.trim().isEmpty) {
+      print('ADDCOMMENT ABORTED - Empty comment text');
+      return;
+    }
+
+    try {
+      print('ADDCOMMENT - Starting database insertion...');
+      // Insert comment into database
+      final newComment = await Supabase.instance.client
+          .from('comments')
+          .insert({
+        'post_id': postId,
+        'user_id': widget.userId,
+        'content': commentText,
+      }).select('id, content, created_at, user_id').single();
+
+      print('Comment inserted: $newComment');
+
+      // Get user data
+      final userData = await Supabase.instance.client
+          .from('users')
+          .select('name, profile')
+          .eq('id', widget.userId)
+          .single();
+
+      print('User data fetched: $userData');
+
+      // Combine comment and user data
+      final fullComment = {
+        ...Map<String, dynamic>.from(newComment),
+        'users': userData,
+        'comment_likes': []
+      };
+
+      setState(() {
+        if (postComments[postId] == null) {
+          postComments[postId] = [];
+        }
+        postComments[postId]!.insert(0, fullComment);
+  commentCounts[postId] = postComments[postId]!.length; // Always use postComments[postId]?.length
+        // Mark this post as locally updated
+        locallyUpdatedPosts[postId] = true;
+        print('COMMENT ADDED - Post $postId marked as locally updated with ${commentCounts[postId]} comments');
+        print('COMMENT ADDED - commentCounts map: $commentCounts');
+        print('COMMENT ADDED - postComments length for $postId: ${postComments[postId]?.length}');
+        print('COMMENT ADDED - Full comment: $fullComment');
+      });
+
+      // Save the updated counts to persistent storage
+      await saveCommentCounts();
+
+      // Force a UI rebuild to ensure comment count is updated
+      _updateCommentCountInUI(postId);
+
+      // Clear the input
+      commentControllers[postId]?.clear();
+      
+      // Keep the comment input open so user can see the new comment
+      // Don't automatically hide it
+      // showCommentInput[postId] = false;
+
+    } catch (e) {
+      print('Error posting comment: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to post comment. Please try again.'),
+          duration: Duration(seconds: 3),
+        )
+      );
+      // Restore the comment text if posting failed
+      commentControllers[postId]?.text = commentText;
+    }
+  }
+
+  // Force refresh all data (clears local state)
+  Future<void> forceRefreshPosts() async {
+    // Clear persisted comment counts
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('comment_counts_${widget.userId}');
+    
+    setState(() {
+      showCommentInput.clear();
+      postComments.clear();
+      commentCounts.clear();
+      locallyUpdatedPosts.clear();
+    });
+    await fetchPosts();
+  }
+
+  // Get comment count for a post with fallback logic
+  int _getCommentCount(String postId) {
+    // Always get the most up-to-date count
+    final count = commentCounts[postId];
+    final comments = postComments[postId];
+    final result = count ?? comments?.length ?? 0;
+    print('Getting comment count for post $postId: $result (from commentCounts: $count, from postComments: ${comments?.length})');
+    return result;
+  }
+
+  // Immediately update comment count in UI
+  void _updateCommentCountInUI(String postId) {
+    setState(() {
+      final currentComments = postComments[postId];
+      if (currentComments != null) {
+        commentCounts[postId] = currentComments.length;
+        print('UI UPDATED - Comment count for post $postId set to ${commentCounts[postId]}');
+      }
+    });
   }
 
   Future<void> fetchPosts() async {
@@ -120,17 +341,71 @@ class _CommunityScreenState extends State<CommunityScreen> {
                 return dateB.compareTo(dateA);
               });
             }
-            postComments[postId] = comments;
-            print('Processed ${comments.length} comments for post $postId');
+            
+            // Preserve existing comment data - only update if fetched count is higher
+            final existingCount = commentCounts[postId];
+            final fetchedCount = comments.length;
+            
+            // Only update if we don't have a local count or if fetched count is higher
+            if (existingCount == null || fetchedCount > existingCount) {
+              postComments[postId] = comments;
+              commentCounts[postId] = fetchedCount;
+              print('Updated comment data for post $postId: $fetchedCount comments');
+            } else {
+              // Keep existing count but update postComments if we don't have it
+              if (postComments[postId] == null) {
+                postComments[postId] = comments;
+              }
+              // Ensure the count is properly set even if we're preserving
+              commentCounts[postId] = existingCount;
+              print('Preserved existing comment count for post $postId: $existingCount comments (fetched $fetchedCount)');
+            }
           } catch (e) {
             print('Error processing comments for post $postId: $e');
-            postComments[postId] = [];
+            // Only clear if there's no existing data to preserve
+            if (postComments[postId] == null) {
+              postComments[postId] = [];
+            }
           }
 
           // Initialize comment input state
           showCommentInput[postId] = showCommentInput[postId] ?? false;
+          // Initialize reply input state
+          showReplyInput[postId] = showReplyInput[postId] ?? false;
+          replyControllers.putIfAbsent(postId, () => TextEditingController());
         }
       });
+
+      // After posts and comments are processed, prefetch replies for all comments so they persist across restarts
+      try {
+        final allCommentIds = <String>{};
+        postComments.forEach((postId, comments) {
+          for (var c in comments) {
+            final cid = c['id']?.toString();
+            if (cid != null) allCommentIds.add(cid);
+          }
+        });
+
+        if (allCommentIds.isNotEmpty) {
+          final commentIdList = allCommentIds.toList();
+          final responses = await Future.wait(commentIdList.map((cid) async {
+            final res = await Supabase.instance.client
+                .from('replies')
+                .select('*, users!replies_user_id_fkey(name, profile)')
+                .eq('comment_id', cid)
+                .order('created_at', ascending: false);
+            return res as List<dynamic>;
+          }));
+
+          for (var i = 0; i < commentIdList.length; i++) {
+            final cid = commentIdList[i];
+            final res = responses[i];
+            commentReplies[cid] = List<Map<String, dynamic>>.from(res.map((r) => Map<String, dynamic>.from(r)));
+          }
+        }
+      } catch (e) {
+        print('Error prefetching replies: $e');
+      }
     } catch (e) {
       print('Error fetching posts: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -166,6 +441,133 @@ class _CommunityScreenState extends State<CommunityScreen> {
     } catch (e) {
       print('Upload failed: $e');
       return null;
+    }
+  }
+
+  // Fetch replies with simple pagination. Page starts at 0. limit controls items per page.
+  Future<void> fetchRepliesForComment(String commentId, {int limit = 5, bool refresh = false}) async {
+    try {
+      final currentPage = refresh ? 0 : (replyPage[commentId] ?? 0);
+
+      final response = await Supabase.instance.client
+          .from('replies')
+          .select('*, users!replies_user_id_fkey(name, profile)')
+          .eq('comment_id', commentId)
+          .order('created_at', ascending: false)
+          .range(currentPage * limit, currentPage * limit + limit - 1);
+
+      final List<dynamic> rows = response as List<dynamic>;
+
+      setState(() {
+        if (refresh) {
+          commentReplies[commentId] = List<Map<String, dynamic>>.from(rows.map((r) => Map<String, dynamic>.from(r)));
+          replyPage[commentId] = 1;
+        } else {
+          commentReplies.putIfAbsent(commentId, () => []);
+          commentReplies[commentId]!.addAll(rows.map((r) => Map<String, dynamic>.from(r)));
+          replyPage[commentId] = (replyPage[commentId] ?? 0) + 1;
+        }
+
+        // If fewer rows than limit returned, no more pages
+        replyHasMore[commentId] = rows.length >= limit;
+      });
+    } catch (e) {
+      print('Error fetching replies for $commentId: $e');
+    }
+  }
+
+  Future<void> postReply(String commentId, String content) async {
+    if (content.trim().isEmpty) return;
+    try {
+      final newReply = await Supabase.instance.client
+          .from('replies')
+          .insert({
+        'comment_id': commentId,
+        'user_id': widget.userId,
+        'content': content,
+      }).select('id, content, created_at, user_id').single();
+
+      final userData = await Supabase.instance.client
+          .from('users')
+          .select('name, profile')
+          .eq('id', widget.userId)
+          .single();
+
+      final fullReply = {
+        ...Map<String, dynamic>.from(newReply),
+        'users': userData,
+      };
+
+      setState(() {
+        commentReplies.putIfAbsent(commentId, () => []);
+        commentReplies[commentId]!.insert(0, fullReply);
+        // reset pagination so next fetch includes this new reply if user views more
+        replyPage[commentId] = 1;
+        replyHasMore[commentId] = true;
+
+        // Find the parent postId for this comment and increment its comment count
+        String? parentPostId;
+        postComments.forEach((pId, comments) {
+          if (comments.any((c) => c['id'].toString() == commentId)) {
+            parentPostId = pId;
+          }
+        });
+        if (parentPostId != null) {
+          // Add a dummy object to force UI update (or trigger a refresh)
+          postComments[parentPostId!]!.add({"reply_dummy": true});
+          // Update the comment count in the UI
+          _updateCommentCountInUI(parentPostId!);
+        }
+        // Hide the reply input after posting
+        showReplyInput[commentId] = false;
+      });
+    } catch (e) {
+      print('Error posting reply: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to post reply')));
+    }
+  }
+
+  Future<void> editReply(String commentId, String replyId, String newContent, int replyIndex) async {
+  final original = (commentReplies[commentId] != null && commentReplies[commentId]!.length > replyIndex)
+    ? commentReplies[commentId]![replyIndex]['content']
+    : null;
+    if (original == null) return;
+
+    setState(() {
+      commentReplies[commentId]?[replyIndex]['content'] = newContent;
+    });
+
+    try {
+      await Supabase.instance.client
+          .from('replies')
+          .update({'content': newContent})
+          .eq('id', replyId);
+    } catch (e) {
+      // rollback
+      setState(() {
+        commentReplies[commentId]?[replyIndex]['content'] = original;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update reply')));
+    }
+  }
+
+  Future<void> deleteReply(String commentId, String replyId, int replyIndex) async {
+  final deleted = (commentReplies[commentId] != null && commentReplies[commentId]!.length > replyIndex)
+    ? Map<String, dynamic>.from(commentReplies[commentId]![replyIndex])
+    : <String, dynamic>{};
+    setState(() {
+      commentReplies[commentId]?.removeAt(replyIndex);
+    });
+
+    try {
+      await Supabase.instance.client.from('replies').delete().eq('id', replyId);
+    } catch (e) {
+      // rollback
+      setState(() {
+        if (commentReplies[commentId] == null) commentReplies[commentId] = [];
+  commentReplies[commentId]!.insert(replyIndex, deleted);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete reply')));
     }
   }
 
@@ -430,6 +832,7 @@ void showEditPostModal(Map post) {
   Widget buildPostList(List<dynamic> postList) {
     if (postList.isEmpty) return Center(child: Text('No posts to show.'));
     return ListView.builder(
+      controller: _scrollController,
       itemCount: postList.length,
       itemBuilder: (context, index) {
         final post = postList[index];
@@ -627,7 +1030,7 @@ void showEditPostModal(Map post) {
                             });
                           },
                         ),
-                        Text('${(postComments[postId]?.length ?? 0)} comments'),
+                                  Text('${_getCommentCount(postId)} comments'),
                       ],
                     ),
                     IconButton(
@@ -656,64 +1059,15 @@ void showEditPostModal(Map post) {
                               icon: Icon(Icons.send, color: deepRed),
                               onPressed: () async {
                                 final commentText = commentControllers[postId]?.text.trim();
+                                print('BUTTON PRESSED - Comment text: "$commentText" for post $postId');
                                 if (commentText != null && commentText.isNotEmpty) {
-                                  print('Preparing to post comment on post $postId');
-                                  
-                                  // Clear the input field immediately
-                                  commentControllers[postId]?.clear();
-                                  
-                                  try {
-                                    // Insert the comment - allow any user to comment on any post
-                                    print('Inserting comment into database');
-                                    final newComment = await Supabase.instance.client
-                                      .from('comments')
-                                      .insert({
-                                        'post_id': postId,
-                                        'user_id': widget.userId,
-                                        'content': commentText,
-                                      })
-                                      .select('id, content, created_at, user_id')
-                                      .single();
-                                      
-                                    print('Comment inserted: $newComment');
-
-                                    // Get user data
-                                    final userData = await Supabase.instance.client
-                                      .from('users')
-                                      .select('name, profile')
-                                      .eq('id', widget.userId)
-                                      .single();
-                                      
-                                    print('User data fetched: $userData');
-
-                                    // Combine comment and user data
-                                    final fullComment = {
-                                      ...Map<String, dynamic>.from(newComment),
-                                      'users': userData,
-                                      'comment_likes': []
-                                    };
-
-                                    setState(() {
-                                      if (postComments[postId] == null) {
-                                        postComments[postId] = [];
-                                      }
-                                      postComments[postId]!.insert(0, fullComment);
-                                    });
-                                  } catch (e) {
-                                    print('Error posting comment: $e');
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text('Failed to post comment. Please try again.'),
-                                        duration: Duration(seconds: 3),
-                                      )
-                                    );
-                                    // Restore the comment text if posting failed
-                                    commentControllers[postId]?.text = commentText;
-                                  }
-                                  
-                                  // Hide keyboard after comment attempt
-                                  FocusScope.of(context).unfocus();
+                                  print('CALLING addComment for post $postId with text: "$commentText"');
+                                  await addComment(postId, commentText);
+                                  print('FINISHED addComment for post $postId');
                                 }
+                                
+                                // Hide keyboard after comment attempt
+                                FocusScope.of(context).unfocus();
                               },
                             ),
                           ],
@@ -734,11 +1088,13 @@ void showEditPostModal(Map post) {
                               return Card(
                                 elevation: 1,
                                 margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                                child: Padding(
-                                  padding: EdgeInsets.all(8),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
+                                child: Stack(
+                                  children: [
+                                    Padding(
+                                      padding: EdgeInsets.all(8),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
                                       Row(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
@@ -797,31 +1153,23 @@ void showEditPostModal(Map post) {
                                                                     onPressed: () async {
                                                                       final newContent = editCommentControllers[commentId]?.text.trim();
                                                                       if (newContent?.isNotEmpty ?? false) {
-                                                                        // Store the original content for rollback
                                                                         final originalContent = comment['content'];
-                                                                        
-                                                                        // Optimistically update the comment
-                                                                        setState(() {
-                                                                          comment['content'] = newContent;
-                                                                          comment['isEditing'] = true;
-                                                                        });
+                                                                        setState(() { commentLoading[commentId] = true; });
                                                                         Navigator.pop(context);
-
                                                                         try {
                                                                           await Supabase.instance.client
                                                                               .from('comments')
                                                                               .update({'content': newContent})
                                                                               .eq('id', commentId);
-                                                                          
                                                                           setState(() {
-                                                                            comment['isEditing'] = false;
+                                                                            comment['content'] = newContent;
+                                                                            commentLoading[commentId] = false;
                                                                           });
                                                                         } catch (e) {
                                                                           print('Error updating comment: $e');
-                                                                          // Rollback on error
                                                                           setState(() {
                                                                             comment['content'] = originalContent;
-                                                                            comment['isEditing'] = false;
+                                                                            commentLoading[commentId] = false;
                                                                           });
                                                                           ScaffoldMessenger.of(context).showSnackBar(
                                                                             SnackBar(content: Text('Failed to update comment'))
@@ -856,27 +1204,25 @@ void showEditPostModal(Map post) {
                                                               ),
                                                             );
                                                             if (confirm == true) {
-                                                              // Store comment for potential rollback
                                                               final deletedComment = {...comment};
                                                               final commentIndex = postComments[postId]!.indexOf(comment);
-                                                              
-                                                              // Optimistically remove the comment
-                                                              setState(() {
-                                                                postComments[postId]!.removeAt(commentIndex);
-                                                                commentCounts[postId] = (commentCounts[postId] ?? 1) - 1;
-                                                              });
-
+                                                              setState(() { commentLoading[commentId] = true; });
                                                               try {
                                                                 await Supabase.instance.client
                                                                   .from('comments')
                                                                   .delete()
                                                                   .eq('id', commentId);
+                                                                setState(() {
+                                                                  postComments[postId]!.removeAt(commentIndex);
+                                                                  commentCounts[postId] = postComments[postId]!.length;
+                                                                  commentLoading[commentId] = false;
+                                                                });
                                                               } catch (e) {
                                                                 print('Error deleting comment: $e');
-                                                                // Rollback on error
                                                                 setState(() {
                                                                   postComments[postId]!.insert(commentIndex, deletedComment);
-                                                                  commentCounts[postId] = (commentCounts[postId] ?? 0) + 1;
+                                                                  commentCounts[postId] = postComments[postId]!.length;
+                                                                  commentLoading[commentId] = false;
                                                                 });
                                                                 ScaffoldMessenger.of(context).showSnackBar(
                                                                   SnackBar(content: Text('Failed to delete comment'))
@@ -973,8 +1319,169 @@ void showEditPostModal(Map post) {
                                           ],
                                         ),
                                       ),
+                                      // Replies section (paginated)
+                                      if ((commentReplies[commentId]?.length ?? 0) > 0)
+                                        Padding(
+                                          padding: const EdgeInsets.only(left: 40.0, top: 8),
+                                          child: Column(
+                                            children: [
+                                              ...List.generate(commentReplies[commentId]!.length, (ri) {
+                                                final r = commentReplies[commentId]![ri];
+                                                return Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                                  child: Row(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      CircleAvatar(
+                                                        radius: 12,
+                                                        backgroundImage: r['users']?['profile'] != null
+                                                            ? NetworkImage(r['users']['profile'])
+                                                            : AssetImage('assets/logo.png') as ImageProvider,
+                                                      ),
+                                                      SizedBox(width: 8),
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          children: [
+                                                            Row(
+                                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                              children: [
+                                                                Text(r['users']?['name'] ?? 'Unknown', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                                                Text(
+                                                                  _getTimeAgo(DateTime.tryParse(r['created_at'] ?? '') ?? DateTime.now()),
+                                                                  style: TextStyle(fontSize: 10, color: Colors.grey),
+                                                                ),
+                                                                if (r['user_id'] == widget.userId)
+                                                                  PopupMenuButton<String>(
+                                                                    padding: EdgeInsets.zero,
+                                                                    itemBuilder: (_) => [
+                                                                      PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                                                      PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                                                    ],
+                                                                    onSelected: (value) async {
+                                                                      if (value == 'edit') {
+                                                                        final controller = TextEditingController(text: r['content'] ?? '');
+                                                                        showDialog(
+                                                                          context: context,
+                                                                          builder: (context) => AlertDialog(
+                                                                            title: Text('Edit Reply'),
+                                                                            content: TextField(
+                                                                              controller: controller,
+                                                                              maxLines: 3,
+                                                                              decoration: InputDecoration(border: OutlineInputBorder()),
+                                                                            ),
+                                                                            actions: [
+                                                                              TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+                                                                              ElevatedButton(
+                                                                                onPressed: () async {
+                                                                                  final newText = controller.text.trim();
+                                                                                  if (newText.isNotEmpty) {
+                                                                                    Navigator.pop(context);
+                                                                                    await editReply(commentId, r['id'].toString(), newText, ri);
+                                                                                  }
+                                                                                },
+                                                                                child: Text('Save'),
+                                                                              ),
+                                                                            ],
+                                                                          ),
+                                                                        );
+                                                                      } else if (value == 'delete') {
+                                                                        final confirm = await showDialog<bool>(
+                                                                          context: context,
+                                                                          builder: (context) => AlertDialog(
+                                                                            title: Text('Delete Reply'),
+                                                                            content: Text('Delete this reply?'),
+                                                                            actions: [
+                                                                              TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel')),
+                                                                              ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Delete')),
+                                                                            ],
+                                                                          ),
+                                                                        );
+                                                                        if (confirm == true) {
+                                                                          await deleteReply(commentId, r['id'].toString(), ri);
+                                                                        }
+                                                                      }
+                                                                    },
+                                                                  ),
+                                                              ],
+                                                            ),
+                                                            SizedBox(height: 2),
+                                                            Text(r['content'] ?? '', style: TextStyle(fontSize: 12)),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              }),
+                                              // Only show 'View more' when we actually have more and current loaded >= threshold
+                                              if (replyHasMore[commentId] == true && (commentReplies[commentId]?.length ?? 0) >= replyDisplayThreshold)
+                                                TextButton(
+                                                  onPressed: () async {
+                                                    await fetchRepliesForComment(commentId);
+                                                  },
+                                                  child: Text('View more replies', style: TextStyle(color: deepRed, fontSize: 12)),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+
+                                      // Reply input toggle and field
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 20.0, top: 6),
+                                        child: Row(
+                                          children: [
+                                            TextButton(
+                                              onPressed: () async {
+                                                // Toggle reply input
+                                                setState(() {
+                                                  showReplyInput[commentId] = !(showReplyInput[commentId] ?? false);
+                                                });
+                                                if (showReplyInput[commentId] == true) {
+                                                  await fetchRepliesForComment(commentId, limit: 5, refresh: true);
+                                                }
+                                              },
+                                              child: Text('Reply', style: TextStyle(color: deepRed, fontSize: 12)),
+                                            ),
+                                            if (showReplyInput[commentId] == true)
+                                              Expanded(
+                                                child: Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: TextField(
+                                                        controller: replyControllers.putIfAbsent(commentId, () => TextEditingController()),
+                                                        decoration: InputDecoration(hintText: 'Write a reply...', isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8)),
+                                                      ),
+                                                    ),
+                                                    IconButton(
+                                                      icon: Icon(Icons.send, size: 18, color: deepRed),
+                                                      onPressed: () async {
+                                                        final text = replyControllers[commentId]?.text.trim();
+                                                        if (text != null && text.isNotEmpty) {
+                                                          // Clear immediately
+                                                          replyControllers[commentId]?.clear();
+                                                          await postReply(commentId, text);
+                                                          FocusScope.of(context).unfocus();
+                                                        }
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
                                     ],
                                   ),
+                                ),
+                                    if (commentLoading[commentId] == true)
+                                      Positioned.fill(
+                                        child: Container(
+                                          color: Colors.white.withOpacity(0.7),
+                                          child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               );
                             },
@@ -1052,10 +1559,16 @@ void showEditPostModal(Map post) {
       ),
       body: isLoading
           ? Center(child: CircularProgressIndicator())
-          : buildPostList(
-              selectedFilter == 'my posts'
-                  ? posts.where((p) => p['user_id'] == widget.userId).toList()
-                  : getFilteredPosts(selectedFilter),
+          : RefreshIndicator(
+              onRefresh: () async {
+                // Refresh posts while preserving local comment updates
+                await fetchPosts();
+              },
+              child: buildPostList(
+                selectedFilter == 'my posts'
+                    ? posts.where((p) => p['user_id'] == widget.userId).toList()
+                    : getFilteredPosts(selectedFilter),
+              ),
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: showCreatePostModal,

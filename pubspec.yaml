@@ -31,7 +31,11 @@ dependencies:
   qr_flutter: ^4.0.0
   flutter_local_notifications: ^19.4.0
   badges: ^3.1.2
+<<<<<<< HEAD
+  shared_preferences: ^2.2.2
+=======
   flutter_dotenv: ^5.1.0
+>>>>>>> 9e7e764050d96b13aa9132725e2c83e5241490d1
 
 dev_dependencies:
   flutter_test:
