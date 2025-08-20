@@ -31,6 +31,7 @@ dependencies:
   qr_flutter: ^4.0.0
   flutter_local_notifications: ^19.4.0
   badges: ^3.1.2
+  flutter_dotenv: ^5.1.0
 
 dev_dependencies:
   flutter_test:
@@ -47,6 +48,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
+    - .env
 
 dependency_overrides:
   sign_in_with_apple:

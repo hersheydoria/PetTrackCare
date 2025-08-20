@@ -6,10 +6,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:realtime_client/realtime_client.dart' as r;
-import 'package:realtime_client/src/types.dart' as rt; // NEW: import enum from internal types to match the channel.send signature
-
-const int appID = 1445580868; // Replace with your ZEGOCLOUD App ID
-const String appSign = '2136993e53a5a7926531f24e693db2403af6e916e1f6dca8970c71c21e4b29be'; // Replace with your ZEGOCLOUD App Sign
+import 'package:realtime_client/src/types.dart' as rt;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class ChatDetailScreen extends StatefulWidget {
   final String userId;
@@ -836,8 +834,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => ZegoUIKitPrebuiltCall(
-          appID: appID,
-          appSign: appSign,
+          appID: int.parse(dotenv.env['ZEGO_APP_ID'] ?? '0'),
+          appSign: dotenv.env['ZEGO_APP_SIGN'] ?? '',
           userID: me,
           userName: myName,
           callID: callId,
@@ -1024,5 +1022,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Future<void> _refreshAll() async {
     await fetchMessages();
     await markMessagesAsSeen();
+  }
+}
   }
 }

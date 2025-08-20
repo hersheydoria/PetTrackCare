@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart'; // + add
 import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/main_navigation.dart';
@@ -9,9 +10,10 @@ import 'screens/notification_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   await Supabase.initialize(
-    url: 'https://gcqmkaoyoruajayvubei.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdjcW1rYW95b3J1YWpheXZ1YmVpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE4OTA1MjAsImV4cCI6MjA2NzQ2NjUyMH0.Rmp3OH4MjgUwN5UXI7mGD5b4loZ5dQFr4NHV-wP5tGc',
+    url: dotenv.env['SUPABASE_URL'] ?? '',
+    anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
   );
   runApp(PetTrackCareApp());
 }
