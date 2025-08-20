@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart'; // kDebugMode
 
 class RegistrationScreen extends StatefulWidget {
   @override
@@ -14,43 +15,121 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final passwordController = TextEditingController();
   final confirmController = TextEditingController();
   final locationController = TextEditingController();
+  // removed latitudeController and longitudeController
 
   String selectedRole = 'Pet Owner';
   bool isLoading = false;
   bool showPassword = false;
   bool showConfirm = false;
 
-  double? latitude;
-  double? longitude;
+  // removed double? latitude; double? longitude;
 
   void _register() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // removed parsing/guard for latitude/longitude; address is validated by the form
+
     setState(() => isLoading = true);
 
     try {
+      // sanitize address to avoid DB constraint issues
+      final rawAddress = locationController.text.trim();
+      final safeAddress = rawAddress.isEmpty
+          ? '-'
+          : (rawAddress.length > 255 ? rawAddress.substring(0, 255) : rawAddress);
+
       final response = await Supabase.instance.client.auth.signUp(
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
         data: {
+          // keep user details in auth.users metadata; exclude role and email to reduce conflicts
           'name': nameController.text.trim(),
-          'role': selectedRole,
-          'location': locationController.text.trim(),
-          'latitude': latitude,
-          'longitude': longitude,
+          'full_name': nameController.text.trim(),
+          'address': safeAddress,
         },
       );
 
       if (response.user != null) {
+        if (response.session == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Verification email sent. Please confirm to finish registration.')),
+          );
+          setState(() => isLoading = false);
+          return;
+        }
+
+        // profiles upsert (only id + role)
+        try {
+          if (kDebugMode) {
+            print('Upserting role $selectedRole for user ${response.user!.id}');
+          }
+          // add created_at timestamp (UTC ISO8601)
+          final createdAt = DateTime.now().toUtc().toIso8601String();
+
+          await Supabase.instance.client.from('users').upsert(
+            {
+              'id': response.user!.id,
+              'role': selectedRole, // only id and role in profiles
+              'created_at': createdAt,
+            },
+            onConflict: 'id',
+          );
+        } on PostgrestException catch (e) {
+          if (kDebugMode) {
+            print('profiles upsert PostgrestException ${e.code}: ${e.message} ${e.details}');
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not save your role due to a server constraint. You can continue and set it later.')),
+            );
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('profiles upsert error: $e');
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Profile role save encountered an issue. You can continue and set it later.')),
+            );
+          }
+        }
+
+        if (!mounted) return;
         Navigator.pushReplacementNamed(context, '/home');
+      } else {
+        // No user returned and no exception thrown: treat as unknown error
+        throw Exception('Signup failed. Please try again later.');
+      }
+    } on AuthException catch (e) {
+      if (kDebugMode) {
+        print('AuthException on signUp: ${e.message}');
+      }
+      final msg = e.message.toLowerCase();
+      String friendly = e.message;
+      if (msg.contains('already registered') || msg.contains('duplicate key')) {
+        friendly = 'Email already registered. Try logging in instead.';
+      } else if (
+        msg.contains('database error saving new user') ||
+        msg.contains('unexpected_failure') ||
+        msg.contains('constraint') ||
+        msg.contains('violates')
+      ) {
+        friendly = 'Signup failed due to a server constraint. Please try again later or contact support.';
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendly)));
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Registration failed: Check password strength or email format.')),
-      );
+      if (kDebugMode) {
+        print('Unhandled signup error: $e');
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => isLoading = false);
     }
-
-    setState(() => isLoading = false);
   }
 
   @override
@@ -156,27 +235,14 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         value != passwordController.text ? 'Passwords do not match' : null,
                   ),
                   const SizedBox(height: 16),
+                  // single full location input
                   TextFormField(
                     controller: locationController,
-                    readOnly: true,
-                    decoration: _inputDecoration(
-                      'Tap to select your location',
-                      suffixIcon: const Icon(Icons.location_on),
-                    ),
-                    onTap: () async {
-                      final result = await Navigator.pushNamed(context, '/location_picker');
-
-                      if (result != null && result is Map<String, dynamic>) {
-                        setState(() {
-                          locationController.text = result['address'];
-                          latitude = result['latitude'];
-                          longitude = result['longitude'];
-                        });
-                      }
-                    },
+                    decoration: _inputDecoration('Address'),
                     validator: (value) =>
-                        value!.trim().isEmpty ? 'Location is required' : null,
+                        value!.trim().isEmpty ? 'Address is required' : null,
                   ),
+                  // removed latitude and longitude input fields
                   const SizedBox(height: 24),
                   ElevatedButton(
                     onPressed: isLoading ? null : _register,

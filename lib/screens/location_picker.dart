@@ -13,27 +13,33 @@ class _LocationPickerState extends State<LocationPicker> {
   LatLng? selectedLocation;
   String address = '';
 
-  // Define Agusan del Norte bounds manually
-  final LatLngBounds agusanBounds = LatLngBounds(
-    LatLng(8.95, 125.35), // SW
-    LatLng(9.25, 125.85), // NE
+  // Caraga Region (Region XIII) bounding box
+  final LatLngBounds caragaBounds = LatLngBounds(
+    LatLng(8.0, 125.0), // SW
+    LatLng(10.6, 126.6), // NE
   );
 
   void _onTapMap(LatLng latLng) async {
-    if (!agusanBounds.contains(latLng)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Please select within Agusan del Norte")),
+    // Validate inside Caraga Region
+    if (!caragaBounds.contains(latLng)) {
+      // Guard against deactivated context
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text("Please select within the Caraga Region")),
       );
       return;
     }
 
+    if (!mounted) return;
     setState(() => selectedLocation = latLng);
 
     try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(
+      final placemarks = await placemarkFromCoordinates(
         latLng.latitude,
         latLng.longitude,
       );
+
+      if (!mounted) return;
 
       if (placemarks.isNotEmpty) {
         final place = placemarks.first;
@@ -41,6 +47,11 @@ class _LocationPickerState extends State<LocationPicker> {
           address =
               '${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}';
         });
+
+        // Optional feedback
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text("Location selected: $address")),
+        );
       }
     } catch (e) {
       print("Geocoding error: $e");
@@ -54,6 +65,11 @@ class _LocationPickerState extends State<LocationPicker> {
         'longitude': selectedLocation!.longitude,
         'address': address,
       });
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text("Please select a location first")),
+      );
     }
   }
 
@@ -64,15 +80,18 @@ class _LocationPickerState extends State<LocationPicker> {
       body: FlutterMap(
         mapController: mapController,
         options: MapOptions(
-          initialCenter: LatLng(9.0393, 125.5746),
-          initialZoom: 11.5,
-          maxZoom: 19.0, 
-          minZoom: 10.5,
+          initialCenter: LatLng(8.95, 125.54), // Butuan City
+          initialZoom: 9.0,
+          maxZoom: 19.0,
+          minZoom: 7.5,
           onTap: (tapPosition, latLng) => _onTapMap(latLng),
+          // Lock camera inside Caraga Region
+          cameraConstraint: CameraConstraint.contain(bounds: caragaBounds),
         ),
         children: [
           TileLayer(
-            urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            urlTemplate:
+                'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
             subdomains: ['a', 'b', 'c', 'd'],
             userAgentPackageName: 'com.example.pettrackcare',
             retinaMode: true,
@@ -90,16 +109,14 @@ class _LocationPickerState extends State<LocationPicker> {
             ),
         ],
       ),
-      bottomNavigationBar: selectedLocation != null
-          ? Padding(
-              padding: const EdgeInsets.all(12),
-              child: ElevatedButton.icon(
-                icon: Icon(Icons.check),
-                label: Text('Confirm Location'),
-                onPressed: _confirmSelection,
-              ),
-            )
-          : null,
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(12),
+        child: ElevatedButton.icon(
+          icon: Icon(Icons.check),
+          label: Text('Confirm Location'),
+          onPressed: _confirmSelection,
+        ),
+      ),
     );
   }
 }
