@@ -19,6 +19,8 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   bool _isReloading = false;
   User? user = Supabase.instance.client.auth.currentUser;
   Map<String, dynamic> metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+  File? _profileImage;
+  final ImagePicker _picker = ImagePicker();
   // Helper to refresh user and metadata after update
   Future<void> _refreshUserMetadata() async {
     final updatedUser = Supabase.instance.client.auth.currentUser;
@@ -68,9 +70,6 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   );
 }
 
-
-File? _profileImage;
-final ImagePicker _picker = ImagePicker();
 
 Future<void> _pickProfileImage() async {
   final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
@@ -150,7 +149,7 @@ Future<void> pickAndUploadImage() async {
   try {
     final supabase = Supabase.instance.client;
 
-    final response = await supabase.storage
+    await supabase.storage
         .from('your-bucket-name') // Replace with your actual bucket name
         .uploadBinary(fileName, fileBytes,
             fileOptions: const FileOptions(contentType: 'image/jpeg'));
@@ -268,7 +267,7 @@ Future<void> pickAndUploadImage() async {
     );
     if (confirmed != true) return;
     try {
-      final resp = await Supabase.instance.client.from('pets').delete().eq('id', petId);
+      await Supabase.instance.client.from('pets').delete().eq('id', petId);
       // Supabase client returns list for select/delete depending on setup; we ignore details
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pet deleted")));
       setState(() {}); // triggers rebuild -> FutureBuilder will refetch
@@ -546,12 +545,10 @@ SizedBox(height: 16),
                         ListView(
                           padding: EdgeInsets.all(16),
                           children: [
-                            // Account entry now contains name, address, password and delete actions
-                            _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
+                                                      _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
+                            _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
                             _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
                             _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
-                            _settingsTile(Icons.palette, 'App Theme', onTap: _openThemeSettings),
-                            _settingsTile(Icons.language, 'Language', onTap: _openLanguageSettings),
                             _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
                             _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
                             SizedBox(height: 16),
@@ -586,31 +583,227 @@ SizedBox(height: 16),
     );
   }
 
-  // Open dialog for account settings (name / address / optional password / inline delete)
+  // Open dialog for account settings
   void _openAccountSettings() async {
-  String newName = name;
-  String newAddress = address == 'No address provided' ? '' : address;
-  String newPassword = '';
-  bool isLoading = false;
+    String newName = name;
+    String newAddress = address == 'No address provided' ? '' : address;
+    bool isLoading = false;
 
-  await showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (ctx) {
-      return StatefulBuilder(
-        builder: (ctx, setSt) {
-          return SafeArea(
-            child: Padding(
-              padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-              child: SizedBox(
-                // Reduce modal height to remove excess space
-                height: MediaQuery.of(ctx).size.height * 0.6,
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            return SafeArea(
+              child: Container(
+                color: lightBlush,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back, color: deepRed),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                        Expanded(
+                          child: Center(
+                            child: Text(
+                              'Account',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: deepRed,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 48),
+                      ],
+                    ),
+                    SingleChildScrollView(
+                      padding: EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade400),
+                              borderRadius: BorderRadius.circular(12),
+                              color: Colors.white,
+                            ),
+                            margin: EdgeInsets.only(bottom: 16),
+                            child: TextFormField(
+                              enabled: false,
+                              initialValue: email,
+                              decoration: InputDecoration(
+                                labelText: 'Email',
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade400),
+                              borderRadius: BorderRadius.circular(12),
+                              color: Colors.white,
+                            ),
+                            margin: EdgeInsets.only(bottom: 16),
+                            child: TextFormField(
+                              initialValue: newName,
+                              decoration: InputDecoration(
+                                labelText: 'Name',
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                              onChanged: (v) => setSt(() => newName = v),
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade400),
+                              borderRadius: BorderRadius.circular(12),
+                              color: Colors.white,
+                            ),
+                            margin: EdgeInsets.only(bottom: 16),
+                            child: TextFormField(
+                              initialValue: newAddress,
+                              decoration: InputDecoration(
+                                labelText: 'Address',
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                              onChanged: (v) => setSt(() => newAddress = v),
+                            ),
+                          ),
+                          SizedBox(height: 16),
+                          Container(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: deepRed,
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () async {
+                                setSt(() => isLoading = true);
+                                try {
+                                  final supabase = Supabase.instance.client;
+                                  await supabase.auth.updateUser(UserAttributes(data: {
+                                    'name': newName,
+                                    'address': newAddress,
+                                  }));
+                                  await _refreshUserMetadata();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Account updated')),
+                                  );
+                                  Navigator.pop(ctx);
+                                } catch (e) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Failed to update account: ${e.toString()}')),
+                                  );
+                                }
+                                setSt(() => isLoading = false);
+                              },
+                              child: isLoading
+                                  ? SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Text(
+                                      'Save Changes',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          SizedBox(height: 16),
+                          Container(
+                            width: double.infinity,
+                            child: TextButton(
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.red,
+                              ),
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: Text('Delete Account'),
+                                    content: Text('Are you sure you want to delete your account? This action cannot be undone.'),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context, false),
+                                        child: Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context, true),
+                                        child: Text('Delete', style: TextStyle(color: Colors.red)),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                
+                                if (confirm == true) {
+                                  try {
+                                    await Supabase.instance.client.auth.signOut();
+                                    await Supabase.instance.client.from('users').delete().eq('id', user!.id);
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
+                                    Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting account: $e')));
+                                  }
+                                }
+                              },
+                              child: Text('Delete Account'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Open dialog for notification preferences
+  void _openNotificationPreferences() async {
+    final currentPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        bool enabled = currentPrefs['enabled'] ?? true;
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                ),
                 child: Container(
                   color: lightBlush,
                   child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Row(
                         children: [
@@ -621,150 +814,71 @@ SizedBox(height: 16),
                           Expanded(
                             child: Center(
                               child: Text(
-                                'Account',
-                                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: deepRed, letterSpacing: 0.5),
+                                'Notifications',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: deepRed,
+                                  letterSpacing: 0.5,
+                                ),
                               ),
                             ),
                           ),
                           SizedBox(width: 48),
                         ],
                       ),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 4, bottom: 2),
-                                    child: Text(
-                                      'Email',
-                                      style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500, letterSpacing: 0.1),
-                                    ),
-                                  ),
-                                  Container(
-                                    width: double.infinity,
-                                    margin: EdgeInsets.only(bottom: 8),
-                                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey.shade400, width: 1.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                      color: Colors.grey[50],
-                                    ),
-                                    child: Text(
-                                      email,
-                                      style: TextStyle(fontSize: 15, color: Colors.grey[800], fontWeight: FontWeight.w500, letterSpacing: 0.1),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade400, width: 1.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  color: Colors.white,
-                                ),
-                                margin: EdgeInsets.only(bottom: 8),
-                                child: TextFormField(
-                                  initialValue: newName,
-                                  decoration: InputDecoration(
-                                    labelText: 'Name',
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                  ),
-                                  onChanged: (v) => setSt(() => newName = v),
-                                ),
-                              ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade400, width: 1.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  color: Colors.white,
-                                ),
-                                margin: EdgeInsets.only(bottom: 8),
-                                child: TextFormField(
-                                  initialValue: newAddress,
-                                  decoration: InputDecoration(
-                                    labelText: 'Address',
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                  ),
-                                  onChanged: (v) => setSt(() => newAddress = v),
-                                ),
-                              ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade400, width: 1.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  color: Colors.white,
-                                ),
-                                margin: EdgeInsets.only(bottom: 8),
-                                child: TextFormField(
-                                  obscureText: true,
-                                  decoration: InputDecoration(
-                                    labelText: 'New password (optional)',
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                  ),
-                                  onChanged: (v) => setSt(() => newPassword = v),
-                                ),
-                              ),
-                              // Removed extra space and divider below fields
-                            ],
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
+                      SingleChildScrollView(
+                        padding: EdgeInsets.all(16),
+                        child: Column(
                           children: [
-                            Expanded(
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
-                                child: Text('Delete Account', style: TextStyle(color: Colors.white)),
-                                onPressed: () async {
-                                  try {
-                                    await Supabase.instance.client.auth.signOut();
-                                    await Supabase.instance.client.from('users').delete().eq('id', user!.id);
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
-                                    Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
-                                  } catch (e) {
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting account: $e')));
-                                  }
-                                },
+                            Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade400),
+                                borderRadius: BorderRadius.circular(12),
+                                color: Colors.white,
+                              ),
+                              margin: EdgeInsets.only(bottom: 16),
+                              child: SwitchListTile(
+                                title: Text('Enable Notifications'),
+                                value: enabled,
+                                onChanged: (v) => setSt(() => enabled = v),
                               ),
                             ),
-                            SizedBox(width: 12),
-                            Expanded(
+                            SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
                               child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: deepRed,
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
                                 onPressed: () async {
-                                  setSt(() => isLoading = true);
                                   try {
-                                    final supabase = Supabase.instance.client;
-                                    if (newPassword.isNotEmpty) {
-                                      await supabase.auth.updateUser(UserAttributes(password: newPassword, data: {
-                                        'name': newName,
-                                        'address': newAddress,
-                                      }));
-                                    } else {
-                                      await supabase.auth.updateUser(UserAttributes(data: {
-                                        'name': newName,
-                                        'address': newAddress,
-                                      }));
-                                    }
-                                    await _refreshUserMetadata();
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account updated.')));
+                                    await Supabase.instance.client.auth.updateUser(
+                                      UserAttributes(data: {
+                                        'notification_preferences': {'enabled': enabled}
+                                      })
+                                    );
                                     Navigator.pop(ctx);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Notification preferences updated')),
+                                    );
                                   } catch (e) {
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating account: $e')));
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to update preferences: ${e.toString()}')),
+                                    );
                                   }
-                                  setSt(() => isLoading = false);
                                 },
-                                child: isLoading ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : Text('Save'),
+                                child: Text(
+                                  'Save',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                               ),
                             ),
                           ],
@@ -774,82 +888,9 @@ SizedBox(height: 16),
                   ),
                 ),
               ),
-            ),
-          );
-        },
-      );
-    },
-  );
-  }
-
-  // Open dialog for notification preferences
-  void _openNotificationPreferences() async {
-    final currentPrefs = metadata['notification_preferences'] ?? {'enabled': true};
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) {
-        bool enabled = currentPrefs['enabled'] ?? true;
-        return StatefulBuilder(builder: (ctx, setSt) {
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.9,
-              child: Column(
-                children: [
-                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('Notification Preferences', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                    ),
-                  ),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
-                        children: [
-                          SwitchListTile(
-                            title: Text('Enable Notifications'),
-                            value: enabled,
-                            onChanged: (v) => setSt(() => enabled = v),
-                          ),
-                          // ...add other notification settings here...
-                        ],
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                            onPressed: () async {
-                              Navigator.pop(ctx);
-                              try {
-                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'notification_preferences': {'enabled': enabled}}));
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Notification preferences updated.')));
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating preferences: $e')));
-                              }
-                            },
-                            child: Text('Save'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        });
+            );
+          },
+        );
       },
     );
   }
@@ -861,246 +902,446 @@ SizedBox(height: 16),
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (ctx) {
         bool profileVisible = currentPrivacy['profile_visible'] ?? true;
-        return StatefulBuilder(builder: (ctx, setSt) {
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.9,
-              child: Column(
-                children: [
-                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('Privacy Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                    ),
-                  ),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                ),
+                child: Container(
+                  color: lightBlush,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
                         children: [
-                          SwitchListTile(
-                            title: Text('Profile Visible'),
-                            value: profileVisible,
-                            onChanged: (v) => setSt(() => profileVisible = v),
+                          IconButton(
+                            icon: Icon(Icons.arrow_back, color: deepRed),
+                            onPressed: () => Navigator.pop(ctx),
                           ),
-                          // ...add other privacy options...
+                          Expanded(
+                            child: Center(
+                              child: Text(
+                                'Privacy',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: deepRed,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 48),
                         ],
                       ),
-                    ),
+                      SingleChildScrollView(
+                        padding: EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade400),
+                                borderRadius: BorderRadius.circular(12),
+                                color: Colors.white,
+                              ),
+                              margin: EdgeInsets.only(bottom: 16),
+                              child: SwitchListTile(
+                                title: Text('Profile Visible to Others'),
+                                value: profileVisible,
+                                onChanged: (v) => setSt(() => profileVisible = v),
+                              ),
+                            ),
+                            SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: deepRed,
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                onPressed: () async {
+                                  try {
+                                    await Supabase.instance.client.auth.updateUser(
+                                      UserAttributes(data: {
+                                        'privacy': {'profile_visible': profileVisible}
+                                      })
+                                    );
+                                    Navigator.pop(ctx);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Privacy settings updated')),
+                                    );
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to update privacy settings: ${e.toString()}')),
+                                    );
+                                  }
+                                },
+                                child: Text(
+                                  'Save',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                            onPressed: () async {
-                              Navigator.pop(ctx);
-                              try {
-                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'privacy': {'profile_visible': profileVisible}}));
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Privacy settings updated.')));
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating privacy: $e')));
-                              }
-                            },
-                            child: Text('Save'),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Open dialog for change password
+  void _openChangePassword() async {
+    final _currentPasswordController = TextEditingController();
+    final _newPasswordController = TextEditingController();
+    final _confirmPasswordController = TextEditingController();
+    bool _showCurrentPassword = false;
+    bool _showNewPassword = false;
+    bool _showConfirmPassword = false;
+    bool _isLoading = false;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom,
+                ),
+                child: Container(
+                  color: lightBlush,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.arrow_back, color: deepRed),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                          Expanded(
+                            child: Center(
+                              child: Text(
+                                'Change Password',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: deepRed,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 48),
+                        ],
+                      ),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.white,
+                                ),
+                                margin: EdgeInsets.only(bottom: 16),
+                                child: TextFormField(
+                                  controller: _currentPasswordController,
+                                  obscureText: !_showCurrentPassword,
+                                  decoration: InputDecoration(
+                                    labelText: 'Current Password',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(_showCurrentPassword ? Icons.visibility_off : Icons.visibility),
+                                      onPressed: () => setSt(() => _showCurrentPassword = !_showCurrentPassword),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.white,
+                                ),
+                                margin: EdgeInsets.only(bottom: 16),
+                                child: TextFormField(
+                                  controller: _newPasswordController,
+                                  obscureText: !_showNewPassword,
+                                  decoration: InputDecoration(
+                                    labelText: 'New Password',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(_showNewPassword ? Icons.visibility_off : Icons.visibility),
+                                      onPressed: () => setSt(() => _showNewPassword = !_showNewPassword),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade400),
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.white,
+                                ),
+                                margin: EdgeInsets.only(bottom: 16),
+                                child: TextFormField(
+                                  controller: _confirmPasswordController,
+                                  obscureText: !_showConfirmPassword,
+                                  decoration: InputDecoration(
+                                    labelText: 'Confirm New Password',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(_showConfirmPassword ? Icons.visibility_off : Icons.visibility),
+                                      onPressed: () => setSt(() => _showConfirmPassword = !_showConfirmPassword),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // Password requirements text
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 16, left: 4),
+                                  child: Text(
+                                    'Password must contain:\n• At least 8 characters\n• One uppercase letter\n• One lowercase letter\n• One number\n• One special character',
+                                    style: TextStyle(
+                                      color: Colors.grey[600],
+                                      fontSize: 12,
+                                    ),
+                                    textAlign: TextAlign.left,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: deepRed,
+                                    padding: EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  onPressed: _isLoading ? null : () async {
+                                    if (_newPasswordController.text.isEmpty ||
+                                        _currentPasswordController.text.isEmpty ||
+                                        _confirmPasswordController.text.isEmpty) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Please fill in all fields')),
+                                      );
+                                      return;
+                                    }
+
+                                    if (_newPasswordController.text != _confirmPasswordController.text) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('New passwords do not match')),
+                                      );
+                                      return;
+                                    }
+
+                                    final password = _newPasswordController.text;
+                                    if (password.length < 8 ||
+                                        !RegExp(r'[A-Z]').hasMatch(password) ||
+                                        !RegExp(r'[a-z]').hasMatch(password) ||
+                                        !RegExp(r'[0-9]').hasMatch(password) ||
+                                        !RegExp(r'[!@#\$&*~_.,%^()\-\+=]').hasMatch(password)) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Password does not meet requirements')),
+                                      );
+                                      return;
+                                    }
+
+                                    setSt(() => _isLoading = true);
+                                    try {
+                                      await Supabase.instance.client.auth.updateUser(
+                                        UserAttributes(password: _newPasswordController.text.trim()),
+                                      );
+                                      Navigator.pop(ctx);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Password updated successfully')),
+                                      );
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Failed to update password: ${e.toString()}')),
+                                      );
+                                    }
+                                    setSt(() => _isLoading = false);
+                                  },
+                                  child: _isLoading
+                                      ? SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            color: Colors.white,
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : Text(
+                                          'Update Password',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-          );
-        });
+            );
+          },
+        );
       },
     );
   }
 
   // Open dialog for theme settings
-  void _openThemeSettings() async {
-    final currentTheme = metadata['theme'] ?? 'System Default';
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) {
-        String selectedTheme = currentTheme;
-        return StatefulBuilder(builder: (ctx, setSt) {
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.9,
-              child: Column(
-                children: [
-                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('App Theme', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                    ),
-                  ),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
-                        children: [
-                          RadioListTile(value: 'Light', groupValue: selectedTheme, title: Text('Light'), onChanged: (v) => setSt(() => selectedTheme = v as String)),
-                          RadioListTile(value: 'Dark', groupValue: selectedTheme, title: Text('Dark'), onChanged: (v) => setSt(() => selectedTheme = v as String)),
-                          RadioListTile(value: 'System Default', groupValue: selectedTheme, title: Text('System Default'), onChanged: (v) => setSt(() => selectedTheme = v as String)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                            onPressed: () async {
-                              Navigator.pop(ctx);
-                              try {
-                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'theme': selectedTheme}));
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Theme updated. Restart the app to see changes.')));
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating theme: $e')));
-                              }
-                            },
-                            child: Text('Save'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        });
-      },
-    );
-  }
-
-  // Open dialog for language settings
-  void _openLanguageSettings() async {
-    final currentLanguage = metadata['language'] ?? 'English';
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) {
-        String selectedLanguage = currentLanguage;
-        return StatefulBuilder(builder: (ctx, setSt) {
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.9,
-              child: Column(
-                children: [
-                  Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('Language Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                    ),
-                  ),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
-                        children: [
-                          RadioListTile(value: 'English', groupValue: selectedLanguage, title: Text('English'), onChanged: (v) => setSt(() => selectedLanguage = v as String)),
-                          RadioListTile(value: 'Filipino', groupValue: selectedLanguage, title: Text('Filipino'), onChanged: (v) => setSt(() => selectedLanguage = v as String)),
-                          // ...add more languages...
-                        ],
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel'))),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                            onPressed: () async {
-                              Navigator.pop(ctx);
-                              try {
-                                await Supabase.instance.client.auth.updateUser(UserAttributes(data: {'language': selectedLanguage}));
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Language updated. Restart the app to see changes.')));
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating language: $e')));
-                              }
-                            },
-                            child: Text('Save'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        });
-      },
-    );
-  }
-
   // Open dialog for help & support
   void _openHelpSupport() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
         return SafeArea(
-          child: SizedBox(
-            height: MediaQuery.of(ctx).size.height * 0.9,
+          child: Container(
+            color: lightBlush,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Help & Support', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
-                  ),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: ListBody(
-                      children: [
-                        Text('For assistance, please contact support@pettrackcare.com'),
-                        SizedBox(height: 8),
-                        Text('Visit our Help Center for FAQs and guides.'),
-                      ],
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back, color: deepRed),
+                      onPressed: () => Navigator.pop(ctx),
                     ),
-                  ),
+                    Expanded(
+                      child: Center(
+                        child: Text(
+                          'Help & Support',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: deepRed,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 48),
+                  ],
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Close')),
+                SingleChildScrollView(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade400),
+                          borderRadius: BorderRadius.circular(12),
+                          color: Colors.white,
+                        ),
+                        margin: EdgeInsets.only(bottom: 16),
+                        child: Column(
+                          children: [
+                            ListTile(
+                              title: Text('Contact Support'),
+                              subtitle: Text('Reach out to our support team'),
+                              leading: Icon(Icons.support_agent, color: deepRed),
+                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                              onTap: () {
+                                // Add contact support action
+                              },
+                            ),
+                            Divider(height: 1),
+                            ListTile(
+                              title: Text('FAQs'),
+                              subtitle: Text('Find answers to common questions'),
+                              leading: Icon(Icons.question_answer, color: deepRed),
+                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                              onTap: () {
+                                // Add FAQs action
+                              },
+                            ),
+                            Divider(height: 1),
+                            ListTile(
+                              title: Text('Report an Issue'),
+                              subtitle: Text('Let us know if something\'s not working'),
+                              leading: Icon(Icons.bug_report, color: deepRed),
+                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
+                              onTap: () {
+                                // Add report issue action
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade400),
+                          borderRadius: BorderRadius.circular(12),
+                          color: Colors.white,
+                        ),
+                        margin: EdgeInsets.only(bottom: 16),
+                        child: Column(
+                          children: [
+                            ListTile(
+                              leading: Icon(Icons.email, color: deepRed),
+                              title: Text('Email Support'),
+                              subtitle: Text('support@pettrackcare.com'),
+                              onTap: () {
+                                // Add email support action
+                              },
+                            ),
+                            Divider(height: 1),
+                            ListTile(
+                              leading: Icon(Icons.phone, color: deepRed),
+                              title: Text('Phone Support'),
+                              subtitle: Text('+1 123-456-7890'),
+                              onTap: () {
+                                // Add phone support action
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -1116,43 +1357,120 @@ SizedBox(height: 16),
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (ctx) {
         return SafeArea(
-          child: SizedBox(
-            height: MediaQuery.of(ctx).size.height * 0.9,
-            child: Column(
-              children: [
-                Container(width: 40, height: 4, margin: EdgeInsets.only(top: 8), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('About PetTrackCare', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed)),
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            ),
+            child: Container(
+              color: lightBlush,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(Icons.arrow_back, color: deepRed),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: Text(
+                            'About',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 48),
+                    ],
                   ),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: ListBody(
+                  SingleChildScrollView(
+                    padding: EdgeInsets.all(16),
+                    child: Column(
                       children: [
-                        Text('Version 1.0.0'),
-                        Text('PetTrackCare is a comprehensive app for pet owners.'),
-                        SizedBox(height: 8),
-                        Text('Developed by: Your Company Name'),
-                        Text('Contact: support@pettrackcare.com'),
+                        Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade400),
+                            borderRadius: BorderRadius.circular(12),
+                            color: Colors.white,
+                          ),
+                          margin: EdgeInsets.only(bottom: 16),
+                          padding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'PetTrackCare',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: deepRed,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Version 1.0.0',
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              Text(
+                                'PetTrackCare is a comprehensive app designed to help pet owners monitor and manage their pets\' health, activities, and daily care routines.',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: Colors.grey[800],
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              Divider(),
+                              SizedBox(height: 16),
+                              Text(
+                                'Developed by:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'PetTrackCare Team',
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Contact:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'support@pettrackcare.com',
+                                style: TextStyle(
+                                  color: deepRed,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(onPressed: () => Navigator.pop(ctx), child: Text('Close')),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -1160,41 +1478,7 @@ SizedBox(height: 16),
     );
   }
 
-  Future<String?> _showTextInputDialog({
-    required String title,
-    required String hint,
-    String? initialValue,
-    bool isObscure = false,
-  }) async {
-    String value = initialValue ?? '';
-    return showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(title),
-          content: TextField(
-            obscureText: isObscure,
-            decoration: InputDecoration(
-              hintText: hint,
-              border: OutlineInputBorder(),
-            ),
-            onChanged: (val) => value = val,
-          ),
-          actions: [
-            TextButton(
-              child: Text('Cancel'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-              child: Text('Save'),
-              onPressed: () => Navigator.of(context).pop(value),
-            ),
-          ],
-        );
-      },
-    );
-  }
+
 }
 
 class _AddPetForm extends StatefulWidget {
