@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart'; // kDebugMode
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class RegistrationScreen extends StatefulWidget {
   @override
@@ -14,29 +16,58 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
   final confirmController = TextEditingController();
-  final locationController = TextEditingController();
-  // removed latitudeController and longitudeController
+  // final locationController = TextEditingController(); // removed location controller
 
   String selectedRole = 'Pet Owner';
   bool isLoading = false;
   bool showPassword = false;
   bool showConfirm = false;
 
-  // removed double? latitude; double? longitude;
+  // Address dropdown state
+  List<Map<String, dynamic>> provinces = [];
+  List<Map<String, dynamic>> municipalities = [];
+  List<Map<String, dynamic>> barangays = [];
+  // List<Map<String, dynamic>> districts = []; // PSGC does not provide purok/district, keep empty
+
+  List<String> districts = [
+    'Purok 1',
+    'Purok 2',
+    'Purok 3',
+    'Purok 4',
+    'Purok 5',
+    'District 1',
+    'District 2',
+    'District 3',
+  ]; // Static list for districts/puroks
+
+  String? selectedProvince;
+  String? selectedMunicipality;
+  String? selectedBarangay;
+  String? selectedDistrict; // Will be null, since PSGC does not provide purok/district
+
+  String? selectedProvinceCode;
+  String? selectedMunicipalityCode;
+  String? selectedBarangayCode;
 
   void _register() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // removed parsing/guard for latitude/longitude; address is validated by the form
+    // Validate address dropdowns
+    if (selectedProvince == null ||
+        selectedMunicipality == null ||
+        selectedBarangay == null ||
+        selectedDistrict == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please select your complete address.')),
+      );
+      return;
+    }
 
     setState(() => isLoading = true);
 
     try {
-      // sanitize address to avoid DB constraint issues
-      final rawAddress = locationController.text.trim();
-      final safeAddress = rawAddress.isEmpty
-          ? '-'
-          : (rawAddress.length > 255 ? rawAddress.substring(0, 255) : rawAddress);
+      final safeAddress =
+          '${selectedDistrict!}, ${selectedBarangay!}, ${selectedMunicipality!}, ${selectedProvince!}';
 
       final response = await Supabase.instance.client.auth.signUp(
         email: emailController.text.trim(),
@@ -45,7 +76,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           // keep user details in auth.users metadata; exclude role and email to reduce conflicts
           'name': nameController.text.trim(),
           'full_name': nameController.text.trim(),
+          'role': selectedRole, 
           'address': safeAddress,
+          'province': selectedProvince,
+          'municipality': selectedMunicipality,
+          'barangay': selectedBarangay,
+          'district': selectedDistrict,
         },
       );
 
@@ -56,6 +92,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             SnackBar(content: Text('Verification email sent. Please confirm to finish registration.')),
           );
           setState(() => isLoading = false);
+          // Redirect to login after registration
+          Navigator.pushReplacementNamed(context, '/login');
           return;
         }
 
@@ -96,7 +134,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         }
 
         if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/home');
+        // Redirect to login after registration
+        Navigator.pushReplacementNamed(context, '/login');
       } else {
         // No user returned and no exception thrown: treat as unknown error
         throw Exception('Signup failed. Please try again later.');
@@ -130,6 +169,64 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchProvinces();
+  }
+
+  Future<void> _fetchProvinces() async {
+    final res = await http.get(Uri.parse('https://psgc.gitlab.io/api/provinces/'));
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body) as List;
+      final provinceList = data.cast<Map<String, dynamic>>();
+      provinceList.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+      setState(() {
+        provinces = provinceList;
+      });
+    }
+  }
+
+  Future<void> _fetchMunicipalities(String provinceCode) async {
+    final res = await http.get(Uri.parse('https://psgc.gitlab.io/api/provinces/$provinceCode/cities-municipalities/'));
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body) as List;
+      final municipalityList = data.cast<Map<String, dynamic>>();
+      municipalityList.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+      setState(() {
+        municipalities = municipalityList;
+        selectedMunicipality = null;
+        selectedMunicipalityCode = null;
+        barangays = [];
+        selectedBarangay = null;
+        selectedBarangayCode = null;
+        selectedDistrict = null;
+      });
+    }
+  }
+
+  Future<void> _fetchBarangays(String cityMunCode) async {
+    final res = await http.get(Uri.parse('https://psgc.gitlab.io/api/cities-municipalities/$cityMunCode/barangays/'));
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body) as List;
+      final barangayList = data.cast<Map<String, dynamic>>();
+      barangayList.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+      setState(() {
+        barangays = barangayList;
+        selectedBarangay = null;
+        selectedBarangayCode = null;
+        selectedDistrict = null;
+      });
+    }
+  }
+
+  // PSGC does not provide purok/district, so this will be empty
+  Future<void> _fetchDistricts(String barangayCode) async {
+    setState(() {
+      selectedDistrict = null; // Only reset selectedDistrict
+    });
   }
 
   @override
@@ -235,14 +332,100 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         value != passwordController.text ? 'Passwords do not match' : null,
                   ),
                   const SizedBox(height: 16),
-                  // single full location input
-                  TextFormField(
-                    controller: locationController,
-                    decoration: _inputDecoration('Address'),
-                    validator: (value) =>
-                        value!.trim().isEmpty ? 'Address is required' : null,
+                  // Add divider and address label here
+                  Divider(thickness: 1, color: Colors.grey[400]),
+                  const SizedBox(height: 8),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Address Information',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Color(0xFFB82132),
+                      ),
+                    ),
                   ),
-                  // removed latitude and longitude input fields
+                  const SizedBox(height: 8),
+                  // Address dropdowns
+                  DropdownButtonFormField<String>(
+                    value: selectedProvince,
+                    items: provinces
+                        .map<DropdownMenuItem<String>>((prov) => DropdownMenuItem<String>(
+                              value: prov['name'] as String,
+                              child: Text(prov['name'] as String),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      final code = provinces.firstWhere((p) => p['name'] == val)['code'];
+                      setState(() {
+                        selectedProvince = val;
+                        selectedProvinceCode = code;
+                      });
+                      if (code != null) _fetchMunicipalities(code);
+                    },
+                    decoration: _inputDecoration('Province'),
+                    validator: (value) => value == null ? 'Select province' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: selectedMunicipality,
+                    items: municipalities
+                        .map<DropdownMenuItem<String>>((mun) => DropdownMenuItem<String>(
+                              value: mun['name'] as String,
+                              child: Text(mun['name'] as String),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      final code = municipalities.firstWhere((m) => m['name'] == val)['code'];
+                      setState(() {
+                        selectedMunicipality = val;
+                        selectedMunicipalityCode = code;
+                      });
+                      if (code != null) _fetchBarangays(code);
+                    },
+                    decoration: _inputDecoration('Municipality'),
+                    validator: (value) => value == null ? 'Select municipality' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: selectedBarangay,
+                    items: barangays
+                        .map<DropdownMenuItem<String>>((brgy) => DropdownMenuItem<String>(
+                              value: brgy['name'] as String,
+                              child: Text(brgy['name'] as String),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      final code = barangays.firstWhere((b) => b['name'] == val)['code'];
+                      setState(() {
+                        selectedBarangay = val;
+                        selectedBarangayCode = code;
+                      });
+                      // PSGC does not provide purok/district, so skip
+                      // _fetchDistricts(code);
+                    },
+                    decoration: _inputDecoration('Barangay'),
+                    validator: (value) => value == null ? 'Select barangay' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  // Add District/Purok dropdown
+                  DropdownButtonFormField<String>(
+                    value: selectedDistrict,
+                    items: districts
+                        .map<DropdownMenuItem<String>>((dist) => DropdownMenuItem<String>(
+                              value: dist,
+                              child: Text(dist),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      setState(() {
+                        selectedDistrict = val;
+                      });
+                    },
+                    decoration: _inputDecoration('District/Purok'),
+                    validator: (value) => value == null ? 'Select district/purok' : null,
+                  ),
                   const SizedBox(height: 24),
                   ElevatedButton(
                     onPressed: isLoading ? null : _register,
