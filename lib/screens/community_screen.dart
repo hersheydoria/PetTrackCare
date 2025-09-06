@@ -630,7 +630,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                         Text('Create Post', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         DropdownButton<String>(
                           value: selectedType,
-                          items: ['general', 'lost', 'found']
+                          items: ['general', 'missing', 'found']
                               .map((type) => DropdownMenuItem(
                                     value: type,
                                     child: Text(type[0].toUpperCase() + type.substring(1)),
@@ -1545,7 +1545,7 @@ void showEditPostModal(Map post) {
                 isDense: true,
                 style: const TextStyle(color: Colors.white),
                 alignment: Alignment.center,
-                items: ['all', 'lost', 'found', 'my posts']
+                items: ['all', 'missing', 'found', 'my posts']
                     .map(
                       (type) => DropdownMenuItem(
                         value: type,
@@ -1564,7 +1564,7 @@ void showEditPostModal(Map post) {
                 icon: Icon(Icons.filter_list, color: Colors.white),
                 dropdownColor: Colors.white,
                 selectedItemBuilder: (context) {
-                  return ['all', 'lost', 'found', 'my posts'].map((type) {
+                  return ['all', 'missing', 'found', 'my posts'].map((type) {
                     return Align(
                       alignment: Alignment.center,
                       child: Text(
