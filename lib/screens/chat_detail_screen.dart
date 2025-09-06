@@ -49,12 +49,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   RealtimeChannel? _callRx;
   final Map<String, RealtimeChannel> _sigChans = {};
 
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
     _recorder = FlutterSoundRecorder();
     _initAudio(); // ask mic permission, open recorder & player
-    fetchMessages();
+    fetchMessages().then((_) => _scrollToBottom());
     markMessagesAsSeen();
     subscribeToMessages();
     subscribeToTyping();
@@ -355,6 +357,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     setState(() {
       messages = response;
     });
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0.0,
+        duration: Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   Future<void> markMessagesAsSeen() async {
@@ -886,11 +899,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             child: RefreshIndicator(
               onRefresh: _refreshAll,
               child: ListView.builder(
+                controller: _scrollController,
+                reverse: true,
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.only(top: 12),
                 itemCount: messages.length,
                 itemBuilder: (_, index) {
-                  final msg = messages[index];
+                  final msg = messages[messages.length - 1 - index];
                   final sentByMe = isSender(msg['sender_id']);
                   final isLastSeen = lastSeenMessageId != null &&
                       msg['id'].toString() == lastSeenMessageId;

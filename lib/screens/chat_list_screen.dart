@@ -157,28 +157,31 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return;
 
-    // 1) Fetch message list with names only (no avatar fields)
+    // Fetch message list with sender/receiver profile_picture from users table
     final response = await supabase
         .from('messages')
-        .select('sender_id, receiver_id, content, sent_at, is_seen, sender:sender_id(name), receiver:receiver_id(name)')
+        .select('''
+          sender_id,
+          receiver_id,
+          content,
+          sent_at,
+          is_seen,
+          sender:sender_id(id, name, profile_picture),
+          receiver:receiver_id(id, name, profile_picture)
+        ''')
         .or('sender_id.eq.$userId,receiver_id.eq.$userId')
         .order('sent_at', ascending: false);
 
     final grouped = <String, Map<String, dynamic>>{};
-    final contactIds = <String>{};
-
     for (var msg in response) {
       final isSender = msg['sender_id'] == userId;
+      final senderUser = msg['sender'] as Map<String, dynamic>? ?? {};
+      final receiverUser = msg['receiver'] as Map<String, dynamic>? ?? {};
 
-      final Map<String, dynamic>? senderUser =
-          (msg['sender'] is Map) ? (msg['sender'] as Map).cast<String, dynamic>() : null;
-      final Map<String, dynamic>? receiverUser =
-          (msg['receiver'] is Map) ? (msg['receiver'] as Map).cast<String, dynamic>() : null;
-
-      final String contactId = (isSender ? msg['receiver_id'] : msg['sender_id']).toString();
-      final String contactName = isSender
-          ? (receiverUser != null ? (receiverUser['name'] as String? ?? 'Unknown') : 'Unknown')
-          : (senderUser != null ? (senderUser['name'] as String? ?? 'Unknown') : 'Unknown');
+      final contactId = isSender ? msg['receiver_id'].toString() : msg['sender_id'].toString();
+      final contactUser = isSender ? receiverUser : senderUser;
+      final contactName = contactUser['name'] ?? 'Unknown';
+      final contactProfilePictureUrl = contactUser['profile_picture'] as String?;
 
       if (!grouped.containsKey(contactId)) {
         grouped[contactId] = {
@@ -187,106 +190,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
           'lastMessage': msg['content'],
           'isSeen': msg['is_seen'],
           'isSender': isSender,
-          // contactProfilePictureUrl filled after avatar lookups
+          'contactProfilePictureUrl': contactProfilePictureUrl,
         };
-        contactIds.add(contactId);
       }
-    }
-
-    // 2) Attempt to fetch avatar URLs from public.users (if mirrored there)
-    final Map<String, String?> avatarsByUserId = {};
-    if (contactIds.isNotEmpty) {
-      try {
-        final usersResp = await supabase
-            .from('users')
-            .select('*')
-            .inFilter('id', contactIds.toList()); // changed from .in_ to .inFilter
-        for (final row in usersResp) {
-          final map = (row is Map) ? (row as Map).cast<String, dynamic>() : null;
-          if (map == null) continue;
-          final String? uid = map['id']?.toString();
-          if (uid == null) continue;
-
-          String? url;
-
-          // Try common flat columns first
-          for (final key in [
-            'profile_picture',
-            'profile_pic',
-            'avatar_url',
-            'avatar',
-            'photo_url',
-            'image_url',
-            'picture',
-            'photo',
-          ]) {
-            final v = map[key];
-            if (v is String && v.trim().isNotEmpty) {
-              url = v;
-              break;
-            }
-          }
-
-          // If not found, try nested metadata copies (if your users table mirrors auth.users metadata)
-          if (url == null) {
-            final Map<String, dynamic>? rawMeta =
-                (map['raw_user_meta_data'] is Map) ? (map['raw_user_meta_data'] as Map).cast<String, dynamic>() : null;
-            final Map<String, dynamic>? userMeta =
-                (map['user_metadata'] is Map) ? (map['user_metadata'] as Map).cast<String, dynamic>() : null;
-            final Map<String, dynamic>? meta =
-                (map['metadata'] is Map) ? (map['metadata'] as Map).cast<String, dynamic>() : null;
-
-            for (final metaMap in [rawMeta, userMeta, meta]) {
-              if (metaMap == null) continue;
-              for (final key in ['profile_picture', 'profile_pic', 'avatar_url', 'avatar', 'picture', 'photo']) {
-                final v = metaMap[key];
-                if (v is String && v.trim().isNotEmpty) {
-                  url = v;
-                  break;
-                }
-              }
-              if (url != null) break;
-            }
-          }
-
-          avatarsByUserId[uid] = url;
-        }
-      } catch (_) {
-        // Ignore; we'll try admin next or fallback to initials
-      }
-    }
-
-    // 3) For any contacts still missing, try auth.admin.getUserById (requires service role key)
-    final missingIds = contactIds.where((id) => (avatarsByUserId[id] == null || avatarsByUserId[id]!.isEmpty)).toList();
-    if (missingIds.isNotEmpty) {
-      for (final uid in missingIds) {
-        try {
-          final res = await supabase.auth.admin.getUserById(uid);
-          final dynamic metaDyn = res.user?.userMetadata;
-          final Map<String, dynamic>? meta =
-              (metaDyn is Map) ? (metaDyn as Map).cast<String, dynamic>() : null;
-          String? url;
-          if (meta != null) {
-            for (final key in ['profile_picture', 'profile_pic', 'avatar_url', 'avatar', 'picture', 'photo']) {
-              final v = meta[key];
-              if (v is String && v.trim().isNotEmpty) {
-                url = v;
-                break;
-              }
-            }
-          }
-          if (url != null && url.isNotEmpty) {
-            avatarsByUserId[uid] = url;
-          }
-        } catch (_) {
-          // Not available without service role or not permitted; fallback to initials
-        }
-      }
-    }
-
-    // 4) Merge avatars into grouped results
-    for (final entry in grouped.entries) {
-      entry.value['contactProfilePictureUrl'] = avatarsByUserId[entry.key];
     }
 
     setState(() {
@@ -321,17 +227,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
             final chat = messages[index];
             final isSeen = chat['isSeen'] ?? true;
             final isSender = chat['isSender'] ?? false;
-            final dynamic avatarDyn = chat['contactProfilePictureUrl'];
-            final String? avatarUrl = (avatarDyn is String && avatarDyn.isNotEmpty) ? avatarDyn : null;
+            final String? avatarUrl = chat['contactProfilePictureUrl'];
             final String contactName = (chat['contactName'] as String?) ?? '';
             final String initial = contactName.isNotEmpty ? contactName[0].toUpperCase() : '?';
 
             return ListTile(
               leading: CircleAvatar(
                 backgroundColor: Colors.grey.shade300,
-                backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-                // Show initial if there is no profile picture
-                child: avatarUrl == null
+                backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+                child: avatarUrl == null || avatarUrl.isEmpty
                     ? Text(
                         initial,
                         style: TextStyle(

@@ -42,7 +42,6 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
   }
-  
 
   void _logout(BuildContext context) async {
     await Supabase.instance.client.auth.signOut();
@@ -69,7 +68,6 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
     },
   );
 }
-
 
 Future<void> _pickProfileImage() async {
   final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
@@ -115,12 +113,15 @@ Future<void> _pickProfileImage() async {
 
     final publicUrl = bucket.getPublicUrl(fileName);
 
-    await supabase.auth.updateUser(UserAttributes(
-      data: {'profile_picture': publicUrl},
-    ));
+    // Store profile_picture in public.users table, not auth.users
+    await supabase
+      .from('users')
+      .update({'profile_picture': publicUrl})
+      .eq('id', user!.id);
 
     setState(() {
       _profileImage = file;
+      metadata['profile_picture'] = publicUrl;
     });
 
     print('✅ Profile picture updated!');
@@ -128,9 +129,6 @@ Future<void> _pickProfileImage() async {
     print('❌ Error uploading profile image: $e');
   }
 }
-
-
-
 
 Future<void> pickAndUploadImage() async {
   final ImagePicker picker = ImagePicker();
@@ -163,7 +161,6 @@ Future<void> pickAndUploadImage() async {
     print('❌ Upload failed: $e');
   }
 }
-
 
   Future<List<Map<String, dynamic>>> _fetchPets() async {
     final ownerId = user?.id;
@@ -1473,13 +1470,11 @@ SizedBox(height: 16),
               ),
             ),
           ),
-        );
-      },
-    );
+          );
+        },
+      );
+    }
   }
-
-
-}
 
 class _AddPetForm extends StatefulWidget {
   final VoidCallback onPetAdded;
@@ -1658,7 +1653,6 @@ class _AddPetFormState extends State<_AddPetForm> {
     setState(() => _isLoading = false);
   }
 }
-
 
   @override
   Widget build(BuildContext context) {

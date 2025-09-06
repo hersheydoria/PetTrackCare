@@ -183,7 +183,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       // Get user data
       final userData = await Supabase.instance.client
           .from('users')
-          .select('name, profile')
+          .select('name, profile_picture') // <-- add profile_picture
           .eq('id', widget.userId)
           .single();
 
@@ -283,7 +283,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
             users!community_posts_user_id_fkey (
               name,
               role,
-              profile
+              profile_picture
             ),
             likes (
               user_id
@@ -295,7 +295,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
               created_at,
               users!comments_user_id_fkey (
                 name,
-                profile
+                profile_picture
               ),
               comment_likes (
                 user_id
@@ -393,7 +393,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           final responses = await Future.wait(commentIdList.map((cid) async {
             final res = await Supabase.instance.client
                 .from('replies')
-                .select('*, users!replies_user_id_fkey(name, profile)')
+                .select('*, users!replies_user_id_fkey(name, profile_picture)')
                 .eq('comment_id', cid)
                 .order('created_at', ascending: false);
             return res as List<dynamic>;
@@ -438,7 +438,11 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           .from('community-posts')
           .getPublicUrl(filePath);
 
-      print('Public URL: $publicUrl');
+      // Do NOT update users.profile_picture here!
+      // Only return the image URL for use in community_posts.image_url
+
+      print('✅ Community post image uploaded!');
+
       return publicUrl;
     } catch (e) {
       print('Upload failed: $e');
@@ -453,7 +457,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
       final response = await Supabase.instance.client
           .from('replies')
-          .select('*, users!replies_user_id_fkey(name, profile)')
+          .select('*, users!replies_user_id_fkey(name, profile_picture)')
           .eq('comment_id', commentId)
           .order('created_at', ascending: false)
           .range(currentPage * limit, currentPage * limit + limit - 1);
@@ -491,7 +495,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
       final userData = await Supabase.instance.client
           .from('users')
-          .select('name, profile')
+          .select('name, profile_picture') // <-- add profile_picture
           .eq('id', widget.userId)
           .single();
 
@@ -564,27 +568,40 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   }
 
   Future<void> createPost(String type, String content, File? imageFile) async {
-    if (content.trim().isEmpty) return;
-    try {
-      String? imageUrl;
-      if (imageFile != null) {
-        imageUrl = await uploadImage(imageFile);
-      }
-
-      await Supabase.instance.client.from('community_posts').insert({
-        'user_id': widget.userId,
-        'type': type,
-        'content': content,
-        'image_url': imageUrl,
-        'created_at': DateTime.now().toIso8601String(),
-      });
-
-      fetchPosts();
-      Navigator.pop(context);
-    } catch (e) {
-      print('Error creating post: $e');
+  if (content.trim().isEmpty) return;
+  try {
+    String? imageUrl;
+    if (imageFile != null) {
+      // Upload image to Supabase Storage and get public URL
+      final fileName = p.basename(imageFile.path);
+      final filePath = 'uploads/$fileName';
+      final bytes = await imageFile.readAsBytes();
+      await Supabase.instance.client.storage
+          .from('community-posts')
+          .uploadBinary(
+            filePath,
+            bytes,
+            fileOptions: const FileOptions(upsert: true),
+          );
+      imageUrl = Supabase.instance.client.storage
+          .from('community-posts')
+          .getPublicUrl(filePath);
     }
+
+    await Supabase.instance.client.from('community_posts').insert({
+      'user_id': widget.userId,
+      'type': type,
+      'content': content,
+      'image_url': imageUrl,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
+    fetchPosts();
+    Navigator.pop(context);
+  } catch (e) {
+    print('Error creating post: $e');
   }
+}
 
   void showCreatePostModal() {
     String selectedType = 'general';
@@ -821,6 +838,14 @@ void showEditPostModal(Map post) {
     }).toList();
   }
 
+  String? getCurrentUserProfilePicture() {
+  final user = Supabase.instance.client.auth.currentUser;
+  if (user != null && user.userMetadata != null && user.userMetadata!['profile_picture'] != null) {
+    return user.userMetadata!['profile_picture'] as String?;
+  }
+  return null;
+}
+
   Widget buildPostList(List<dynamic> postList) {
     if (postList.isEmpty) return Center(child: Text('No posts to show.'));
     return ListView.builder(
@@ -832,6 +857,12 @@ void showEditPostModal(Map post) {
         final userData = post['users'] ?? {};
         final userName = userData['name'] ?? 'Unknown';
         final userRole = userData['role'] ?? 'User';
+        String? profilePic = userData['profile_picture'];
+
+        // If this is the current user's post, get profile picture from Auth metadata
+        if (post['user_id'] == widget.userId) {
+          profilePic = getCurrentUserProfilePicture() ?? profilePic;
+        }
 
         final createdAt = DateTime.tryParse(post['created_at'] ?? '')?.toLocal() ?? DateTime.now();
         final timeDiff = DateTime.now().difference(createdAt);
@@ -874,8 +905,8 @@ void showEditPostModal(Map post) {
                   children: [
                     CircleAvatar(
                       radius: 20,
-                      backgroundImage: post['users']?['profile'] != null
-                          ? NetworkImage(post['users']!['profile'])
+                      backgroundImage: profilePic != null && profilePic.toString().isNotEmpty
+                          ? NetworkImage(profilePic)
                           : AssetImage('assets/logo.png') as ImageProvider,
                     ),
                     SizedBox(width: 10),
@@ -1073,6 +1104,7 @@ void showEditPostModal(Map post) {
                               final comment = postComments[postId]![idx];
                               final user = comment['users'] ?? {};
                               final commentId = comment['id'].toString();
+                              final commentProfilePic = user['profile_picture']; // <-- Add this line
                               final commentLikes = comment['comment_likes'] as List? ?? [];
                               final isLiked = commentLikes.any((like) => like['user_id'] == widget.userId);
                               likedComments[commentId] = isLiked;
@@ -1092,8 +1124,8 @@ void showEditPostModal(Map post) {
                                         children: [
                                           CircleAvatar(
                                             radius: 16,
-                                            backgroundImage: user['profile'] != null
-                                                ? NetworkImage(user['profile'])
+                                            backgroundImage: commentProfilePic != null && commentProfilePic.toString().isNotEmpty
+                                                ? NetworkImage(commentProfilePic)
                                                 : AssetImage('assets/logo.png') as ImageProvider,
                                           ),
                                           SizedBox(width: 8),
@@ -1327,6 +1359,7 @@ void showEditPostModal(Map post) {
                                             children: [
                                               ...List.generate(commentReplies[commentId]!.length, (ri) {
                                                 final r = commentReplies[commentId]![ri];
+                                                final replyProfilePic = r['users']?['profile_picture'];
                                                 return Padding(
                                                   padding: const EdgeInsets.symmetric(vertical: 4.0),
                                                   child: Row(
@@ -1334,8 +1367,8 @@ void showEditPostModal(Map post) {
                                                     children: [
                                                       CircleAvatar(
                                                         radius: 12,
-                                                        backgroundImage: r['users']?['profile'] != null
-                                                            ? NetworkImage(r['users']['profile'])
+                                                        backgroundImage: replyProfilePic != null && replyProfilePic.toString().isNotEmpty
+                                                            ? NetworkImage(replyProfilePic)
                                                             : AssetImage('assets/logo.png') as ImageProvider,
                                                       ),
                                                       SizedBox(width: 8),

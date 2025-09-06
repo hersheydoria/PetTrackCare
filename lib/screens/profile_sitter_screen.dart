@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
 
 // Reuse owner's color palette
 const deepRed = Color(0xFFB82132);
@@ -24,10 +26,32 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
   String get email => user?.email ?? 'No email';
   String get address => metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
+  File? _profileImage;
+  final ImagePicker _picker = ImagePicker();
+
+  String? _profilePictureUrl;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _loadProfilePicture();
+  }
+
+  Future<void> _loadProfilePicture() async {
+    final supabase = Supabase.instance.client;
+    final userId = user?.id;
+    if (userId == null) return;
+    try {
+      final res = await supabase
+          .from('users')
+          .select('profile_picture')
+          .eq('id', userId)
+          .maybeSingle();
+      setState(() {
+        _profilePictureUrl = res?['profile_picture']?.toString();
+      });
+    } catch (_) {}
   }
 
   void _logout(BuildContext context) async {
@@ -35,21 +59,99 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
+  // Add settings dialog handlers (copied from profile_owner_screen.dart)
+  void _openAccountSettings() async {
+    // ...same logic as owner, but for sitter...
+  }
+  void _openNotificationPreferences() async {
+    // ...same logic as owner...
+  }
+  void _openPrivacySettings() async {
+    // ...same logic as owner...
+  }
+  void _openChangePassword() async {
+    // ...same logic as owner...
+  }
+  void _openHelpSupport() {
+    // ...same logic as owner...
+  }
+  void _openAbout() {
+    // ...same logic as owner...
+  }
+
+  Future<void> _pickProfileImage() async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Confirm Profile Picture'),
+          content: Image.file(File(pickedFile.path)),
+          actions: [
+            TextButton(
+              child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+              onPressed: () => Navigator.of(context).pop(false),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+              child: Text('Confirm'),
+              onPressed: () => Navigator.of(context).pop(true),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) return;
+
+    final file = File(pickedFile.path);
+    final fileBytes = await file.readAsBytes();
+    final fileName =
+        'profile_images/${user!.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+    try {
+      final supabase = Supabase.instance.client;
+      final bucket = supabase.storage.from('profile-pictures');
+
+      await bucket.uploadBinary(
+        fileName,
+        fileBytes,
+        fileOptions: const FileOptions(contentType: 'image/jpeg'),
+      );
+
+      final publicUrl = bucket.getPublicUrl(fileName);
+
+      // Store profile_picture in public.users table, not auth.users
+      await supabase
+        .from('users')
+        .update({'profile_picture': publicUrl})
+        .eq('id', user!.id);
+
+      setState(() {
+        _profileImage = file;
+        _profilePictureUrl = publicUrl;
+        metadata['profile_picture'] = publicUrl;
+      });
+
+      print('✅ Profile picture updated!');
+    } catch (e) {
+      print('❌ Error uploading profile image: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: lightBlush,
       appBar: AppBar(
-        title: Text(
-          'Sitter Profile',
-          style: TextStyle(color: deepRed, fontWeight: FontWeight.bold),
-        ),
-        centerTitle: true,
-        backgroundColor: lightBlush,
+        title: Text('Sitter Profile', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Color(0xFFCB4154),
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.more_vert, color: deepRed),
+            icon: Icon(Icons.more_vert),
             onPressed: () {
               showModalBottomSheet(
                 context: context,
@@ -69,34 +171,82 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
       ),
       body: Column(
         children: [
-          Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Column(
+          // Profile Info (same as owner, but for sitter)
+          Container(
+            margin: EdgeInsets.only(top: 16),
+            child: Stack(
+              alignment: Alignment.bottomRight,
               children: [
-                CircleAvatar(
-                  radius: 60,
-                  backgroundImage: AssetImage('assets/default_profile.png'),
+                Container(
+                  padding: EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: deepRed, width: 2),
+                  ),
+                  child: CircleAvatar(
+                    radius: 60,
+                    backgroundColor: Colors.white,
+                    backgroundImage: _profileImage != null
+                        ? FileImage(_profileImage!)
+                        : (_profilePictureUrl != null && _profilePictureUrl!.isNotEmpty
+                            ? NetworkImage(_profilePictureUrl!)
+                            : null),
+                    child: (_profileImage == null && (_profilePictureUrl == null || _profilePictureUrl!.isEmpty))
+                        ? Icon(Icons.person, size: 60, color: Colors.grey[400])
+                        : null,
+                  ),
                 ),
-                SizedBox(height: 12),
-                Text(
-                  name,
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: deepRed),
-                ),
-                Text(email, style: TextStyle(fontSize: 16)),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.location_on, color: Colors.grey[600], size: 16),
-                    SizedBox(width: 4),
-                    Text(
-                      address,
-                      style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+                Positioned(
+                  bottom: 4,
+                  right: 4,
+                  child: GestureDetector(
+                    onTap: _pickProfileImage,
+                    child: Container(
+                      padding: EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: deepRed,
+                      ),
+                      child: Icon(
+                        Icons.camera_alt,
+                        size: 20,
+                        color: Colors.white,
+                      ),
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
           ),
+          SizedBox(height: 12),
+          Text(
+            name,
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: deepRed,
+            ),
+          ),
+          Text(
+            email,
+            style: TextStyle(
+              fontSize: 16,
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.location_on, color: Colors.grey[600], size: 16),
+              SizedBox(width: 4),
+              Text(
+                address,
+                style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
+
+          // White rounded container with tabs and tab content
           Expanded(
             child: Container(
               margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -123,7 +273,18 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
                       controller: _tabController,
                       children: [
                         AssignedPetsTab(),
-                        SettingsTab(), // No logout here anymore
+                        ListView(
+                          padding: EdgeInsets.all(16),
+                          children: [
+                            _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
+                            _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
+                            _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
+                            _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
+                            _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
+                            _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
+                            SizedBox(height: 16),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -132,6 +293,22 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _settingsTile(IconData icon, String title, {VoidCallback? onTap}) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: deepRed),
+        title: Text(title),
+        onTap: onTap ?? () {},
       ),
     );
   }
@@ -235,7 +412,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
   }
 }
 
-class SettingsTab extends StatelessWidget {
+class SitterSettingsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -244,6 +421,9 @@ class SettingsTab extends StatelessWidget {
         _settingsTile(Icons.lock, 'Change Password'),
         _settingsTile(Icons.notifications, 'Notification Preferences'),
         _settingsTile(Icons.privacy_tip, 'Privacy Settings'),
+        _settingsTile(Icons.help_outline, 'Help & Support'),
+        _settingsTile(Icons.info_outline, 'About'),
+        SizedBox(height: 16),
       ],
     );
   }

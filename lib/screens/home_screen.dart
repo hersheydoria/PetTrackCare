@@ -117,10 +117,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> fetchAvailableSitters() async {
     try {
-      // Pull from sitters, join users for display name, join reviews to compute avg rating
+      // Pull from sitters, join users for display name and profile picture, join reviews to compute avg rating
       final rows = await supabase
           .from('sitters')
-          .select('id, user_id, is_available, hourly_rate, users!inner(id, name, role), sitter_reviews(rating)')
+          .select('id, user_id, is_available, hourly_rate, users!inner(id, name, role, profile_picture), sitter_reviews(rating)')
           .eq('users.role', 'Pet Sitter');
 
       final List<dynamic> list = (rows as List?) ?? [];
@@ -134,15 +134,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           avgRating = (sum / reviews.length).toDouble();
         }
         return {
-          // Keep users.id as 'id' for chat/hire flows
           'id': (user['id'] ?? m['user_id'])?.toString(),
           'user_id': (m['user_id'] ?? user['id'])?.toString(),
-          'sitter_id': m['id']?.toString(), // sitters.id
+          'sitter_id': m['id']?.toString(),
           'name': (user['name'] ?? 'Sitter').toString(),
           'is_available': m['is_available'],
-          // Map hourly_rate -> rate_per_hour so UI stays the same
           'rate_per_hour': m['hourly_rate'],
-          'rating': avgRating, // may be null if no reviews
+          'rating': avgRating,
+          'profile_picture': user['profile_picture'], // <-- add this line
         };
       }).toList();
 
@@ -1051,12 +1050,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           final num? ratingNum = sitter['rating'] == null ? null : (sitter['rating'] as num);
           final bool isAvail = sitter['is_available'] == true;
           final dynamic rateVal = sitter['rate_per_hour'];
+          final String? profilePic = sitter['profile_picture'];
 
           return Card(
             margin: EdgeInsets.only(bottom: 16),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
-              padding: const EdgeInsets.all(16.0), // FIX: add named argument
+              padding: const EdgeInsets.all(16.0),
               child: Column(
                 children: [
                   Center(
@@ -1070,7 +1070,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     children: [
                       CircleAvatar(
                         radius: 26,
-                        backgroundImage: AssetImage('assets/sitter_placeholder.png'),
+                        backgroundImage: profilePic != null && profilePic.isNotEmpty
+                            ? NetworkImage(profilePic)
+                            : AssetImage('assets/sitter_placeholder.png') as ImageProvider,
                       ),
                       SizedBox(width: 12),
                       Expanded(
