@@ -184,79 +184,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
     return supabase.storage.from('profile-pictures').getPublicUrl(clean);
   }
 
-  // Extract many possible keys for avatar URL from both top-level and data JSON, including nested user objects
-  String? _extractInlineAvatarUrl(Map<String, dynamic> n) {
-    final data = _safeData(n['data']);
-    final candidates = <dynamic>[
-      // top-level
-      n['from_user_profile_picture'],
-      n['from_user_avatar'],
-      n['profile_picture'],
-      n['profile_image'],
-      n['profile_image_url'],
-      n['avatar_url'],
-      n['avatar'],
-      n['from_profile_picture'],
-      n['user_profile_picture'],
-      n['photo_url'],
-      n['image_url'],
-      n['profile_picture_path'],
-      n['avatar_path'],
-      // inside data JSON
-      data['from_user_profile_picture'],
-      data['from_user_avatar'],
-      data['profile_picture'],
-      data['profile_image'],
-      data['profile_image_url'],
-      data['avatar_url'],
-      data['avatar'],
-      data['from_profile_picture'],
-      data['user_profile_picture'],
-      data['photo_url'],
-      data['image_url'],
-      data['profile_picture_path'],
-      data['avatar_path'],
-    ];
-
-    for (final v in candidates) {
-      if (v == null) continue;
-      final s = v.toString().trim();
-      if (s.isEmpty) continue;
-      return _ensurePublicUrl(s);
-    }
-
-    // Also check nested actor objects
-    String? fromNested(Map? m) {
-      if (m == null) return null;
-      final keys = ['profile_picture', 'avatar_url', 'profile_image', 'image_url', 'photo_url', 'profile_picture_path', 'avatar_path'];
-      for (final k in keys) {
-        final v = m[k];
-        if (v != null && v.toString().trim().isNotEmpty) {
-          return _ensurePublicUrl(v.toString().trim());
-        }
-      }
-      return null;
-    }
-
-    final nestedCandidates = <Map<String, dynamic>?>[
-      (data['from_user'] is Map) ? Map<String, dynamic>.from(data['from_user']) : null,
-      (data['actor'] is Map) ? Map<String, dynamic>.from(data['actor']) : null,
-      (data['sender'] is Map) ? Map<String, dynamic>.from(data['sender']) : null,
-      (data['user'] is Map) ? Map<String, dynamic>.from(data['user']) : null,
-      (n['from_user'] is Map) ? Map<String, dynamic>.from(n['from_user']) : null,
-      (n['actor'] is Map) ? Map<String, dynamic>.from(n['actor']) : null,
-      (n['sender'] is Map) ? Map<String, dynamic>.from(n['sender']) : null,
-      (n['user'] is Map) ? Map<String, dynamic>.from(n['user']) : null,
-    ];
-
-    for (final m in nestedCandidates) {
-      final url = fromNested(m);
-      if (url != null) return url;
-    }
-
-    return null;
-  }
-
   // Get the actor/sender user id from multiple potential keys (avoid recipient user_id)
   String? _extractActorId(Map<String, dynamic> n) {
     final data = _safeData(n['data']);
@@ -307,41 +234,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
     return null;
   }
 
-  // Extract post id from notification payload
+  // Extract post id from notification payload (schema: top-level post_id)
   String? _extractPostId(Map<String, dynamic> n) {
+    final postId = n['post_id']?.toString();
+    if (postId != null && postId.isNotEmpty) return postId;
+    // fallback to data if needed
     final data = _safeData(n['data']);
-
-    String? fromMap(dynamic m) {
-      if (m is Map) {
-        final map = Map<String, dynamic>.from(m);
-        final v = (map['id'] ?? map['post_id'] ?? map['uuid']);
-        if (v != null && v.toString().trim().isNotEmpty) return v.toString().trim();
-      }
-      return null;
-    }
-
-    final candidates = <dynamic>[
-      // direct ids
-      data['post_id'],
-      data['postId'],
-      data['community_post_id'],
-      data['communityPostId'],
-      n['post_id'],
-      n['postId'],
-      // nested objects with id
-      fromMap(data['post']),
-      fromMap(data['community_post']),
-      fromMap(data['target_post']),
-      fromMap(data['liked_post']),
-      fromMap(data['commented_post']),
-      fromMap(n['post']),
-      fromMap(n['community_post']),
-    ];
-    for (final v in candidates) {
-      if (v == null) continue;
-      final s = v.toString().trim();
-      if (s.isNotEmpty) return s;
-    }
+    final dataPostId = data['post_id']?.toString();
+    if (dataPostId != null && dataPostId.isNotEmpty) return dataPostId;
     return null;
   }
 
@@ -462,26 +362,54 @@ class _NotificationScreenState extends State<NotificationScreen> {
     return n['message'] ?? 'You have a new notification';
   }
 
-  // Try profiles table if inline URL is missing (optional, cached)
-  Future<String?> _getOrFetchAvatarUrl(String userId) async {
-    if (_avatarCache.containsKey(userId)) return _avatarCache[userId];
+  // Remove any avatar/profile logic except profile_picture from public.users
+
+  // Get profile_picture directly from public.users table and display it
+  Future<String?> _getProfilePicture(String userId) async {
+    // Use cache if available
+    if (_avatarCache.containsKey(userId)) {
+      return _avatarCache[userId];
+    }
     try {
-      final row = await supabase
-          .from('profiles')
-          .select('profile_picture, avatar_url')
+      final userRow = await supabase
+          .from('users')
+          .select('profile_picture')
           .eq('id', userId)
           .maybeSingle();
-      final raw = (row?['profile_picture'] ?? row?['avatar_url'])?.toString();
-      final url = raw == null ? null : _ensurePublicUrl(raw);
-      _avatarCache[userId] = url;
-      return url;
+      final userPic = userRow?['profile_picture']?.toString();
+      if (userPic != null && userPic.trim().isNotEmpty && !userPic.toLowerCase().contains('default')) {
+        _avatarCache[userId] = userPic; // Use the URL directly
+        return userPic;
+      }
+      _avatarCache[userId] = null;
+      return null;
     } catch (_) {
       _avatarCache[userId] = null;
       return null;
     }
   }
 
-  // Replace bell with profile avatar (inline URL > profiles lookup > default)
+  // Get the correct public.users id for avatar lookup
+  String? _extractPublicUserId(Map<String, dynamic> n) {
+    final data = _safeData(n['data']);
+    // Try to get from nested user object first
+    dynamic userObj = data['actor'] ?? data['user'] ?? data['from_user'] ?? n['actor'] ?? n['user'] ?? n['from_user'];
+    if (userObj is Map && userObj['id'] != null) {
+      return userObj['id'].toString();
+    }
+    // Try direct keys that match public.users
+    final candidates = [
+      data['profile_user_id'],
+      data['user_id'],
+      n['profile_user_id'],
+      n['user_id'],
+    ];
+    for (final v in candidates) {
+      if (v != null && v.toString().isNotEmpty) return v.toString();
+    }
+    return null;
+  }
+
   Widget _leadingAvatar(Map<String, dynamic> n, bool read) {
     final baseAvatar = CircleAvatar(
       radius: 22,
@@ -506,20 +434,22 @@ class _NotificationScreenState extends State<NotificationScreen> {
       );
     }
 
-    final inline = _extractInlineAvatarUrl(n);
-    if (inline != null && inline.isNotEmpty) {
-      return Opacity(opacity: read ? 0.6 : 1.0, child: fromUrl(inline));
+    // Use public.users id for avatar lookup
+    final publicUserId = _extractPublicUserId(n);
+    if (publicUserId == null) {
+      return Opacity(opacity: read ? 0.6 : 1.0, child: baseAvatar);
     }
 
-    final actorId = _extractActorId(n);
-    if (actorId == null) {
-      return Opacity(opacity: read ? 0.6 : 1.0, child: baseAvatar);
+    // Use cached avatar if available for instant display
+    final cachedUrl = _avatarCache[publicUserId];
+    if (cachedUrl != null) {
+      return Opacity(opacity: read ? 0.6 : 1.0, child: fromUrl(cachedUrl));
     }
 
     return Opacity(
       opacity: read ? 0.6 : 1.0,
       child: FutureBuilder<String?>(
-        future: _getOrFetchAvatarUrl(actorId),
+        future: _getProfilePicture(publicUserId),
         builder: (context, snapshot) => fromUrl(snapshot.data),
       ),
     );
@@ -571,6 +501,35 @@ class _NotificationScreenState extends State<NotificationScreen> {
       items.add({'kind': 'item', 'data': n});
     }
     return items;
+  }
+
+  // Navigation handler for notification tap
+  void _handleNotificationTap(BuildContext context, Map<String, dynamic> n) async {
+    await _markAsRead(n['id'].toString());
+    final type = n['type'];
+    final postId = _extractPostId(n);
+    final data = _safeData(n['data']);
+    final petId = data['pet_id']?.toString();
+
+    print('Notification tapped: type=$type, postId=$postId, petId=$petId, data=$data');
+
+    // Use postId for navigation if present
+    if (postId != null && postId.isNotEmpty) {
+      Navigator.of(context).pushNamed(
+        '/postDetail',
+        arguments: {'postId': postId},
+      );
+      return;
+    } else if (type == 'pet_alert' && petId != null && petId.isNotEmpty) {
+      Navigator.of(context).pushNamed(
+        '/petAlert',
+        arguments: {'petId': petId},
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('No details available for this notification.\nType: $type\npostId: $postId\npetId: $petId')),
+    );
   }
 
   @override
@@ -659,9 +618,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
                             : const Icon(Icons.brightness_1, size: 10, color: Colors.redAccent),
                         onTap: id == null
                             ? null
-                            : () async {
-                                await _markAsRead(id);
-                              },
+                            : () => _handleNotificationTap(context, n),
                       );
                     },
                   );

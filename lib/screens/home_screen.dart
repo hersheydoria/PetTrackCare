@@ -341,7 +341,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
                 ),
                 Text('Reviews for ${sitter['name'] ?? 'Sitter'}',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed)),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed, fontFamily: 'Roboto')),
                 SizedBox(height: 12),
                 Expanded(
                   child: FutureBuilder<List<dynamic>>(
@@ -352,7 +352,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       }
                       final items = snap.data ?? [];
                       if (items.isEmpty) {
-                        return Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600])));
+                        return Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')));
                       }
                       return ListView.separated(
                         itemCount: items.length,
@@ -500,17 +500,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                     Text(
                       'Hire ${sitter['name'] ?? 'Sitter'}',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed, fontFamily: 'Roboto'),
                     ),
                     SizedBox(height: 8),
                     Divider(),
                     SizedBox(height: 8),
-                    Text('Select which pet this sitter will look after:', style: TextStyle(color: deepRed)),
+                    Text('Select which pet this sitter will look after:', style: TextStyle(color: deepRed, fontFamily: 'Roboto')),
                     SizedBox(height: 8),
                     DropdownButtonFormField<String>(
                       value: selectedPetId,
                       items: pets.map<DropdownMenuItem<String>>((p) {
-                        return DropdownMenuItem(value: p['id'] as String?, child: Text(p['name'] ?? 'Unnamed'));
+                        return DropdownMenuItem(value: p['id'] as String?, child: Text(p['name'] ?? 'Unnamed', style: TextStyle(fontFamily: 'Roboto')));
                       }).toList(),
                       onChanged: (v) => setModalState(() => selectedPetId = v),
                       decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
@@ -527,7 +527,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           Navigator.of(context).pop();
                           await _createSittingJob(sitter['id'] as String, selectedPetId!);
                         },
-                        child: Text('Confirm Hire'),
+                        child: Text('Confirm Hire', style: TextStyle(fontFamily: 'Roboto')),
                         style: ElevatedButton.styleFrom(backgroundColor: deepRed),
                       ),
                     ),
@@ -633,11 +633,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
                       decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
                   ),
-                  Text('Finish Job & Review', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed)),
+                  Text('Finish Job & Review', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed, fontFamily: 'Roboto')),
                   SizedBox(height: 12),
                   Row(
                     children: [
-                      Text('Rating:', style: TextStyle(color: deepRed)),
+                      Text('Rating:', style: TextStyle(color: deepRed, fontFamily: 'Roboto')),
                       SizedBox(width: 8),
                       Expanded(
                         child: Slider(
@@ -647,7 +647,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           onChanged: (v) => setModalState(() => rating = v),
                         ),
                       ),
-                      Text(rating.round().toString()),
+                      Text(rating.round().toString(), style: TextStyle(fontFamily: 'Roboto')),
                     ],
                   ),
                   SizedBox(height: 8),
@@ -658,6 +658,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                       filled: true, fillColor: Colors.white,
                     ),
+                    style: TextStyle(fontFamily: 'Roboto'),
                     onChanged: (v) => setModalState(() => comment = v),
                   ),
                   SizedBox(height: 12),
@@ -718,7 +719,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           print('❌ Review insert failed: $e');
                         }
                       },
-                      child: Text('Submit'),
+                      child: Text('Submit', style: TextStyle(fontFamily: 'Roboto')),
                     ),
                   ),
                   SizedBox(height: 12),
@@ -798,6 +799,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 0.3,
+                    fontFamily: 'Roboto',
                   ),
                 ),
                 SizedBox(height: 4),
@@ -806,6 +808,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.9),
                     fontSize: 14,
+                    fontFamily: 'Roboto',
                   ),
                 ),
               ],
@@ -856,6 +859,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 0.3,
+                    fontFamily: 'Roboto',
                   ),
                 ),
                 SizedBox(height: 4),
@@ -864,6 +868,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.9),
                     fontSize: 14,
+                    fontFamily: 'Roboto',
                   ),
                 ),
               ],
@@ -896,9 +901,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         children: [
           Icon(icon, color: fg ?? deepRed, size: 18),
           SizedBox(width: 8),
-          Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: fg ?? deepRed)),
+          Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: fg ?? deepRed, fontFamily: 'Roboto')),
           SizedBox(width: 6),
-          Text(label, style: TextStyle(color: (fg ?? deepRed).withOpacity(0.8))),
+          Text(label, style: TextStyle(color: (fg ?? deepRed).withOpacity(0.8), fontFamily: 'Roboto')),
         ],
       ),
       );
@@ -910,28 +915,40 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final pendingCount = ownerPendingRequests.length;
     final availableNow = availableSitters.where((s) => (s['is_available'] == true)).length;
 
-    return Wrap(
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        _ownerStatChip(
-          icon: Icons.pets,
-          label: 'Pets',
-          value: '$petsCount',
-          bg: Colors.white,
-          fg: deepRed,
+        Expanded(
+          child: _ownerStatChip(
+            icon: Icons.pets,
+            label: 'Pets',
+            value: '$petsCount',
+            bg: Colors.white,
+            fg: deepRed,
+          ),
         ),
-        _ownerStatChip(
-          icon: Icons.hourglass_top,
-          label: 'Pending',
-          value: '$pendingCount',
-          bg: Colors.white,
-          fg: Colors.orange[800],
+        Expanded(
+          child: Center(
+            child: _ownerStatChip(
+              icon: Icons.hourglass_top,
+              label: 'Pending',
+              value: '$pendingCount',
+              bg: Colors.white,
+              fg: Colors.orange[800],
+            ),
+          ),
         ),
-        _ownerStatChip(
-          icon: Icons.person_pin_circle,
-          label: 'Available',
-          value: '$availableNow',
-          bg: Colors.white,
-          fg: Colors.green[800],
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: _ownerStatChip(
+              icon: Icons.person_pin_circle,
+              label: 'Available',
+              value: '$availableNow',
+              bg: Colors.white,
+              fg: Colors.green[800],
+            ),
+          ),
         ),
       ],
     );
@@ -966,7 +983,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _sectionWithBorder(
           title: "Active Jobs",
           child: ownerActiveJobs.isEmpty
-              ? Text('No active jobs right now.', style: TextStyle(color: Colors.grey[700]))
+              ? Text('No active jobs right now.', style: TextStyle(color: Colors.grey[700], fontFamily: 'Roboto'))
               : Column(
                   children: ownerActiveJobs.map((job) {
                     final petName = (job['pets']?['name'] ?? job['pet_id'] ?? 'Pet').toString();
@@ -975,12 +992,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       margin: EdgeInsets.symmetric(vertical: 6),
                       child: ListTile(
                         leading: Icon(Icons.pets, color: deepRed),
-                        title: Text('Pet: $petName'),
-                        subtitle: Text('Started: ${start.isEmpty ? '-' : start}'),
+                        title: Text('Pet: $petName', style: TextStyle(fontFamily: 'Roboto')),
+                        subtitle: Text('Started: ${start.isEmpty ? '-' : start}', style: TextStyle(fontFamily: 'Roboto')),
                         trailing: ElevatedButton(
                           onPressed: () => _showFinishJobModal(job),
                           style: ElevatedButton.styleFrom(backgroundColor: deepRed, foregroundColor: Colors.white),
-                          child: Text('Mark Finished'),
+                          child: Text('Mark Finished', style: TextStyle(fontFamily: 'Roboto')),
                         ),
                       ),
                     );
@@ -1062,7 +1079,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   Center(
                     child: Text(
                       sitter['name'] ?? 'Unnamed',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'Roboto'),
                     ),
                   ),
                   SizedBox(height: 12),
@@ -1083,17 +1100,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               children: [
                                 Icon(Icons.star, color: Colors.orange, size: 18),
                                 SizedBox(width: 4),
-                                Text(ratingNum == null ? '—' : ratingNum.toStringAsFixed(1)),
+                                Text(ratingNum == null ? '—' : ratingNum.toStringAsFixed(1), style: TextStyle(fontFamily: 'Roboto')),
                               ],
                             ),
                             Text(
                               'Status: ${isAvail ? 'Available Now' : 'Busy'}',
-                              style: TextStyle(color: isAvail ? Colors.green[700] : Colors.grey),
+                              style: TextStyle(color: isAvail ? Colors.green[700] : Colors.grey, fontFamily: 'Roboto'),
                             ),
                             Text(
                               rateVal == null
                                   ? 'Rate: —'
                                   : 'Rate: ₱${(rateVal is num) ? rateVal.toStringAsFixed(2) : rateVal.toString()} / hour',
+                              style: TextStyle(fontFamily: 'Roboto'),
                             ),
                           ],
                         ),
@@ -1108,7 +1126,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         child: ElevatedButton.icon(
                           onPressed: () => _showSitterReviewsModal(sitter),
                           icon: Icon(Icons.reviews),
-                          label: Text('View Reviews'),
+                          label: Text('View Reviews', style: TextStyle(fontFamily: 'Roboto')),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: deepRed,
                             foregroundColor: Colors.white,
@@ -1127,7 +1145,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           return ElevatedButton.icon(
                             onPressed: isPending ? null : () => _showHireModal(sitter),
                             icon: Icon(isPending ? Icons.hourglass_top : Icons.person_add),
-                            label: Text(isPending ? 'Pending' : 'Hire Sitter'),
+                            label: Text(isPending ? 'Pending' : 'Hire Sitter', style: TextStyle(fontFamily: 'Roboto')),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: isPending ? Colors.grey : deepRed,
                               foregroundColor: Colors.white,
@@ -1155,7 +1173,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             );
                           },
                           icon: Icon(Icons.message),
-                          label: Text('Send a Message'),
+                          label: Text('Send a Message', style: TextStyle(fontFamily: 'Roboto')),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: deepRed,
                             foregroundColor: Colors.white,
@@ -1190,7 +1208,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           elevation: 2,
           child: SwitchListTile(
-            title: Text('Available for jobs', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed)),
+            title: Text('Available for jobs', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
             subtitle: Text(
               (_isSitterAvailable ?? false) ? 'Owners can see and hire you' : 'You appear as busy',
               style: TextStyle(color: Colors.grey[700]),
@@ -1214,12 +1232,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               // Filter controls
               Row(
                 children: [
-                  Text('Filter:', style: TextStyle(color: deepRed, fontWeight: FontWeight.w600)),
+                  Text('Filter:', style: TextStyle(color: deepRed, fontWeight: FontWeight.w600, fontFamily: 'Roboto')),
                   SizedBox(width: 8),
                   DropdownButton<String>(
                     value: _jobsStatusFilter,
                     items: _jobStatusOptions
-                        .map((o) => DropdownMenuItem<String>(value: o, child: Text(o)))
+                        .map((o) => DropdownMenuItem<String>(value: o, child: Text(o, style: TextStyle(fontFamily: 'Roboto'))))
                         .toList(),
                     onChanged: (v) => setState(() => _jobsStatusFilter = v ?? 'All'),
                   ),
@@ -1237,7 +1255,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 if (filtered.isEmpty) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Text('No jobs for selected filter.', style: TextStyle(color: Colors.grey[700])),
+                    child: Text('No jobs for selected filter.', style: TextStyle(color: Colors.grey[700], fontFamily: 'Roboto')),
                   );
                 }
 
@@ -1261,8 +1279,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           children: [
                             ListTile(
                               leading: Icon(Icons.pets, color: deepRed),
-                              title: Text('$petName ($petType)'),
-                              subtitle: Text('Start: $startTime'),
+                              title: Text('$petName ($petType)', style: TextStyle(fontFamily: 'Roboto')),
+                              subtitle: Text('Start: $startTime', style: TextStyle(fontFamily: 'Roboto')),
                               trailing: Container(
                                 padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
@@ -1285,6 +1303,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                                 ? Colors.blue[800]
                                                 : Colors.orange[800],
                                     fontWeight: FontWeight.w600,
+                                    fontFamily: 'Roboto',
                                   ),
                                 ),
                               ),
@@ -1297,7 +1316,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     child: ElevatedButton.icon(
                                       onPressed: () => _updateJobStatus(jobId, 'Active'),
                                       icon: Icon(Icons.check),
-                                      label: Text('Accept'),
+                                      label: Text('Accept', style: TextStyle(fontFamily: 'Roboto')),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: deepRed,
                                         foregroundColor: Colors.white,
@@ -1309,7 +1328,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     child: OutlinedButton.icon(
                                       onPressed: () => _updateJobStatus(jobId, 'Cancelled'),
                                       icon: Icon(Icons.close, color: deepRed),
-                                      label: Text('Decline', style: TextStyle(color: deepRed)),
+                                      label: Text('Decline', style: TextStyle(color: deepRed, fontFamily: 'Roboto')),
                                       style: OutlinedButton.styleFrom(side: BorderSide(color: deepRed)),
                                     ),
                                   ),
@@ -1320,7 +1339,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
                                           : null,
                                       icon: Icon(Icons.message),
-                                      label: Text('Chat'),
+                                      label: Text('Chat', style: TextStyle(fontFamily: 'Roboto')),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: coral,
                                         foregroundColor: Colors.white,
@@ -1339,7 +1358,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                         ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
                                         : null,
                                     icon: Icon(Icons.message),
-                                    label: Text('Chat'),
+                                    label: Text('Chat', style: TextStyle(fontFamily: 'Roboto')),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: coral,
                                       foregroundColor: Colors.white,
@@ -1366,7 +1385,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           child: SizedBox(
             height: 160,
             child: sitterReviews.isEmpty
-                ? Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600])))
+                ? Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')))
                 : ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: sitterReviews.length,
@@ -1398,7 +1417,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     SizedBox(width: 8),
                     Text(
                       "$completedJobsCount",
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green[800]),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green[800], fontFamily: 'Roboto'),
                     ),
                   ],
                 ),
@@ -1409,7 +1428,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   completedJobsCount == 1
                       ? "You’ve completed 1 job"
                       : "You’ve completed $completedJobsCount jobs",
-                  style: TextStyle(fontSize: 16, color: deepRed),
+                  style: TextStyle(fontSize: 16, color: deepRed, fontFamily: 'Roboto'),
                 ),
               ),
             ],
@@ -1439,15 +1458,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         children: [
           Row(children: _buildRatingStars(ratingNum)),
           SizedBox(height: 8),
-          // Removed Expanded to prevent unbounded height errors inside ListView items
           Text(
             comment.isEmpty ? "(No comment)" : '"$comment"',
-            style: TextStyle(fontStyle: FontStyle.italic),
+            style: TextStyle(fontStyle: FontStyle.italic, fontFamily: 'Roboto'),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
           SizedBox(height: 8),
-          Text('– $owner', style: TextStyle(color: Colors.grey[600])),
+          Text('– $owner', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')),
         ],
       ),
     );
@@ -1488,7 +1506,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Widget _sectionTitle(String title) {
-    return Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: coral));
+    return Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: coral, fontFamily: 'Roboto'));
   }
 
   // NEW: load sitter availability from sitters by user_id
