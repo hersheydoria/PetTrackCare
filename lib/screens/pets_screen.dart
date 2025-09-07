@@ -8,6 +8,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
 import 'package:flutter/services.dart'; // for Clipboard
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -436,7 +438,80 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                           ],
                         ),
                       ),
-
+                      // Action button for missing/lost status
+                      if (_selectedPet != null && _selectedPet!['is_missing'] == true) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: deepRed,
+                              minimumSize: Size(double.infinity, 48),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: Icon(Icons.pets, color: Colors.white),
+                            label: Text('Mark as Found', style: TextStyle(color: Colors.white)),
+                            onPressed: () async {
+                              try {
+                                await Supabase.instance.client
+                                    .from('pets')
+                                    .update({'is_missing': false})
+                                    .eq('id', _selectedPet!['id']);
+                                setState(() {
+                                  _selectedPet!['is_missing'] = false;
+                                });
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Pet marked as found!')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Failed to update: $e')),
+                                  );
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                      ] else if (_selectedPet != null && (_selectedPet!['is_missing'] == false || _selectedPet!['is_missing'] == null)) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              minimumSize: Size(double.infinity, 48),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: Icon(Icons.report, color: Colors.white),
+                            label: Text('Mark as Missing/Lost', style: TextStyle(color: Colors.white)),
+                            onPressed: () async {
+                              try {
+                                await Supabase.instance.client
+                                    .from('pets')
+                                    .update({'is_missing': true})
+                                    .eq('id', _selectedPet!['id']);
+                                setState(() {
+                                  _selectedPet!['is_missing'] = true;
+                                });
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Pet marked as missing/lost!')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Failed to update: $e')),
+                                  );
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                      ],
                       // 🧭 Tab Bar
                       Container(
                         margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -467,7 +542,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                                 controller: _tabController,
                                 children: [
                                   _buildQRCodeSection(), // show per-pet QR
-                                  _buildTabContent('Location Content Here'),
+                                  _buildLocationTab(), // <-- use map here
                                   _buildBehaviorTab(), // Updated Behavior Tab (scrollable)
                                 ],
                               ),
@@ -488,6 +563,54 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         style:
             TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: deepRed),
       ),
+    );
+  }
+
+  Widget _buildLocationTab() {
+    double? lat, lng;
+    Widget markerWidget = Icon(Icons.location_pin, color: deepRed, size: 40);
+
+    if (_selectedPet != null &&
+        _selectedPet!['latitude'] != null &&
+        _selectedPet!['longitude'] != null) {
+      lat = double.tryParse(_selectedPet!['latitude'].toString());
+      lng = double.tryParse(_selectedPet!['longitude'].toString());
+      markerWidget = CircleAvatar(
+        radius: 20,
+        backgroundColor: Colors.white,
+        child: Image.asset('assets/pets-profile-pictures.png', width: 32, height: 32, fit: BoxFit.cover),
+      );
+    }
+
+    // Agusan del Norte coordinates
+    final agusanDelNorteCenter = LatLng(9.0, 125.5);
+
+    final mapCenter = (lat != null && lng != null)
+        ? LatLng(lat, lng)
+        : agusanDelNorteCenter;
+
+    return FlutterMap(
+      options: MapOptions(
+        initialCenter: mapCenter,
+        initialZoom: 11,
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          subdomains: const ['a', 'b', 'c'],
+        ),
+        if (lat != null && lng != null)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: LatLng(lat, lng),
+                width: 40,
+                height: 40,
+                child: markerWidget,
+              ),
+            ],
+          ),
+      ],
     );
   }
 
@@ -1322,7 +1445,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                                 },
                 ),
               ),
-              // ...existing code...
             ],
           ),
                 ),
