@@ -59,7 +59,7 @@ class _MainNavigationState extends State<MainNavigation> {
       PetProfileScreen(), 
       CommunityScreen(userId: widget.userId),
       ChatListScreen(),
-      userRole == 'Pet Owner' ? OwnerProfileScreen() : SitterProfileScreen(),
+      userRole == 'Pet Owner' ? OwnerProfileScreen(openSavedPosts: false) : SitterProfileScreen(openSavedPosts: false),
     ];
   }
 

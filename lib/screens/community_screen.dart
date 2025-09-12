@@ -20,6 +20,7 @@ Map<String, List<Map<String, dynamic>>> commentReplies = {};
 Map<String, int> replyPage = {};
 Map<String, bool> replyHasMore = {};
 Map<String, bool> locallyUpdatedPosts = {}; // Track posts with local comment updates
+Map<String, bool> bookmarkedPosts = {}; // Track bookmarked posts
 const int replyDisplayThreshold = 3; // only show "View more" when replies >= threshold
 
 
@@ -51,6 +52,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     fetchPosts();
     loadCommentCounts();
     loadCommentReplies(); // Load replies on initialization
+    loadBookmarkedPosts(); // Load bookmarked posts
   }
 
   @override
@@ -233,6 +235,82 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       );
       // Restore the comment text if posting failed
       commentControllers[postId]?.text = commentText;
+    }
+  }
+
+  // Load bookmarked posts for current user
+  Future<void> loadBookmarkedPosts() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('bookmarks')
+          .select('post_id')
+          .eq('user_id', widget.userId);
+      
+      setState(() {
+        bookmarkedPosts.clear();
+        for (var bookmark in response) {
+          bookmarkedPosts[bookmark['post_id'].toString()] = true;
+        }
+      });
+    } catch (e) {
+      print('Error loading bookmarks: $e');
+    }
+  }
+
+  // Toggle bookmark status
+  Future<void> toggleBookmark(String postId) async {
+    final isCurrentlyBookmarked = bookmarkedPosts[postId] ?? false;
+    
+    try {
+      if (isCurrentlyBookmarked) {
+        // Remove bookmark
+        await Supabase.instance.client
+            .from('bookmarks')
+            .delete()
+            .eq('user_id', widget.userId)
+            .eq('post_id', postId);
+        
+        setState(() {
+          bookmarkedPosts[postId] = false;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Removed from favorites'),
+            backgroundColor: Colors.grey[600],
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else {
+        // Add bookmark
+        await Supabase.instance.client
+            .from('bookmarks')
+            .insert({
+          'user_id': widget.userId,
+          'post_id': postId,
+        });
+        
+        setState(() {
+          bookmarkedPosts[postId] = true;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added to favorites'),
+            backgroundColor: deepRed,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error toggling bookmark: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update favorites. Please try again.'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -839,10 +917,8 @@ void showEditPostModal(Map post) {
   }
 
   String? getCurrentUserProfilePicture() {
-  final user = Supabase.instance.client.auth.currentUser;
-  if (user != null && user.userMetadata != null && user.userMetadata!['profile_picture'] != null) {
-    return user.userMetadata!['profile_picture'] as String?;
-  }
+  // This function is deprecated - profile pictures should come from public.users table
+  // The query already includes profile_picture from the users table
   return null;
 }
 
@@ -859,10 +935,7 @@ void showEditPostModal(Map post) {
         final userRole = userData['role'] ?? 'User';
         String? profilePic = userData['profile_picture'];
 
-        // If this is the current user's post, get profile picture from Auth metadata
-        if (post['user_id'] == widget.userId) {
-          profilePic = getCurrentUserProfilePicture() ?? profilePic;
-        }
+        // Profile picture should already be from public.users table via the query
 
         final createdAt = DateTime.tryParse(post['created_at'] ?? '')?.toLocal() ?? DateTime.now();
         final timeDiff = DateTime.now().difference(createdAt);
@@ -1057,8 +1130,14 @@ void showEditPostModal(Map post) {
                       ],
                     ),
                     IconButton(
-                      icon: Icon(Icons.bookmark_border, color: deepRed),
-                      onPressed: () {},
+                      icon: Icon(
+                        bookmarkedPosts[postId] == true ? Icons.bookmark : Icons.bookmark_border,
+                        color: deepRed,
+                      ),
+                      onPressed: () async {
+                        print('� Bookmark clicked for post: $postId');
+                        await toggleBookmark(postId);
+                      },
                     ),
                   ],
                 ),
@@ -1242,7 +1321,7 @@ void showEditPostModal(Map post) {
                                                                 setState(() {
                                                                   // Remove from original storage so future renders stay clean
                                                                   postComments[postId]?.removeWhere((c) =>
-                                                                      (c is Map && (c as Map)['id']?.toString() == commentId));
+                                                                      c['id']?.toString() == commentId);
                                                                   commentCounts[postId] = postComments[postId]?.length ?? 0;
                                                                   commentLoading[commentId] = false;
                                                                 });

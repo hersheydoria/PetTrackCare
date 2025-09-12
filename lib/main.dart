@@ -9,6 +9,8 @@ import 'screens/reset_password_screen.dart';
 import 'screens/notification_screen.dart';
 import 'screens/post_detail_screen.dart';
 import 'screens/pet_alert_screen.dart';
+import 'screens/profile_owner_screen.dart';
+import 'screens/profile_sitter_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -75,6 +77,8 @@ class PetTrackCareApp extends StatelessWidget {
         '/notification' : (_) => NotificationScreen(),
          '/postDetail': (context) => PostDetailScreen.fromRoute(context),
           '/petAlert': (context) => PetAlertScreen.fromRoute(context),
+        '/profile_owner': (_) => OwnerProfileScreen(openSavedPosts: false),
+        '/profile_sitter': (_) => SitterProfileScreen(openSavedPosts: false),
       },
     );
   }

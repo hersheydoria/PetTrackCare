@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'pets_screen.dart';
+import '../widgets/saved_posts_modal.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -11,28 +12,50 @@ const peach = Color(0xFFF2B28C);
 const lightBlush = Color(0xFFF6DED8);
 
 class OwnerProfileScreen extends StatefulWidget {
+  final bool openSavedPosts;
+  
+  const OwnerProfileScreen({Key? key, this.openSavedPosts = false}) : super(key: key);
+  
   @override
   State<OwnerProfileScreen> createState() => _OwnerProfileScreenState();
 }
 
 class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTickerProviderStateMixin {
-  bool _isReloading = false;
   User? user = Supabase.instance.client.auth.currentUser;
   Map<String, dynamic> metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+  Map<String, dynamic> userData = {}; // Store user data from public.users table
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
+  
   // Helper to refresh user and metadata after update
   Future<void> _refreshUserMetadata() async {
     final updatedUser = Supabase.instance.client.auth.currentUser;
-    setState(() {
-      user = updatedUser;
-      metadata = updatedUser?.userMetadata ?? {};
-    });
+    
+    // Load user data from public.users table (only name and profile_picture)
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('name, profile_picture')
+          .eq('id', updatedUser?.id ?? '')
+          .single();
+      
+      setState(() {
+        user = updatedUser;
+        metadata = updatedUser?.userMetadata ?? {};
+        userData = response;
+      });
+    } catch (e) {
+      print('Error loading user data: $e');
+      setState(() {
+        user = updatedUser;
+        metadata = updatedUser?.userMetadata ?? {};
+      });
+    }
   }
 
   late TabController _tabController;
 
-  String get name => metadata['name'] ?? 'Pet Owner';
+  String get name => userData['name'] ?? metadata['name'] ?? 'Pet Owner';
   String get email => user?.email ?? 'No email';
   String get address =>
       metadata['address'] ?? metadata['location'] ?? 'No address provided';
@@ -41,6 +64,19 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    
+    // Load user data from database
+    _refreshUserMetadata();
+    
+    // If openSavedPosts is true, switch to settings tab and open saved posts
+    if (widget.openSavedPosts) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _tabController.animateTo(1); // Switch to settings tab (index 1)
+        Future.delayed(Duration(milliseconds: 300), () {
+          _openSavedPosts(); // Open saved posts modal
+        });
+      });
+    }
   }
 
   void _logout(BuildContext context) async {
@@ -122,6 +158,7 @@ Future<void> _pickProfileImage() async {
     setState(() {
       _profileImage = file;
       metadata['profile_picture'] = publicUrl;
+      userData['profile_picture'] = publicUrl;
     });
 
     print('✅ Profile picture updated!');
@@ -321,9 +358,11 @@ Container(
           backgroundColor: Colors.white,
           backgroundImage: _profileImage != null
               ? FileImage(_profileImage!)
-              : (metadata['profile_picture'] != null
-                  ? NetworkImage(metadata['profile_picture'])
-                  : AssetImage('assets/default_profile.png')) as ImageProvider,
+              : (userData['profile_picture'] != null
+                  ? NetworkImage(userData['profile_picture'])
+                  : (metadata['profile_picture'] != null
+                      ? NetworkImage(metadata['profile_picture'])
+                      : AssetImage('assets/default_profile.png'))) as ImageProvider,
         ),
       ),
       Positioned(
@@ -544,6 +583,7 @@ SizedBox(height: 16),
                           children: [
                                                       _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
                             _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
+                            _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
                             _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
                             _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
                             _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
@@ -691,10 +731,21 @@ SizedBox(height: 16),
                                 setSt(() => isLoading = true);
                                 try {
                                   final supabase = Supabase.instance.client;
+                                  
+                                  // Update public.users table (only name)
+                                  await supabase
+                                      .from('users')
+                                      .update({
+                                        'name': newName,
+                                      })
+                                      .eq('id', user!.id);
+                                  
+                                  // Update auth metadata (name and address)
                                   await supabase.auth.updateUser(UserAttributes(data: {
                                     'name': newName,
                                     'address': newAddress,
                                   }));
+                                  
                                   await _refreshUserMetadata();
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(content: Text('Account updated')),
@@ -1470,11 +1521,25 @@ SizedBox(height: 16),
               ),
             ),
           ),
-          );
-        },
-      );
-    }
+        );
+      },
+    );
   }
+
+  // Open dialog for saved posts
+  void _openSavedPosts() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SavedPostsModal(userId: user?.id ?? '');
+      },
+    );
+  }
+}
 
 class _AddPetForm extends StatefulWidget {
   final VoidCallback onPetAdded;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import '../widgets/saved_posts_modal.dart';
 
 // Reuse owner's color palette
 const deepRed = Color(0xFFB82132);
@@ -10,6 +11,10 @@ const peach = Color(0xFFF2B28C);
 const lightBlush = Color(0xFFF6DED8);
 
 class SitterProfileScreen extends StatefulWidget {
+  final bool openSavedPosts;
+  
+  const SitterProfileScreen({Key? key, this.openSavedPosts = false}) : super(key: key);
+  
   @override
   State<SitterProfileScreen> createState() => _SitterProfileScreenState();
 }
@@ -18,40 +23,51 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
     with SingleTickerProviderStateMixin {
   final user = Supabase.instance.client.auth.currentUser;
   final metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+  Map<String, dynamic> userData = {}; // Store user data from public.users table
 
   late TabController _tabController;
 
-  String get name => metadata['name'] ?? 'Pet Sitter';
+  String get name => userData['name'] ?? metadata['name'] ?? 'Pet Sitter';
   String get role => metadata['role'] ?? 'Pet Sitter';
   String get email => user?.email ?? 'No email';
   String get address => metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
-
-  String? _profilePictureUrl;
+  
+  // Helper to refresh user and metadata after update
+  Future<void> _refreshUserMetadata() async {
+    // Load user data from public.users table (only name and profile_picture)
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('name, profile_picture')
+          .eq('id', user?.id ?? '')
+          .single();
+      
+      setState(() {
+        userData = response;
+      });
+    } catch (e) {
+      print('Error loading user data: $e');
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _loadProfilePicture();
-  }
-
-  Future<void> _loadProfilePicture() async {
-    final supabase = Supabase.instance.client;
-    final userId = user?.id;
-    if (userId == null) return;
-    try {
-      final res = await supabase
-          .from('users')
-          .select('profile_picture')
-          .eq('id', userId)
-          .maybeSingle();
-      setState(() {
-        _profilePictureUrl = res?['profile_picture']?.toString();
+    _refreshUserMetadata(); // Load user data from database
+    
+    // If openSavedPosts is true, switch to settings tab and open saved posts
+    if (widget.openSavedPosts) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _tabController.animateTo(1); // Switch to settings tab (index 1)
+        Future.delayed(Duration(milliseconds: 300), () {
+          _openSavedPosts(); // Open saved posts modal
+        });
       });
-    } catch (_) {}
+    }
   }
 
   void _logout(BuildContext context) async {
@@ -77,6 +93,18 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
   }
   void _openAbout() {
     // ...same logic as owner...
+  }
+  void _openSavedPosts() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SavedPostsModal(userId: user?.id ?? '');
+      },
+    );
   }
 
   Future<void> _pickProfileImage() async {
@@ -131,7 +159,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
 
       setState(() {
         _profileImage = file;
-        _profilePictureUrl = publicUrl;
+        userData['profile_picture'] = publicUrl;
         metadata['profile_picture'] = publicUrl;
       });
 
@@ -188,10 +216,10 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
                     backgroundColor: Colors.white,
                     backgroundImage: _profileImage != null
                         ? FileImage(_profileImage!)
-                        : (_profilePictureUrl != null && _profilePictureUrl!.isNotEmpty
-                            ? NetworkImage(_profilePictureUrl!)
+                        : (userData['profile_picture'] != null && userData['profile_picture'].toString().isNotEmpty
+                            ? NetworkImage(userData['profile_picture'])
                             : null),
-                    child: (_profileImage == null && (_profilePictureUrl == null || _profilePictureUrl!.isEmpty))
+                    child: (_profileImage == null && (userData['profile_picture'] == null || userData['profile_picture'].toString().isEmpty))
                         ? Icon(Icons.person, size: 60, color: Colors.grey[400])
                         : null,
                   ),
@@ -278,6 +306,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
                           children: [
                             _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
                             _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
+                            _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
                             _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
                             _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
                             _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
