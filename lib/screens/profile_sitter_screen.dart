@@ -19,8 +19,70 @@ class SitterProfileScreen extends StatefulWidget {
   State<SitterProfileScreen> createState() => _SitterProfileScreenState();
 }
 
-class _SitterProfileScreenState extends State<SitterProfileScreen>
-    with SingleTickerProviderStateMixin {
+class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTickerProviderStateMixin {
+  void _openFeedbackDialog() async {
+    TextEditingController feedbackController = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Report or Feedback'),
+        content: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey, width: 1.5),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          padding: EdgeInsets.all(4),
+          child: TextField(
+            controller: feedbackController,
+            style: TextStyle(color: Colors.black),
+            decoration: InputDecoration(
+              hintText: 'Let us know your feedback or report an issue...',
+              hintStyle: TextStyle(color: Colors.grey),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+            maxLines: 4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final text = feedbackController.text.trim();
+              if (text.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Please enter your feedback or report.')),
+                );
+                return;
+              }
+              try {
+                await Supabase.instance.client
+                    .from('feedback')
+                    .insert({
+                  'user_id': user?.id,
+                  'message': text,
+                  'created_at': DateTime.now().toIso8601String(),
+                });
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Thank you for your feedback!')),
+                );
+              } catch (e) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to submit feedback. Please try again.')),
+                );
+              }
+            },
+            child: Text('Submit'),
+          ),
+        ],
+      ),
+    );
+  }
   final user = Supabase.instance.client.auth.currentUser;
   final metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
   Map<String, dynamic> userData = {}; // Store user data from public.users table
@@ -1191,6 +1253,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen>
                           padding: EdgeInsets.all(16),
                           children: [
                             _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
+                            _settingsTile(Icons.feedback, 'Report or Feedback', onTap: _openFeedbackDialog),
                             _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
                             _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
                             _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),

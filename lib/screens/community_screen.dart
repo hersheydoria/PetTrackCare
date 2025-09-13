@@ -1102,42 +1102,82 @@ void showEditPostModal(Map post) {
                                 ];
                                 String selectedViolation = violationTypes[0];
                                 TextEditingController otherController = TextEditingController();
+                                FocusNode otherFocusNode = FocusNode();
                                 await showDialog(
                                   context: context,
                                   builder: (context) {
                                     return StatefulBuilder(
                                       builder: (context, setState) {
+                                        // Auto-focus the input when 'Other' is selected
+                                        if (selectedViolation == 'Other') {
+                                          Future.delayed(Duration(milliseconds: 100), () {
+                                            if (!otherFocusNode.hasFocus) {
+                                              otherFocusNode.requestFocus();
+                                            }
+                                          });
+                                        }
                                         return AlertDialog(
                                           title: Text('Report Post'),
-                                          content: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text('Select violation type:'),
-                                              SizedBox(height: 8),
-                                              DropdownButton<String>(
-                                                value: selectedViolation,
-                                                isExpanded: true,
-                                                items: violationTypes.map((type) => DropdownMenuItem(
-                                                  value: type,
-                                                  child: Text(type),
-                                                )).toList(),
-                                                onChanged: (val) {
-                                                  if (val != null) setState(() => selectedViolation = val);
-                                                },
-                                              ),
-                                              if (selectedViolation == 'Other') ...[
+                                          content: SingleChildScrollView(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text('Select violation type:'),
                                                 SizedBox(height: 8),
-                                                TextField(
-                                                  controller: otherController,
-                                                  decoration: InputDecoration(
-                                                    hintText: 'Describe the violation',
-                                                    border: OutlineInputBorder(),
-                                                  ),
-                                                  maxLines: 2,
+                                                Column(
+                                                  children: violationTypes.map((type) {
+                                                    final bool isSelected = selectedViolation == type;
+                                                    return GestureDetector(
+                                                      onTap: () {
+                                                        setState(() => selectedViolation = type);
+                                                        if (type == 'Other') {
+                                                          Future.delayed(Duration(milliseconds: 100), () {
+                                                            if (!otherFocusNode.hasFocus) {
+                                                              otherFocusNode.requestFocus();
+                                                            }
+                                                          });
+                                                        }
+                                                      },
+                                                      child: Container(
+                                                        margin: EdgeInsets.symmetric(vertical: 4),
+                                                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                                        decoration: BoxDecoration(
+                                                          border: Border.all(
+                                                            color: isSelected ? Colors.deepOrange : Colors.grey,
+                                                            width: 2,
+                                                          ),
+                                                          borderRadius: BorderRadius.circular(8),
+                                                          color: isSelected ? Colors.deepOrange.withOpacity(0.08) : Colors.transparent,
+                                                        ),
+                                                        child: Row(
+                                                          children: [
+                                                            Icon(
+                                                              isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                                                              color: isSelected ? Colors.deepOrange : Colors.grey,
+                                                            ),
+                                                            SizedBox(width: 10),
+                                                            Expanded(child: Text(type, style: TextStyle(color: Colors.black))),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    );
+                                                  }).toList(),
                                                 ),
+                                                if (selectedViolation == 'Other') ...[
+                                                  SizedBox(height: 8),
+                                                  TextField(
+                                                    controller: otherController,
+                                                    focusNode: otherFocusNode,
+                                                    decoration: InputDecoration(
+                                                      hintText: 'Describe the violation',
+                                                      border: OutlineInputBorder(),
+                                                    ),
+                                                    maxLines: 2,
+                                                  ),
+                                                ],
                                               ],
-                                            ],
+                                            ),
                                           ),
                                           actions: [
                                             TextButton(
