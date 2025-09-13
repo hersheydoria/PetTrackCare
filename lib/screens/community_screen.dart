@@ -1066,24 +1066,126 @@ void showEditPostModal(Map post) {
                         ],
                       ),
                     ),
-                    if (post['user_id'] == widget.userId)
-                      Container(
-                        width: 85, // Match IconButton size for alignment
-                        alignment: Alignment.topCenter,
-                        child: PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              showEditPostModal(post);
-                            } else if (value == 'delete') {
-                              deletePost(context, post['id']);
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
-                      ),
+                    Container(
+                      width: 85, // Match IconButton size for alignment
+                      alignment: Alignment.topCenter,
+                      child: post['user_id'] == widget.userId
+                          ? PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'edit') {
+                                  showEditPostModal(post);
+                                } else if (value == 'delete') {
+                                  deletePost(context, post['id']);
+                                }
+                              },
+                              itemBuilder: (_) => [
+                                PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              ],
+                            )
+                          : IconButton(
+                              icon: Icon(Icons.report_gmailerrorred, color: Colors.deepOrange),
+                              tooltip: 'Report',
+                              onPressed: () async {
+                                final List<String> violationTypes = [
+                                  'Unattended or Missing Pet Reports',
+                                  'Irresponsible Sitter Behavior',
+                                  'False or Misleading Posts',
+                                  'Inappropriate Content',
+                                  'Pet Endangerment',
+                                  'Uncontrolled Aggressive Pets',
+                                  'Neglect or Poor Care Practices',
+                                  'Unauthorized Job Postings',
+                                  'Violation of Local Pet Rules',
+                                  'Abandonment or Abuse Alerts',
+                                  'Other',
+                                ];
+                                String selectedViolation = violationTypes[0];
+                                TextEditingController otherController = TextEditingController();
+                                await showDialog(
+                                  context: context,
+                                  builder: (context) {
+                                    return StatefulBuilder(
+                                      builder: (context, setState) {
+                                        return AlertDialog(
+                                          title: Text('Report Post'),
+                                          content: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text('Select violation type:'),
+                                              SizedBox(height: 8),
+                                              DropdownButton<String>(
+                                                value: selectedViolation,
+                                                isExpanded: true,
+                                                items: violationTypes.map((type) => DropdownMenuItem(
+                                                  value: type,
+                                                  child: Text(type),
+                                                )).toList(),
+                                                onChanged: (val) {
+                                                  if (val != null) setState(() => selectedViolation = val);
+                                                },
+                                              ),
+                                              if (selectedViolation == 'Other') ...[
+                                                SizedBox(height: 8),
+                                                TextField(
+                                                  controller: otherController,
+                                                  decoration: InputDecoration(
+                                                    hintText: 'Describe the violation',
+                                                    border: OutlineInputBorder(),
+                                                  ),
+                                                  maxLines: 2,
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context),
+                                              child: Text('Cancel'),
+                                            ),
+                                            ElevatedButton(
+                                              onPressed: () async {
+                                                String reason = selectedViolation == 'Other'
+                                                    ? otherController.text.trim()
+                                                    : selectedViolation;
+                                                if (reason.isEmpty) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Please specify the violation.')),
+                                                  );
+                                                  return;
+                                                }
+                                                try {
+                                                  await Supabase.instance.client
+                                                      .from('reports')
+                                                      .insert({
+                                                    'post_id': post['id'],
+                                                    'user_id': widget.userId,
+                                                    'reason': reason,
+                                                    'created_at': DateTime.now().toIso8601String(),
+                                                  });
+                                                  Navigator.pop(context);
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Report submitted. Thank you!')),
+                                                  );
+                                                } catch (e) {
+                                                  Navigator.pop(context);
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Failed to submit report. Please try again.')),
+                                                  );
+                                                }
+                                              },
+                                              child: Text('Submit'),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                    ),
                   ],
                 ),
                 SizedBox(height: 10),
