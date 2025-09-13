@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../screens/community_screen.dart';
 
 class SavedPostsModal extends StatefulWidget {
   final String userId;
@@ -117,15 +118,30 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
     }
   }
 
+  void _navigateToPost(BuildContext context, String postId) {
+    Navigator.of(context).pop(); // Close the saved posts modal first
+    
+    // Navigate to the community screen with the specific post ID
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => CommunityScreen(
+          userId: widget.userId,
+          targetPostId: postId,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Container(
+        color: const Color(0xFFF6DED8), // lightBlush, matches profile screen
         height: MediaQuery.of(context).size.height * 0.8,
         child: Column(
           children: [
             Padding(
-              padding: EdgeInsets.all(16),
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), // less vertical space
               child: Row(
                 children: [
                   IconButton(
@@ -137,7 +153,7 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
                       child: Text(
                         'Saved Posts',
                         style: TextStyle(
-                          fontSize: 24,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                           color: deepRed,
                         ),
@@ -161,7 +177,7 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
                           child: Container(
                             decoration: BoxDecoration(
                               border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.zero,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.all(16),
@@ -201,21 +217,15 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
                           itemBuilder: (context, index) {
                             final post = savedPosts[index];
                             final user = post['user'] as Map<String, dynamic>?;
-
-                            return Container(
-                              margin: EdgeInsets.only(bottom: 16),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.grey.shade200,
-                                    spreadRadius: 1,
-                                    blurRadius: 5,
-                                    offset: Offset(0, 2),
-                                  ),
-                                ],
-                              ),
+                            return GestureDetector(
+                              onTap: () => _navigateToPost(context, post['id'].toString()),
+                              child: Container(
+                                margin: EdgeInsets.only(bottom: 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border.all(color: Colors.grey.shade300),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
                               child: Padding(
                                 padding: EdgeInsets.all(16),
                                 child: Column(
@@ -292,6 +302,7 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
                                   ],
                                 ),
                               ),
+                            ),
                             );
                           },
                         ),

@@ -31,8 +31,9 @@ const sitterColor = Color(0xFFF2B28C);
 
 class CommunityScreen extends StatefulWidget {
   final String userId;
+  final String? targetPostId; // Optional post ID to scroll to
 
-  const CommunityScreen({required this.userId});
+  const CommunityScreen({required this.userId, this.targetPostId});
 
   @override
   _CommunityScreenState createState() => _CommunityScreenState();
@@ -44,11 +45,14 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   String selectedFilter = 'all';
   Map<String, bool> showCommentInput = {};
   late ScrollController _scrollController;
+  String? highlightedPostId; // Track which post to highlight
+  GlobalKey targetPostKey = GlobalKey(); // Key for the target post
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    highlightedPostId = widget.targetPostId; // Set target post for highlighting
     fetchPosts();
     loadCommentCounts();
     loadCommentReplies(); // Load replies on initialization
@@ -276,7 +280,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Removed from favorites'),
+            content: Text('Removed from saved posts'),
             backgroundColor: Colors.grey[600],
             duration: Duration(seconds: 2),
           ),
@@ -296,7 +300,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Added to favorites'),
+            content: Text('Added to saved posts'),
             backgroundColor: deepRed,
             duration: Duration(seconds: 2),
           ),
@@ -306,7 +310,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       print('Error toggling bookmark: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to update favorites. Please try again.'),
+          content: Text('Failed to update saved posts. Please try again.'),
           backgroundColor: Colors.red,
           duration: Duration(seconds: 2),
         ),
@@ -493,6 +497,42 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       );
     } finally {
       setState(() => isLoading = false);
+      // After posts are loaded, scroll to target post if specified
+      if (widget.targetPostId != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToTargetPost();
+        });
+      }
+    }
+  }
+
+  // Method to scroll to the target post and highlight it
+  void _scrollToTargetPost() {
+    if (widget.targetPostId == null) return;
+    
+    // Find the index of the target post
+    final targetIndex = posts.indexWhere((post) => post['id'].toString() == widget.targetPostId);
+    
+    if (targetIndex != -1) {
+      // Calculate the position to scroll to (approximate)
+      final double itemHeight = 300.0; // Approximate height of each post card
+      final double targetPosition = targetIndex * itemHeight;
+      
+      // Scroll to the target position
+      _scrollController.animateTo(
+        targetPosition,
+        duration: Duration(milliseconds: 800),
+        curve: Curves.easeInOut,
+      );
+      
+      // Remove highlight after a few seconds
+      Future.delayed(Duration(seconds: 3), () {
+        if (mounted) {
+          setState(() {
+            highlightedPostId = null;
+          });
+        }
+      });
     }
   }
 
@@ -965,12 +1005,21 @@ void showEditPostModal(Map post) {
       }
 
         return Card(
+          key: postId == widget.targetPostId ? targetPostKey : null,
           margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           elevation: 4,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: EdgeInsets.all(12),
-            child: Column(
+          color: highlightedPostId == postId ? Colors.yellow[100] : null, // Highlight target post
+          child: Container(
+            decoration: highlightedPostId == postId 
+                ? BoxDecoration(
+                    border: Border.all(color: deepRed, width: 2),
+                    borderRadius: BorderRadius.circular(12),
+                  )
+                : null,
+            child: Padding(
+              padding: EdgeInsets.all(12),
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -1017,24 +1066,166 @@ void showEditPostModal(Map post) {
                         ],
                       ),
                     ),
-                    if (post['user_id'] == widget.userId)
-                      Container(
-                        width: 85, // Match IconButton size for alignment
-                        alignment: Alignment.topCenter,
-                        child: PopupMenuButton<String>(
-                          onSelected: (value) {
-                            if (value == 'edit') {
-                              showEditPostModal(post);
-                            } else if (value == 'delete') {
-                              deletePost(context, post['id']);
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
-                      ),
+                    Container(
+                      width: 85, // Match IconButton size for alignment
+                      alignment: Alignment.topCenter,
+                      child: post['user_id'] == widget.userId
+                          ? PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'edit') {
+                                  showEditPostModal(post);
+                                } else if (value == 'delete') {
+                                  deletePost(context, post['id']);
+                                }
+                              },
+                              itemBuilder: (_) => [
+                                PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              ],
+                            )
+                          : IconButton(
+                              icon: Icon(Icons.report_gmailerrorred, color: Colors.deepOrange),
+                              tooltip: 'Report',
+                              onPressed: () async {
+                                final List<String> violationTypes = [
+                                  'Unattended or Missing Pet Reports',
+                                  'Irresponsible Sitter Behavior',
+                                  'False or Misleading Posts',
+                                  'Inappropriate Content',
+                                  'Pet Endangerment',
+                                  'Uncontrolled Aggressive Pets',
+                                  'Neglect or Poor Care Practices',
+                                  'Unauthorized Job Postings',
+                                  'Violation of Local Pet Rules',
+                                  'Abandonment or Abuse Alerts',
+                                  'Other',
+                                ];
+                                String selectedViolation = violationTypes[0];
+                                TextEditingController otherController = TextEditingController();
+                                FocusNode otherFocusNode = FocusNode();
+                                await showDialog(
+                                  context: context,
+                                  builder: (context) {
+                                    return StatefulBuilder(
+                                      builder: (context, setState) {
+                                        // Auto-focus the input when 'Other' is selected
+                                        if (selectedViolation == 'Other') {
+                                          Future.delayed(Duration(milliseconds: 100), () {
+                                            if (!otherFocusNode.hasFocus) {
+                                              otherFocusNode.requestFocus();
+                                            }
+                                          });
+                                        }
+                                        return AlertDialog(
+                                          title: Text('Report Post'),
+                                          content: SingleChildScrollView(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text('Select violation type:'),
+                                                SizedBox(height: 8),
+                                                Column(
+                                                  children: violationTypes.map((type) {
+                                                    final bool isSelected = selectedViolation == type;
+                                                    return GestureDetector(
+                                                      onTap: () {
+                                                        setState(() => selectedViolation = type);
+                                                        if (type == 'Other') {
+                                                          Future.delayed(Duration(milliseconds: 100), () {
+                                                            if (!otherFocusNode.hasFocus) {
+                                                              otherFocusNode.requestFocus();
+                                                            }
+                                                          });
+                                                        }
+                                                      },
+                                                      child: Container(
+                                                        margin: EdgeInsets.symmetric(vertical: 4),
+                                                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                                        decoration: BoxDecoration(
+                                                          border: Border.all(
+                                                            color: isSelected ? Colors.deepOrange : Colors.grey,
+                                                            width: 2,
+                                                          ),
+                                                          borderRadius: BorderRadius.circular(8),
+                                                          color: isSelected ? Colors.deepOrange.withOpacity(0.08) : Colors.transparent,
+                                                        ),
+                                                        child: Row(
+                                                          children: [
+                                                            Icon(
+                                                              isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                                                              color: isSelected ? Colors.deepOrange : Colors.grey,
+                                                            ),
+                                                            SizedBox(width: 10),
+                                                            Expanded(child: Text(type, style: TextStyle(color: Colors.black))),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    );
+                                                  }).toList(),
+                                                ),
+                                                if (selectedViolation == 'Other') ...[
+                                                  SizedBox(height: 8),
+                                                  TextField(
+                                                    controller: otherController,
+                                                    focusNode: otherFocusNode,
+                                                    decoration: InputDecoration(
+                                                      hintText: 'Describe the violation',
+                                                      border: OutlineInputBorder(),
+                                                    ),
+                                                    maxLines: 2,
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context),
+                                              child: Text('Cancel'),
+                                            ),
+                                            ElevatedButton(
+                                              onPressed: () async {
+                                                String reason = selectedViolation == 'Other'
+                                                    ? otherController.text.trim()
+                                                    : selectedViolation;
+                                                if (reason.isEmpty) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Please specify the violation.')),
+                                                  );
+                                                  return;
+                                                }
+                                                try {
+                                                  await Supabase.instance.client
+                                                      .from('reports')
+                                                      .insert({
+                                                    'post_id': post['id'],
+                                                    'user_id': widget.userId,
+                                                    'reason': reason,
+                                                    'created_at': DateTime.now().toIso8601String(),
+                                                  });
+                                                  Navigator.pop(context);
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Report submitted. Thank you!')),
+                                                  );
+                                                } catch (e) {
+                                                  Navigator.pop(context);
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(content: Text('Failed to submit report. Please try again.')),
+                                                  );
+                                                }
+                                              },
+                                              child: Text('Submit'),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                    ),
                   ],
                 ),
                 SizedBox(height: 10),
@@ -1604,6 +1795,7 @@ void showEditPostModal(Map post) {
               ],
             ),
           ),
+        ),
         );
       },
     );
