@@ -31,8 +31,9 @@ const sitterColor = Color(0xFFF2B28C);
 
 class CommunityScreen extends StatefulWidget {
   final String userId;
+  final String? targetPostId; // Optional post ID to scroll to
 
-  const CommunityScreen({required this.userId});
+  const CommunityScreen({required this.userId, this.targetPostId});
 
   @override
   _CommunityScreenState createState() => _CommunityScreenState();
@@ -44,11 +45,14 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   String selectedFilter = 'all';
   Map<String, bool> showCommentInput = {};
   late ScrollController _scrollController;
+  String? highlightedPostId; // Track which post to highlight
+  GlobalKey targetPostKey = GlobalKey(); // Key for the target post
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    highlightedPostId = widget.targetPostId; // Set target post for highlighting
     fetchPosts();
     loadCommentCounts();
     loadCommentReplies(); // Load replies on initialization
@@ -493,6 +497,42 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       );
     } finally {
       setState(() => isLoading = false);
+      // After posts are loaded, scroll to target post if specified
+      if (widget.targetPostId != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToTargetPost();
+        });
+      }
+    }
+  }
+
+  // Method to scroll to the target post and highlight it
+  void _scrollToTargetPost() {
+    if (widget.targetPostId == null) return;
+    
+    // Find the index of the target post
+    final targetIndex = posts.indexWhere((post) => post['id'].toString() == widget.targetPostId);
+    
+    if (targetIndex != -1) {
+      // Calculate the position to scroll to (approximate)
+      final double itemHeight = 300.0; // Approximate height of each post card
+      final double targetPosition = targetIndex * itemHeight;
+      
+      // Scroll to the target position
+      _scrollController.animateTo(
+        targetPosition,
+        duration: Duration(milliseconds: 800),
+        curve: Curves.easeInOut,
+      );
+      
+      // Remove highlight after a few seconds
+      Future.delayed(Duration(seconds: 3), () {
+        if (mounted) {
+          setState(() {
+            highlightedPostId = null;
+          });
+        }
+      });
     }
   }
 
@@ -965,12 +1005,21 @@ void showEditPostModal(Map post) {
       }
 
         return Card(
+          key: postId == widget.targetPostId ? targetPostKey : null,
           margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           elevation: 4,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: EdgeInsets.all(12),
-            child: Column(
+          color: highlightedPostId == postId ? Colors.yellow[100] : null, // Highlight target post
+          child: Container(
+            decoration: highlightedPostId == postId 
+                ? BoxDecoration(
+                    border: Border.all(color: deepRed, width: 2),
+                    borderRadius: BorderRadius.circular(12),
+                  )
+                : null,
+            child: Padding(
+              padding: EdgeInsets.all(12),
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -1604,6 +1653,7 @@ void showEditPostModal(Map post) {
               ],
             ),
           ),
+        ),
         );
       },
     );
