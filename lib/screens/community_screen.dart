@@ -276,7 +276,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Removed from favorites'),
+            content: Text('Removed from saved posts'),
             backgroundColor: Colors.grey[600],
             duration: Duration(seconds: 2),
           ),
@@ -296,7 +296,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Added to favorites'),
+            content: Text('Added to saved posts'),
             backgroundColor: deepRed,
             duration: Duration(seconds: 2),
           ),
@@ -306,7 +306,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       print('Error toggling bookmark: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to update favorites. Please try again.'),
+          content: Text('Failed to update saved posts. Please try again.'),
           backgroundColor: Colors.red,
           duration: Duration(seconds: 2),
         ),
