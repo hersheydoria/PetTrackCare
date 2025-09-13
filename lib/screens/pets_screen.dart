@@ -306,6 +306,174 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     super.dispose();
   }
 
+  void _showBluetoothConnectionModal(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.bluetooth, color: deepRed),
+              SizedBox(width: 8),
+              Text('GPS Device Connection'),
+            ],
+          ),
+          content: Container(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Follow these steps to connect your GPS device:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                SizedBox(height: 16),
+                _buildConnectionStep(
+                  '1',
+                  'Enable Bluetooth',
+                  'Make sure Bluetooth is enabled on your device',
+                  Icons.bluetooth_connected,
+                ),
+                SizedBox(height: 12),
+                _buildConnectionStep(
+                  '2',
+                  'Turn on GPS Device',
+                  'Power on your pet\'s GPS tracking device',
+                  Icons.power_settings_new,
+                ),
+                SizedBox(height: 12),
+                _buildConnectionStep(
+                  '3',
+                  'Open Bluetooth Settings',
+                  'Go to your device\'s Bluetooth settings to pair',
+                  Icons.settings,
+                ),
+                SizedBox(height: 12),
+                _buildConnectionStep(
+                  '4',
+                  'Scan & Pair',
+                  'Look for your GPS device and tap to pair',
+                  Icons.search,
+                ),
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: lightBlush,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: coral, width: 1),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info, color: deepRed, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Make sure your GPS device is in pairing mode before scanning.',
+                          style: TextStyle(color: deepRed, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _openBluetoothSettings();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: deepRed,
+                foregroundColor: Colors.white,
+              ),
+              child: Text('Open Bluetooth Settings'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildConnectionStep(String number, String title, String description, IconData icon) {
+    return Row(
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: deepRed,
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(width: 12),
+        Icon(icon, color: coral, size: 20),
+        SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              Text(
+                description,
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openBluetoothSettings() {
+    // This would typically open the device's Bluetooth settings
+    // For now, we'll show a message
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.bluetooth, color: Colors.white),
+            SizedBox(width: 8),
+            Text('Please open your device\'s Bluetooth settings to pair with GPS device'),
+          ],
+        ),
+        backgroundColor: deepRed,
+        duration: Duration(seconds: 3),
+        action: SnackBarAction(
+          label: 'OK',
+          textColor: Colors.white,
+          onPressed: () {},
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -324,6 +492,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                   builder: (context) => const NotificationScreen(),
                 ),
               );
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.bluetooth),
+            onPressed: () {
+              _showBluetoothConnectionModal(context);
             },
           ),
           PopupMenuButton<Map<String, dynamic>>(
