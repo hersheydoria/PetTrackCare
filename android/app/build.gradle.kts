@@ -35,6 +35,14 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Add required permissions for Android 12+ Bluetooth
+        manifestPlaceholders["android.permission.BLUETOOTH_SCAN"] = "true"
+        manifestPlaceholders["android.permission.BLUETOOTH_CONNECT"] = "true"
+        manifestPlaceholders["android.permission.BLUETOOTH"] = "true"
+        manifestPlaceholders["android.permission.BLUETOOTH_ADMIN"] = "true"
+        manifestPlaceholders["android.permission.ACCESS_FINE_LOCATION"] = "true"
+        manifestPlaceholders["android.permission.ACCESS_COARSE_LOCATION"] = "true"
     }
 
     signingConfigs {

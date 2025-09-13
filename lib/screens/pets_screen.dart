@@ -10,6 +10,13 @@ import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
 import 'package:flutter/services.dart'; // for Clipboard
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:app_settings/app_settings.dart'; 
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:universal_platform/universal_platform.dart';
+import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart'; 
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:async'; 
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -450,29 +457,255 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       ],
     );
   }
+  
+BluetoothDevice? _connectedDevice;
+FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
 
-  void _openBluetoothSettings() {
-    // This would typically open the device's Bluetooth settings
-    // For now, we'll show a message
+// Helper method to manage connection state (classic Bluetooth)
+void _manageConnection(BluetoothDevice device) {
+  // Classic Bluetooth does not provide a stream for connection state like BLE.
+  // You may poll device.isConnected or rely on callbacks.
+  // For demonstration, show a snackbar after connection.
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('Device connected successfully!'))
+  );
+}
+
+Future<void> requestBluetoothPermissions() async {
+  await [
+    Permission.bluetoothScan,
+    Permission.bluetoothConnect,
+    Permission.location,
+  ].request();
+}
+
+void _openBluetoothSettings() async {
+  // For Android: Use android_intent_plus to open Bluetooth settings
+  if (UniversalPlatform.isAndroid) {
+    const intent = AndroidIntent(
+      action: 'android.settings.BLUETOOTH_SETTINGS',
+    );
+    await intent.launch();
+  } else if (UniversalPlatform.isIOS) {
+    await launchUrl(Uri.parse('app-settings:'));
+  }
+
+  // Wait for user to enable Bluetooth
+  await Future.delayed(Duration(seconds: 3));
+
+  if (_selectedPet == null) return;
+
+  // Request runtime permissions before any Bluetooth operation
+  await requestBluetoothPermissions();
+
+  try {
+    // Check if Bluetooth is available and enabled
+    bool isAvailable = await _bluetooth.isAvailable ?? false;
+    bool isEnabled = await _bluetooth.isEnabled ?? false;
+    debugPrint('Bluetooth available: $isAvailable, enabled: $isEnabled');
+    if (!isAvailable) {
+      debugPrint('Bluetooth not available on this device.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bluetooth not available on this device.'))
+      );
+      return;
+    }
+    if (!isEnabled) {
+      debugPrint('Bluetooth is not enabled.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please enable Bluetooth and try again.'))
+      );
+      return;
+    }
+
+    // Discover devices
+    List<BluetoothDevice> bondedDevices = [];
+    try {
+      bondedDevices = await _bluetooth.getBondedDevices();
+      debugPrint('Bonded devices: ${bondedDevices.map((d) => '${d.name} (${d.address})').join(', ')}');
+    } catch (e) {
+      debugPrint('Error getting bonded devices: $e');
+      bondedDevices = [];
+    }
+
+    // Try to reconnect to a previously paired device (if device ID exists in DB)
+    final storedDeviceId = await _getStoredDeviceId();
+    debugPrint('Stored device ID from DB: $storedDeviceId');
+    if (storedDeviceId != null && _connectedDevice == null) {
+      final device = bondedDevices.firstWhere(
+        (d) => d.address == storedDeviceId,
+        orElse: () => BluetoothDevice(address: '', name: ''),
+      );
+      debugPrint('Trying to reconnect to device: ${device.name} (${device.address})');
+      if (device.address.isNotEmpty) {
+        try {
+          await BluetoothConnection.toAddress(device.address);
+          _connectedDevice = device;
+          _manageConnection(device);
+          debugPrint('Successfully reconnected to device: ${device.name} (${device.address})');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Reconnected to GPS device!'))
+          );
+          return;
+        } catch (e) {
+          debugPrint('Reconnection failed: $e');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Reconnection failed, scanning for device...'))
+          );
+        }
+      } else {
+        debugPrint('No matching bonded device found for stored device ID.');
+      }
+    }
+
+    // Fallback: Discover nearby devices
+    List<BluetoothDiscoveryResult> results = [];
+    debugPrint('Starting Bluetooth discovery...');
+    await requestBluetoothPermissions(); // Ensure permissions before discovery
+    
+    // Use a Completer to properly handle the discovery stream
+    Completer<void> discoveryCompleter = Completer<void>();
+    StreamSubscription? discoverySubscription;
+    
+    try {
+      discoverySubscription = _bluetooth.startDiscovery().listen(
+        (BluetoothDiscoveryResult result) {
+          debugPrint('Discovered device: ${result.device.name} (${result.device.address})');
+          results.add(result);
+          
+          // Check if this is a PetTracker device and try to connect immediately
+          final deviceName = result.device.name ?? '';
+          if (deviceName.toLowerCase().contains('pettracker') || deviceName.toLowerCase().contains('tracker')) {
+            debugPrint('Found target device during discovery: $deviceName (${result.device.address})');
+            // Cancel discovery and connect to this device
+            discoverySubscription?.cancel();
+            _connectToDevice(result.device);
+            if (!discoveryCompleter.isCompleted) {
+              discoveryCompleter.complete();
+            }
+          }
+        },
+        onDone: () {
+          debugPrint('Discovery completed normally');
+          if (!discoveryCompleter.isCompleted) {
+            discoveryCompleter.complete();
+          }
+        },
+        onError: (error) {
+          debugPrint('Discovery error: $error');
+          if (!discoveryCompleter.isCompleted) {
+            discoveryCompleter.completeError(error);
+          }
+        },
+      );
+      
+      // Wait for discovery to complete or timeout after 30 seconds
+      await Future.any([
+        discoveryCompleter.future,
+        Future.delayed(Duration(seconds: 30)),
+      ]);
+      
+    } finally {
+      // Ensure discovery is stopped
+      await discoverySubscription?.cancel();
+      await _bluetooth.cancelDiscovery();
+    }
+
+    debugPrint('Discovery finished. Total devices found: ${results.length}');
+
+    // If we haven't connected yet, try to connect to any found tracker devices
+    if (_connectedDevice == null) {
+      for (var result in results) {
+        final device = result.device;
+        final deviceName = device.name ?? '';
+        debugPrint('Checking device: $deviceName (${device.address})');
+        if (deviceName.toLowerCase().contains('pettracker') || deviceName.toLowerCase().contains('tracker')) {
+          await _connectToDevice(device);
+          break; // Stop after first successful connection
+        }
+      }
+    }
+
+    if (_connectedDevice == null) {
+      debugPrint('No GPS/Tracker device found after scan.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No GPS/Tracker device found. Ensure the device is powered on, in pairing mode, and nearby.'))
+      );
+    }
+
+  } catch (e) {
+    debugPrint('Unexpected error during Bluetooth scan/connect: $e');
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(Icons.bluetooth, color: Colors.white),
-            SizedBox(width: 8),
-            Text('Please open your device\'s Bluetooth settings to pair with GPS device'),
-          ],
-        ),
-        backgroundColor: deepRed,
-        duration: Duration(seconds: 3),
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
+      SnackBar(content: Text('Failed to scan or connect: $e'))
     );
   }
+}
+
+// New helper method to handle device connection
+Future<void> _connectToDevice(BluetoothDevice device) async {
+  debugPrint('Attempting to connect to device: ${device.name} (${device.address})');
+  try {
+    final connection = await BluetoothConnection.toAddress(device.address);
+    _connectedDevice = device;
+    _manageConnection(device);
+
+    // Store device ID in DB
+    await Supabase.instance.client
+        .from('device_pet_map')
+        .upsert({
+          'device_id': device.address,
+          'pet_id': _selectedPet!['id'],
+        });
+
+    debugPrint('Device paired and connected! ID: ${device.address}');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Device paired and connected! ID: ${device.address}'))
+    );
+  } catch (e) {
+    debugPrint('Failed to connect to device: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to connect: $e'))
+    );
+  }
+}
+// Helper method to fetch stored device ID from DB
+Future<String?> _getStoredDeviceId() async {
+  try {
+    final response = await Supabase.instance.client
+        .from('device_pet_map')
+        .select('device_id')
+        .eq('pet_id', _selectedPet!['id'])
+        .limit(1);
+    final data = response as List?;
+    if (data != null && data.isNotEmpty) {
+      return data.first['device_id']?.toString();
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Add this method to manually disconnect the device (call from a button if needed)
+void _disconnectDevice() async {
+  if (_connectedDevice != null) {
+    try {
+      // Classic Bluetooth: disconnect by closing the connection
+      // If you have a BluetoothConnection object, call .close()
+      // Here, just clear the reference
+      _connectedDevice = null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Device disconnected.'))
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to disconnect: $e'))
+      );
+    }
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('No device connected.'))
+    );
+  }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -1304,12 +1537,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   void _showBehaviorModal(BuildContext context, DateTime selectedDate, {Map<String, dynamic>? existing}) {
     // ensure controller shows current value when modal opens
     _sleepController.text = _sleepHours != null ? _sleepHours.toString() : (_sleepController.text);
+    final bool isEdit = existing != null && existing['id'] != null;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        final isEdit = existing != null && existing['id'] != null;
         return Container(
           height: MediaQuery.of(context).size.height * 0.8,
           decoration: BoxDecoration(
@@ -1341,7 +1574,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                     children: [
                       Text("Mood", style: TextStyle(fontWeight: FontWeight.bold)),
                       SizedBox(height: 8),
-                      // emoji picker for mood
                       Wrap(
                         spacing: 8,
                         children: moods.map((mood) {
@@ -1368,13 +1600,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                           );
                         }).toList(),
                       ),
-
                       SizedBox(height: 16),
-
-                      // Activity Level Dropdown
                       Text("Activity Level", style: TextStyle(fontWeight: FontWeight.bold)),
                       SizedBox(height: 8),
-                      // emoji picker for activity
                       Wrap(
                         spacing: 8,
                         children: activityLevels.map((level) {
@@ -1401,13 +1629,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                           );
                         }).toList(),
                       ),
-
                       SizedBox(height: 16),
-
-                      // Sleep Hours
                       Text("Sleep Hours", style: TextStyle(fontWeight: FontWeight.bold)),
                       SizedBox(height: 8),
-                      // Text field with up/down buttons
                       Row(
                         children: [
                           Expanded(
@@ -1479,10 +1703,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                           ),
                         ],
                       ),
-
                       SizedBox(height: 16),
-
-                      // Notes
                       Text("Notes", style: TextStyle(fontWeight: FontWeight.bold)),
                       SizedBox(height: 8),
                       TextFormField(
@@ -1499,10 +1720,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                           });
                         },
                       ),
-
                       SizedBox(height: 16),
-
-                      // Log Button
                       Center(
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
@@ -1617,10 +1835,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                                     }
                                   }
                                 },
-                ),
-              ),
-            ],
-          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],

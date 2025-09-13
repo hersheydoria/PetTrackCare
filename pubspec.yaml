@@ -9,14 +9,19 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  supabase_flutter: ^2.9.1
-  flutter_map: ^8.2.1
-  latlong2: ^0.9.0
+  flutter_bluetooth_serial: ^0.4.0
+  supabase_flutter: any
+  intl: any
+  http: any
+  fl_chart: any
+  table_calendar: any
+  qr_flutter: any
+  flutter_map: any
+  latlong2: any
   geocoding: ^4.0.0
   image_picker: ^1.0.5
   path: ^1.9.0
   cupertino_icons: ^1.0.8
-  table_calendar: ^3.0.8
   flutter_sound: ^9.2.13+1
   permission_handler: ^11.3.1
   path_provider: ^2.1.1
@@ -26,13 +31,14 @@ dependencies:
   zego_plugin_adapter: ^2.13.9
   image_cropper: ^9.1.0
   realtime_client: ^2.5.1 
-  http: ^1.5.0
-  fl_chart: ^1.0.0
-  qr_flutter: ^4.0.0
   flutter_local_notifications: ^19.4.0
   badges: ^3.1.2
   shared_preferences: ^2.2.2
   flutter_dotenv: ^5.1.0
+  app_settings: any
+  android_intent_plus: any
+  url_launcher: any
+  universal_platform: any
 
 dev_dependencies:
   flutter_test:
