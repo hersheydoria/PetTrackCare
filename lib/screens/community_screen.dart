@@ -1047,6 +1047,26 @@ void showEditPostModal(Map post) {
                                 timeAgo,
                                 style: TextStyle(fontSize: 12, color: Colors.grey),
                               ),
+                              SizedBox(width: 8),
+                              // Post type label
+                              if (post['type'] != null && post['type'].toString().isNotEmpty)
+                                Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: post['type'] == 'general'
+                                        ? Colors.blue[400]
+                                        : post['type'] == 'missing'
+                                            ? Colors.red[400]
+                                            : post['type'] == 'found'
+                                                ? Colors.green[400]
+                                                : Colors.grey[400],
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    post['type'].toString().toUpperCase(),
+                                    style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
                             ],
                           ),
                           Container(

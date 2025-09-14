@@ -383,21 +383,30 @@ Future<void> pickAndUploadImage() async {
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.more_vert),
-            onPressed: () {
-              showModalBottomSheet(
+            icon: Icon(Icons.logout, color: Colors.white),
+            tooltip: 'Logout',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
                 context: context,
-                builder: (_) => Wrap(
-                  children: [
-                    ListTile(
-                      leading: Icon(Icons.logout, color: Colors.red),
-                      title:
-                          Text('Logout', style: TextStyle(color: Colors.red)),
-                      onTap: () => _logout(context),
+                builder: (context) => AlertDialog(
+                  title: Text('Confirm Logout'),
+                  content: Text('Are you sure you want to log out?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      onPressed: () => Navigator.pop(context, true),
+                      child: Text('Logout'),
                     ),
                   ],
                 ),
               );
+              if (confirm == true) {
+                _logout(context);
+              }
             },
           ),
         ],
