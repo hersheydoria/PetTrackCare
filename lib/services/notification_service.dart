@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 Future<void> sendPetAlertToAllUsers({
   required String petName,
   required String type,
+  required String actorId,
 }) async {
   final supabase = Supabase.instance.client;
   final message = type == 'missing'
@@ -23,7 +24,8 @@ Future<void> sendPetAlertToAllUsers({
 
     // Prepare notification rows
     final notifications = userIds.map((uid) => {
-      'user_id': uid,
+      'user_id': uid, // recipient
+      'actor_id': actorId, // user who performed the action
       'message': message,
       'type': type,
       'is_read': false,

@@ -1047,6 +1047,7 @@ void _disconnectDevice() async {
          await sendPetAlertToAllUsers(
            petName: _selectedPet!['name'] ?? 'Unnamed',
            type: 'missing',
+           actorId: userId,
          );
 
         if (mounted) {
