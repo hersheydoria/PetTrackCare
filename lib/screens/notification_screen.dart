@@ -196,16 +196,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   String? _extractPublicUserId(Map<String, dynamic> n) {
-    dynamic userObj = n['actor'] ?? n['user'] ?? n['from_user'];
-    if (userObj is Map && userObj['id'] != null) {
-      return userObj['id'].toString();
+    // Prefer actor_id for profile picture, fallback to user_id
+    final actorId = n['actor_id'];
+    if (actorId != null && actorId.toString().isNotEmpty) {
+      return actorId.toString();
     }
-    final candidates = [
-      n['profile_user_id'],
-      n['user_id'],
-    ];
-    for (final v in candidates) {
-      if (v != null && v.toString().isNotEmpty) return v.toString();
+    final userId = n['user_id'];
+    if (userId != null && userId.toString().isNotEmpty) {
+      return userId.toString();
     }
     return null;
   }
