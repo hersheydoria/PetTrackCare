@@ -1224,6 +1224,11 @@ void showEditPostModal(Map post) {
                                                     'reason': reason,
                                                     'created_at': DateTime.now().toIso8601String(),
                                                   });
+                                                  // Update the reported column in community_posts
+                                                  await Supabase.instance.client
+                                                      .from('community_posts')
+                                                      .update({'reported': true})
+                                                      .eq('id', post['id']);
                                                   Navigator.pop(context);
                                                   ScaffoldMessenger.of(context).showSnackBar(
                                                     SnackBar(content: Text('Report submitted. Thank you!')),
