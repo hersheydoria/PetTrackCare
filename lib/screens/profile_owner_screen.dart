@@ -94,11 +94,11 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   Future<void> _refreshUserMetadata() async {
     final updatedUser = Supabase.instance.client.auth.currentUser;
     
-    // Load user data from public.users table (only name and profile_picture)
+    // Load user data from public.users table (name, profile_picture, and address)
     try {
       final response = await Supabase.instance.client
           .from('users')
-          .select('name, profile_picture')
+          .select('name, profile_picture, address')
           .eq('id', updatedUser?.id ?? '')
           .single();
       
@@ -121,7 +121,7 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   String get name => userData['name'] ?? metadata['name'] ?? 'Pet Owner';
   String get email => user?.email ?? 'No email';
   String get address =>
-      metadata['address'] ?? metadata['location'] ?? 'No address provided';
+      userData['address'] ?? metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
   @override
   void initState() {
@@ -805,15 +805,16 @@ SizedBox(height: 16),
                                 try {
                                   final supabase = Supabase.instance.client;
                                   
-                                  // Update public.users table (only name)
+                                  // Update public.users table (name and address)
                                   await supabase
                                       .from('users')
                                       .update({
                                         'name': newName,
+                                        'address': newAddress,
                                       })
                                       .eq('id', user!.id);
                                   
-                                  // Update auth metadata (name and address)
+                                  // Update auth metadata (name and address for backward compatibility)
                                   await supabase.auth.updateUser(UserAttributes(data: {
                                     'name': newName,
                                     'address': newAddress,
@@ -1798,7 +1799,7 @@ class _AddPetFormState extends State<_AddPetForm> {
       key: _formKey,
       child: Wrap(
         children: [
-          Text("Add New Pet",
+          Text(widget.initialPet != null ? "Edit Pet" : "Add New Pet",
               style: TextStyle(
                   fontSize: 20, fontWeight: FontWeight.bold, color: deepRed)),
           SizedBox(height: 16),
@@ -1854,9 +1855,12 @@ class _AddPetFormState extends State<_AddPetForm> {
                 CircleAvatar(
                   radius: 50,
                   backgroundColor: Colors.grey[300],
-                  backgroundImage:
-                      _petImage != null ? FileImage(_petImage!) : null,
-                  child: _petImage == null
+                  backgroundImage: _petImage != null 
+                      ? FileImage(_petImage!) 
+                      : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
+                          ? NetworkImage(widget.initialPet!['profile_picture'])
+                          : null,
+                  child: (_petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null))
                       ? Icon(Icons.pets, size: 50, color: Colors.white)
                       : null,
                 ),
@@ -1880,7 +1884,11 @@ class _AddPetFormState extends State<_AddPetForm> {
           ),
           SizedBox(height: 16),
 
-          _buildTextField(label: "Name", onSaved: (val) => name = val ?? ''),
+          _buildTextField(
+            label: "Name", 
+            initialValue: name,
+            onSaved: (val) => name = val ?? '',
+          ),
          // Breed dropdown moved to after Name
          Padding(
            padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1899,6 +1907,7 @@ class _AddPetFormState extends State<_AddPetForm> {
          ),
           _buildTextField(
             label: "Age (years)",
+            initialValue: age > 0 ? age.toString() : '',
             keyboardType: TextInputType.number,
             onSaved: (val) => age = int.tryParse(val ?? '0') ?? 0,
           ),
@@ -1937,6 +1946,7 @@ class _AddPetFormState extends State<_AddPetForm> {
           ),
           _buildTextField(
             label: "Weight (kg)",
+            initialValue: weight > 0 ? weight.toString() : '',
             keyboardType: TextInputType.number,
             onSaved: (val) => weight = double.tryParse(val ?? '0.0') ?? 0.0,
           ),
@@ -1948,7 +1958,7 @@ class _AddPetFormState extends State<_AddPetForm> {
               onPressed: _isLoading ? null : _submit,
               child: _isLoading
                   ? CircularProgressIndicator(color: Colors.white)
-                  : Text("Save Pet"),
+                  : Text(widget.initialPet != null ? "Update Pet" : "Save Pet"),
               style: ElevatedButton.styleFrom(
                 backgroundColor: deepRed,
                 foregroundColor: Colors.white,
@@ -1966,12 +1976,14 @@ class _AddPetFormState extends State<_AddPetForm> {
 
   Widget _buildTextField({
     required String label,
+    String? initialValue,
     TextInputType keyboardType = TextInputType.text,
     required FormFieldSetter<String> onSaved,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: TextFormField(
+        initialValue: initialValue,
         keyboardType: keyboardType,
         decoration: InputDecoration(
           labelText: label,

@@ -38,23 +38,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   bool? _isSitterAvailable;
   bool _isUpdatingAvailability = false;
 
+  // NEW: sitter profile data
+  Map<String, dynamic>? _sitterProfile;
+  bool _isLoadingProfile = false;
+
   // Add: jobs filter state
   String _jobsStatusFilter = 'Pending';
   static const List<String> _jobStatusOptions = ['All', 'Pending', 'Active', 'Completed'];
 
   late TabController _sitterTabController;
   RealtimeChannel? _jobsChannel; // realtime subscription channel
+  
+  // Search controller for location search
+  final TextEditingController _locationSearchController = TextEditingController();
+  String _currentSearchQuery = '';
 
   @override
   void initState() {
     super.initState();
     fetchUserData();
+    _loadJobs();
     _sitterTabController = TabController(length: 3, vsync: this);
   }
+
+  Future<void> _loadJobs() async {
+  final response = await supabase
+      .from('sitting_jobs_with_owner')
+      .select('id, status, start_date, end_date, pet_name, pet_type, owner_name, owner_id');
+
+  setState(() {
+    sittingJobs = response as List;
+  });
+}
 
   @override
   void dispose() {
     _sitterTabController.dispose();
+    _locationSearchController.dispose();
     // unsubscribe realtime channel
     _jobsChannel?.unsubscribe();
     super.dispose();
@@ -67,11 +87,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         await Future.wait([
           fetchSittingJobs(),
           fetchDailySummary(),
+          fetchSitterProfile(), // NEW: refresh profile data
         ]);
       } else {
         await Future.wait([
           fetchOwnedPets(),          // will also update pending requests
-          fetchAvailableSitters(),
+          fetchAvailableSitters(locationQuery: _currentSearchQuery.isEmpty ? null : _currentSearchQuery),
           fetchDailySummary(),
           fetchOwnerPendingRequests(),
           fetchOwnerActiveJobs(), // added
@@ -100,6 +121,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (userRole == 'Pet Sitter') fetchSittingJobs(),
         if (userRole == 'Pet Sitter') fetchSitterReviews(),
         if (userRole == 'Pet Sitter') fetchSitterAvailability(), // NEW: load availability
+        if (userRole == 'Pet Sitter') fetchSitterProfile(), // NEW: load profile
         if (userRole == 'Pet Owner') fetchOwnedPets(),
         if (userRole == 'Pet Owner') fetchAvailableSitters(),
         fetchDailySummary()
@@ -115,39 +137,87 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  Future<void> fetchAvailableSitters() async {
+  Future<void> fetchAvailableSitters({String? locationQuery}) async {
     try {
-      // Pull from sitters, join users for display name and profile picture, join reviews to compute avg rating
+      // Get all sitters with their basic info from public.users including address
       final rows = await supabase
           .from('sitters')
-          .select('id, user_id, is_available, hourly_rate, users!inner(id, name, role, profile_picture), sitter_reviews(rating)')
+          .select('id, user_id, is_available, hourly_rate, bio, experience, users!inner(id, name, role, profile_picture, address), sitter_reviews(rating)')
           .eq('users.role', 'Pet Sitter');
 
       final List<dynamic> list = (rows as List?) ?? [];
-      final mapped = list.map<Map<String, dynamic>>((raw) {
+      
+      // Map the data with address from public.users
+      final sittersWithAddress = list.map<Map<String, dynamic>>((raw) {
         final m = Map<String, dynamic>.from(raw as Map);
         final user = (m['users'] as Map?) ?? {};
         final reviews = (m['sitter_reviews'] as List?) ?? [];
+        final userId = (m['user_id'] ?? user['id'])?.toString();
+        
         double? avgRating;
         if (reviews.isNotEmpty) {
           final num sum = reviews.fold<num>(0, (acc, e) => acc + ((e['rating'] ?? 0) as num));
           avgRating = (sum / reviews.length).toDouble();
         }
+        
+        // Get address from public.users table
+        final address = user['address']?.toString() ?? 'Location not specified';
+        
         return {
-          'id': (user['id'] ?? m['user_id'])?.toString(),
-          'user_id': (m['user_id'] ?? user['id'])?.toString(),
+          'id': userId,
+          'user_id': userId,
           'sitter_id': m['id']?.toString(),
           'name': (user['name'] ?? 'Sitter').toString(),
           'is_available': m['is_available'],
           'rate_per_hour': m['hourly_rate'],
+          'bio': m['bio'],
+          'experience': m['experience'],
           'rating': avgRating,
-          'profile_picture': user['profile_picture'], // <-- add this line
+          'profile_picture': user['profile_picture'],
+          'address': address,
         };
       }).toList();
 
-      setState(() => availableSitters = mapped);
+      // Filter by location if search query is provided
+      List<dynamic> filteredSitters = sittersWithAddress;
+      if (locationQuery != null && locationQuery.trim().isNotEmpty) {
+        final query = locationQuery.toLowerCase().trim();
+        final matchingSitters = sittersWithAddress.where((sitter) {
+          final address = (sitter['address'] ?? '').toString().toLowerCase();
+          // Enable partial matching: "buenavista" matches "Buenavista, Agusan del Norte"
+          return address != 'location not specified' && address.contains(query);
+        }).toList();
+        
+        if (matchingSitters.isEmpty && sittersWithAddress.isNotEmpty) {
+          // If no sitters match the location, show message but still display all
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('No sitters found in "$locationQuery". Showing all available sitters.')),
+            );
+          }
+          filteredSitters = sittersWithAddress;
+        } else {
+          filteredSitters = matchingSitters;
+          // Show success message for location search
+          if (mounted && matchingSitters.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Found ${matchingSitters.length} sitter(s) in "$locationQuery"'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      }
+
+      setState(() => availableSitters = filteredSitters);
     } catch (e) {
       print('❌ fetchAvailableSitters ERROR: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading sitters. Please try again.')),
+        );
+      }
     }
   }
 
@@ -224,9 +294,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> fetchSittingJobs() async {
     final jobsRes = await supabase
-        .from('sitting_jobs')
-        // include owner_id to enable "Chat with owner"
-        .select('*, pets(name, owner_id, type)')
+        .from('sitting_jobs_with_owner')
+        .select('id, status, start_date, end_date, pet_name, pet_type, owner_name, owner_id')
         .eq('sitter_id', widget.userId)
         .neq('status', 'Cancelled') // exclude declined/cancelled jobs from Assigned Jobs
         .order('start_date', ascending: false);
@@ -966,9 +1035,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
         // Search bar stays, below the greeting/summary
         TextField(
+          controller: _locationSearchController,
           decoration: InputDecoration(
             hintText: 'Search Sitters by Location',
             prefixIcon: Icon(Icons.search),
+            suffixIcon: _currentSearchQuery.isNotEmpty 
+                ? IconButton(
+                    icon: Icon(Icons.clear),
+                    onPressed: _clearSearch,
+                  )
+                : null,
             filled: true,
             fillColor: Colors.white,
             border: OutlineInputBorder(
@@ -976,6 +1052,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               borderSide: BorderSide.none,
             ),
           ),
+          onSubmitted: _performSearch,
+          onChanged: (value) {
+            // Optional: perform search as user types (debounced)
+            if (value.isEmpty && _currentSearchQuery.isNotEmpty) {
+              _clearSearch();
+            }
+          },
         ),
         SizedBox(height: 16),
 
@@ -1076,26 +1159,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 children: [
-                  Center(
-                    child: Text(
-                      sitter['name'] ?? 'Unnamed',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'Roboto'),
-                    ),
-                  ),
-                  SizedBox(height: 12),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       CircleAvatar(
-                        radius: 26,
+                        radius: 35,
                         backgroundImage: profilePic != null && profilePic.isNotEmpty
                             ? NetworkImage(profilePic)
                             : AssetImage('assets/sitter_placeholder.png') as ImageProvider,
                       ),
-                      SizedBox(width: 12),
+                      SizedBox(width: 16),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            Text(
+                              sitter['name'] ?? 'Unnamed',
+                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'Roboto'),
+                            ),
+                            SizedBox(height: 6),
                             Row(
                               children: [
                                 Icon(Icons.star, color: Colors.orange, size: 18),
@@ -1113,6 +1195,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   : 'Rate: ₱${(rateVal is num) ? rateVal.toStringAsFixed(2) : rateVal.toString()} / hour',
                               style: TextStyle(fontFamily: 'Roboto'),
                             ),
+                            if (sitter['experience'] != null)
+                              Text(
+                                'Experience: ${sitter['experience']} years',
+                                style: TextStyle(fontFamily: 'Roboto', color: Colors.grey[600]),
+                              ),
+                            if (sitter['address'] != null && sitter['address'].toString().isNotEmpty)
+                              Row(
+                                children: [
+                                  Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
+                                  SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      sitter['address'].toString(),
+                                      style: TextStyle(fontFamily: 'Roboto', color: Colors.grey[600]),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
                           ],
                         ),
                       ),
@@ -1142,12 +1243,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         child: Builder(builder: (context) {
                           final sitterId = sitter['id'] as String?;
                           final isPending = sitterId != null && pendingSitterIds.contains(sitterId);
+                          final isDisabled = isPending || !isAvail;
+                          
+                          String buttonText;
+                          IconData buttonIcon;
+                          if (isPending) {
+                            buttonText = 'Pending';
+                            buttonIcon = Icons.hourglass_top;
+                          } else if (!isAvail) {
+                            buttonText = 'Busy';
+                            buttonIcon = Icons.schedule;
+                          } else {
+                            buttonText = 'Hire Sitter';
+                            buttonIcon = Icons.person_add;
+                          }
+                          
                           return ElevatedButton.icon(
-                            onPressed: isPending ? null : () => _showHireModal(sitter),
-                            icon: Icon(isPending ? Icons.hourglass_top : Icons.person_add),
-                            label: Text(isPending ? 'Pending' : 'Hire Sitter', style: TextStyle(fontFamily: 'Roboto')),
+                            onPressed: isDisabled ? null : () => _showHireModal(sitter),
+                            icon: Icon(buttonIcon),
+                            label: Text(buttonText, style: TextStyle(fontFamily: 'Roboto')),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: isPending ? Colors.grey : deepRed,
+                              backgroundColor: isDisabled ? Colors.grey : deepRed,
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8),
@@ -1185,6 +1301,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ),
                     ],
                   ),
+                  SizedBox(height: 12),
+                  
+                  // Bio section
+                  if (sitter['bio'] != null && sitter['bio'].toString().isNotEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'About ${sitter['name'] ?? 'Sitter'}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: deepRed,
+                              fontFamily: 'Roboto',
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            sitter['bio'].toString(),
+                            style: TextStyle(
+                              fontFamily: 'Roboto',
+                              color: Colors.grey[700],
+                              height: 1.3,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1221,6 +1374,85 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             onChanged: (_isSitterAvailable == null || _isUpdatingAvailability) ? null : (v) => _setSitterAvailability(v),
           ),
         ),
+
+        SizedBox(height: 12),
+
+        // NEW: Edit Profile button
+        Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          elevation: 2,
+          child: ListTile(
+            leading: Icon(Icons.edit, color: deepRed),
+            title: Text('Edit Profile', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
+            subtitle: Text(
+              'Update your bio, experience, and hourly rate',
+              style: TextStyle(color: Colors.grey[700], fontFamily: 'Roboto'),
+            ),
+            trailing: Icon(Icons.chevron_right, color: deepRed),
+            onTap: _showEditProfileModal,
+          ),
+        ),
+
+        SizedBox(height: 12),
+
+        // NEW: Profile summary
+        if (_sitterProfile != null)
+          Card(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            elevation: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Your Profile', style: TextStyle(fontWeight: FontWeight.bold, color: deepRed, fontFamily: 'Roboto')),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Experience', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')),
+                            Text(
+                              _sitterProfile!['experience'] != null 
+                                  ? '${_sitterProfile!['experience']} years' 
+                                  : 'Not set',
+                              style: TextStyle(fontWeight: FontWeight.w600, fontFamily: 'Roboto'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Hourly Rate', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')),
+                            Text(
+                              _sitterProfile!['hourly_rate'] != null 
+                                  ? '₱ ${_sitterProfile!['hourly_rate']}/hr' 
+                                  : 'Not set',
+                              style: TextStyle(fontWeight: FontWeight.w600, color: Colors.green[700], fontFamily: 'Roboto'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_sitterProfile!['bio'] != null && _sitterProfile!['bio'].toString().isNotEmpty) ...[
+                    SizedBox(height: 12),
+                    Text('Bio', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')),
+                    Text(
+                      _sitterProfile!['bio'].toString(),
+                      style: TextStyle(fontFamily: 'Roboto'),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
 
         SizedBox(height: 16),
 
@@ -1262,11 +1494,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 return Column(
                   // Replace: sittingJobs.take(3) -> filtered (show all matching)
                   children: filtered.map((job) {
-                    final petName = job['pets']?['name'] ?? 'Pet';
-                    final petType = job['pets']?['type'] ?? 'Pet';
+                    final petName = job['pet_name'] ?? 'Pet';
+                    final petType = job['pet_type'] ?? 'Pet';
                     final startTime = job['start_date'] ?? 'Time not set';
+                    final endTime = job['end_date'] ?? 'Time not set';
                     final status = (job['status'] ?? 'Pending').toString();
-                    final String? ownerId = job['pets']?['owner_id'] as String?;
+                    final ownerName = job['owner_name'] ?? 'Owner';
+                    final String? ownerId = job['owner_id'] as String?;
                     final String jobId = job['id'].toString();
 
                     return Card(
@@ -1279,8 +1513,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           children: [
                             ListTile(
                               leading: Icon(Icons.pets, color: deepRed),
-                              title: Text('$petName ($petType)', style: TextStyle(fontFamily: 'Roboto')),
-                              subtitle: Text('Start: $startTime', style: TextStyle(fontFamily: 'Roboto')),
+                              title: Text('Owner: $ownerName\n$petName ($petType)', style: TextStyle(fontFamily: 'Roboto')),
+                              subtitle: Text('Start: $startTime\nEnd: $endTime', style: TextStyle(fontFamily: 'Roboto')),
                               trailing: Container(
                                 padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
@@ -1336,7 +1570,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   Expanded(
                                     child: ElevatedButton.icon(
                                       onPressed: ownerId != null
-                                          ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
+                                          ? () => _openChatWithOwner(ownerId, ownerName: ownerName)
                                           : null,
                                       icon: Icon(Icons.message),
                                       label: Text('Chat', style: TextStyle(fontFamily: 'Roboto')),
@@ -1355,7 +1589,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   width: double.infinity,
                                   child: ElevatedButton.icon(
                                     onPressed: ownerId != null
-                                        ? () => _openChatWithOwner(ownerId, ownerName: 'Owner')
+                                        ? () => _openChatWithOwner(ownerId, ownerName: ownerName)
                                         : null,
                                     icon: Icon(Icons.message),
                                     label: Text('Chat', style: TextStyle(fontFamily: 'Roboto')),
@@ -1524,6 +1758,75 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  // NEW: fetch sitter profile data
+  Future<void> fetchSitterProfile() async {
+    try {
+      final row = await supabase
+          .from('sitters')
+          .select('id, bio, experience, hourly_rate, is_available')
+          .eq('user_id', widget.userId)
+          .maybeSingle();
+      setState(() => _sitterProfile = row);
+    } catch (e) {
+      print('❌ fetchSitterProfile ERROR: $e');
+      setState(() => _sitterProfile = null);
+    }
+  }
+
+  // NEW: update sitter profile
+  Future<void> updateSitterProfile({
+    String? bio,
+    int? experience,
+    double? hourlyRate,
+  }) async {
+    setState(() => _isLoadingProfile = true);
+    try {
+      final updates = <String, dynamic>{};
+      if (bio != null) updates['bio'] = bio;
+      if (experience != null) updates['experience'] = experience;
+      if (hourlyRate != null) updates['hourly_rate'] = hourlyRate;
+
+      await supabase
+          .from('sitters')
+          .update(updates)
+          .eq('user_id', widget.userId);
+
+      // Refresh profile data
+      await fetchSitterProfile();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Profile updated successfully!')),
+        );
+      }
+    } catch (e) {
+      print('❌ updateSitterProfile ERROR: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update profile: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingProfile = false);
+    }
+  }
+
+  // Search functionality
+  Future<void> _performSearch(String query) async {
+    setState(() {
+      _currentSearchQuery = query.trim();
+    });
+    await fetchAvailableSitters(locationQuery: _currentSearchQuery.isEmpty ? null : _currentSearchQuery);
+  }
+
+  void _clearSearch() {
+    setState(() {
+      _currentSearchQuery = '';
+      _locationSearchController.clear();
+    });
+    fetchAvailableSitters(); // Fetch all sitters without filter
+  }
+
   // NEW: toggle and persist sitter availability
   Future<void> _setSitterAvailability(bool value) async {
     if (_isUpdatingAvailability) return;
@@ -1547,6 +1850,184 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     } finally {
       if (mounted) setState(() => _isUpdatingAvailability = false);
     }
+  }
+
+  // NEW: show edit profile modal
+  Future<void> _showEditProfileModal() async {
+    if (_sitterProfile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Profile data not loaded yet. Please try again.')),
+      );
+      return;
+    }
+
+    final TextEditingController bioController = TextEditingController(
+      text: _sitterProfile!['bio']?.toString() ?? '',
+    );
+    final TextEditingController experienceController = TextEditingController(
+      text: _sitterProfile!['experience']?.toString() ?? '',
+    );
+    final TextEditingController rateController = TextEditingController(
+      text: _sitterProfile!['hourly_rate']?.toString() ?? '',
+    );
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                left: 16,
+                right: 16,
+                top: 16,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        height: 6,
+                        width: 60,
+                        margin: EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
+                      ),
+                    ),
+                    Text(
+                      'Edit Your Profile',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: deepRed, fontFamily: 'Roboto'),
+                    ),
+                    SizedBox(height: 8),
+                    Divider(),
+                    SizedBox(height: 16),
+                    
+                    // Bio field
+                    Text('Bio', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
+                    SizedBox(height: 8),
+                    TextField(
+                      controller: bioController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        hintText: 'Tell pet owners about yourself...',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      style: TextStyle(fontFamily: 'Roboto'),
+                    ),
+                    SizedBox(height: 16),
+                    
+                    // Experience field
+                    Text('Experience (years)', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
+                    SizedBox(height: 8),
+                    TextField(
+                      controller: experienceController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        hintText: 'Years of pet care experience',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      style: TextStyle(fontFamily: 'Roboto'),
+                    ),
+                    SizedBox(height: 16),
+                    
+                    // Hourly rate field
+                    Text('Hourly Rate (₱)', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
+                    SizedBox(height: 8),
+                    TextField(
+                      controller: rateController,
+                      keyboardType: TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        hintText: 'Your hourly rate in peso',
+                        prefixText: '₱ ',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      style: TextStyle(fontFamily: 'Roboto'),
+                    ),
+                    SizedBox(height: 24),
+                    
+                    // Buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: Text('Cancel', style: TextStyle(fontFamily: 'Roboto')),
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(color: deepRed),
+                              foregroundColor: deepRed,
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _isLoadingProfile ? null : () async {
+                              // Validate inputs
+                              final bio = bioController.text.trim();
+                              final experienceText = experienceController.text.trim();
+                              final rateText = rateController.text.trim();
+                              
+                              int? experience;
+                              double? hourlyRate;
+                              
+                              if (experienceText.isNotEmpty) {
+                                experience = int.tryParse(experienceText);
+                                if (experience == null || experience < 0) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Please enter a valid experience in years')),
+                                  );
+                                  return;
+                                }
+                              }
+                              
+                              if (rateText.isNotEmpty) {
+                                hourlyRate = double.tryParse(rateText);
+                                if (hourlyRate == null || hourlyRate <= 0) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Please enter a valid hourly rate')),
+                                  );
+                                  return;
+                                }
+                              }
+                              
+                              Navigator.of(context).pop();
+                              await updateSitterProfile(
+                                bio: bio.isEmpty ? null : bio,
+                                experience: experience,
+                                hourlyRate: hourlyRate,
+                              );
+                            },
+                            child: _isLoadingProfile 
+                                ? SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                  )
+                                : Text('Save Changes', style: TextStyle(fontFamily: 'Roboto')),
+                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 16),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override

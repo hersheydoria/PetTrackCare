@@ -92,18 +92,18 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
   String get name => userData['name'] ?? metadata['name'] ?? 'Pet Sitter';
   String get role => metadata['role'] ?? 'Pet Sitter';
   String get email => user?.email ?? 'No email';
-  String get address => metadata['address'] ?? metadata['location'] ?? 'No address provided';
+  String get address => userData['address'] ?? metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
   
   // Helper to refresh user and metadata after update
   Future<void> _refreshUserMetadata() async {
-    // Load user data from public.users table (only name and profile_picture)
+    // Load user data from public.users table (name, profile_picture, and address)
     try {
       final response = await Supabase.instance.client
           .from('users')
-          .select('name, profile_picture')
+          .select('name, profile_picture, address')
           .eq('id', user?.id ?? '')
           .single();
       
@@ -249,15 +249,16 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                 try {
                                   final supabase = Supabase.instance.client;
                                   
-                                  // Update public.users table (only name)
+                                  // Update public.users table (name and address)
                                   await supabase
                                       .from('users')
                                       .update({
                                         'name': newName,
+                                        'address': newAddress,
                                       })
                                       .eq('id', user!.id);
                                   
-                                  // Update auth metadata (name and address)
+                                  // Update auth metadata (name and address for backward compatibility)
                                   await supabase.auth.updateUser(UserAttributes(data: {
                                     'name': newName,
                                     'address': newAddress,
