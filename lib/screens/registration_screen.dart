@@ -16,7 +16,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
   final confirmController = TextEditingController();
-  // final locationController = TextEditingController(); // removed location controller
 
   String selectedRole = 'Pet Owner';
   bool isLoading = false;
@@ -27,7 +26,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   List<Map<String, dynamic>> provinces = [];
   List<Map<String, dynamic>> municipalities = [];
   List<Map<String, dynamic>> barangays = [];
-  // List<Map<String, dynamic>> districts = []; // PSGC does not provide purok/district, keep empty
 
   List<String> districts = [
     'Purok 1',
@@ -43,7 +41,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   String? selectedProvince;
   String? selectedMunicipality;
   String? selectedBarangay;
-  String? selectedDistrict; // Will be null, since PSGC does not provide purok/district
+  String? selectedDistrict;
 
   String? selectedProvinceCode;
   String? selectedMunicipalityCode;
@@ -73,11 +71,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
         data: {
-          // keep user details in auth.users metadata; exclude role and email to reduce conflicts
+          // Store basic info and address components in auth.users metadata
           'name': nameController.text.trim(),
           'full_name': nameController.text.trim(),
-          'role': selectedRole, 
-          'address': safeAddress,
+          'role': selectedRole,
           'province': selectedProvince,
           'municipality': selectedMunicipality,
           'barangay': selectedBarangay,
@@ -86,56 +83,138 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       );
 
       if (response.user != null) {
-        if (response.session == null) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Verification email sent. Please confirm to finish registration.')),
-          );
-          setState(() => isLoading = false);
-          // Redirect to login after registration
-          Navigator.pushReplacementNamed(context, '/login');
-          return;
-        }
-
-        // profiles upsert (only id + role)
+        // Insert user data regardless of session status
+        // This ensures data is saved even with email verification required
         try {
           if (kDebugMode) {
-            print('Upserting role $selectedRole for user ${response.user!.id}');
+            print('Inserting user data for user ${response.user!.id}');
+            print('Address: $safeAddress');
+            print('Status: Active');
           }
-          // add created_at timestamp (UTC ISO8601)
-          final createdAt = DateTime.now().toUtc().toIso8601String();
 
-          await Supabase.instance.client.from('users').upsert(
-            {
-              'id': response.user!.id,
-              'role': selectedRole, // only id and role in profiles
-              'created_at': createdAt,
-            },
-            onConflict: 'id',
-          );
+          final userPayload = {
+            'id': response.user!.id,
+            'name': nameController.text.trim(),
+            'role': selectedRole,
+            'address': safeAddress,
+            'status': 'Active',
+            'created_at': DateTime.now().toUtc().toIso8601String(),
+          };
+
+          if (kDebugMode) {
+            print('User payload: $userPayload');
+          }
+
+          // Try direct insert first
+          try {
+            final insertResult = await Supabase.instance.client
+                .from('users')
+                .insert(userPayload)
+                .select();
+            if (kDebugMode) {
+              print('Insert result: $insertResult');
+            }
+          } catch (insertError) {
+            if (kDebugMode) {
+              print('Insert failed, trying upsert: $insertError');
+            }
+            // If insert fails (maybe user already exists), try upsert
+            final upsertResult = await Supabase.instance.client
+                .from('users')
+                .upsert(userPayload, onConflict: 'id')
+                .select();
+            if (kDebugMode) {
+              print('Upsert result: $upsertResult');
+            }
+          }
+
+          // If user registered as Pet Sitter, create sitter profile
+          if (selectedRole == 'Pet Sitter') {
+            try {
+              final sitterPayload = {
+                'user_id': response.user!.id,
+                'bio': null, // User can fill this later
+                'experience': 0, // Default to 0, user can update later
+                'is_available': true,
+                'hourly_rate': null, // User can set this later
+              };
+
+              final sitterResult = await Supabase.instance.client
+                  .from('sitters')
+                  .insert(sitterPayload)
+                  .select();
+              
+              if (kDebugMode) {
+                print('Sitter profile created: $sitterResult');
+              }
+            } catch (sitterError) {
+              if (kDebugMode) {
+                print('Failed to create sitter profile: $sitterError');
+              }
+              // Don't fail the entire registration if sitter profile creation fails
+              // User can complete their sitter profile later
+            }
+          }
+
+          // Verify the data was actually stored
+          final verifyResult = await Supabase.instance.client
+              .from('users')
+              .select('id, name, role, address, status')
+              .eq('id', response.user!.id)
+              .maybeSingle();
+
+          if (kDebugMode) {
+            print('Verification query result: $verifyResult');
+          }
+
+          if (verifyResult == null) {
+            if (kDebugMode) {
+              print('❌ User data was not found after insert/upsert!');
+            }
+          } else {
+            if (kDebugMode) {
+              print('✅ User data verified: $verifyResult');
+            }
+          }
         } on PostgrestException catch (e) {
           if (kDebugMode) {
-            print('profiles upsert PostgrestException ${e.code}: ${e.message} ${e.details}');
+            print('Database insert PostgrestException ${e.code}: ${e.message} ${e.details}');
           }
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not save your role due to a server constraint. You can continue and set it later.')),
+              SnackBar(content: Text('Could not save user data: ${e.message}')),
             );
           }
         } catch (e) {
           if (kDebugMode) {
-            print('profiles upsert error: $e');
+            print('Database insert error: $e');
           }
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Profile role save encountered an issue. You can continue and set it later.')),
+              SnackBar(content: Text('Could not save user data. Please try again.')),
             );
           }
         }
 
-        if (!mounted) return;
-        // Redirect to login after registration
-        Navigator.pushReplacementNamed(context, '/login');
+        // Handle different registration scenarios
+        if (response.session == null) {
+          // Email verification required
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Verification email sent. Please confirm to finish registration.')),
+          );
+        } else {
+          // Immediate login (if email verification is disabled)
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Registration successful!')),
+          );
+        }
+
+        // Always redirect to login after registration
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/login');
+        }
       } else {
         // No user returned and no exception thrown: treat as unknown error
         throw Exception('Signup failed. Please try again later.');
@@ -148,12 +227,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       String friendly = e.message;
       if (msg.contains('already registered') || msg.contains('duplicate key')) {
         friendly = 'Email already registered. Try logging in instead.';
-      } else if (
-        msg.contains('database error saving new user') ||
-        msg.contains('unexpected_failure') ||
-        msg.contains('constraint') ||
-        msg.contains('violates')
-      ) {
+      } else if (msg.contains('database error saving new user') ||
+          msg.contains('unexpected_failure') ||
+          msg.contains('constraint') ||
+          msg.contains('violates')) {
         friendly = 'Signup failed due to a server constraint. Please try again later or contact support.';
       }
       if (mounted) {
@@ -220,13 +297,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         selectedDistrict = null;
       });
     }
-  }
-
-  // PSGC does not provide purok/district, so this will be empty
-  Future<void> _fetchDistricts(String barangayCode) async {
-    setState(() {
-      selectedDistrict = null; // Only reset selectedDistrict
-    });
   }
 
   @override
@@ -402,8 +472,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         selectedBarangay = val;
                         selectedBarangayCode = code;
                       });
-                      // PSGC does not provide purok/district, so skip
-                      // _fetchDistricts(code);
                     },
                     decoration: _inputDecoration('Barangay'),
                     validator: (value) => value == null ? 'Select barangay' : null,
