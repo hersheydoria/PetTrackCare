@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
-import 'package:flutter/services.dart'; // for Clipboard
+import 'package:flutter/services.dart'; // for Clipboard and HapticFeedback
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:android_intent_plus/android_intent.dart';
@@ -33,63 +33,6 @@ class PetProfileScreen extends StatefulWidget {
 
 class _PetProfileScreenState extends State<PetProfileScreen>
     with SingleTickerProviderStateMixin {
-  // Track last seen missing post id to avoid duplicate alerts
-  int? _lastMissingPostId;
-  Timer? _missingPostPollTimer;
-
-  // Poll for new missing posts and show alert dialog
-  void _startMissingPostPolling() {
-    _missingPostPollTimer?.cancel();
-    _missingPostPollTimer = Timer.periodic(Duration(seconds: 10), (timer) async {
-      try {
-    final posts = await Supabase.instance.client
-      .from('community_posts')
-      .select()
-      .inFilter('type', ['missing', 'found'])
-      .order('created_at', ascending: false)
-      .limit(1);
-        if (posts is List && posts.isNotEmpty) {
-          final post = posts.first;
-          final postId = post['id'] as int?;
-          if (postId != null && postId != _lastMissingPostId) {
-            _lastMissingPostId = postId;
-            _showMissingAlertDialog(post);
-          }
-        }
-      } catch (_) {}
-    });
-  }
-
-  // Show alert dialog for missing pet post
-  void _showMissingAlertDialog(Map<String, dynamic> post) {
-    if (!mounted) return;
-    final content = post['content'] ?? '';
-    final imageUrl = post['image_url']?.toString();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Missing Pet Alert', style: TextStyle(color: deepRed)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (imageUrl != null && imageUrl.isNotEmpty)
-              Center(
-                child: Image.network(imageUrl, height: 80, width: 80, fit: BoxFit.cover),
-              ),
-            SizedBox(height: 8),
-            Text(content, style: TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Dismiss'),
-          ),
-        ],
-      ),
-    );
-  }
   late TabController _tabController;
   final user = Supabase.instance.client.auth.currentUser;
 
@@ -682,14 +625,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _tabController = TabController(length: 3, vsync: this);
     _sleepController = TextEditingController();
     _fetchPets();
-  _startMissingPostPolling();
   }
 
   @override
   void dispose() {
     _sleepController.dispose();
     _tabController.dispose();
-    _missingPostPollTimer?.cancel();
     super.dispose();
   }
 

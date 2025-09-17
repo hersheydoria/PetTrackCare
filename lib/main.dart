@@ -11,6 +11,7 @@ import 'screens/post_detail_screen.dart';
 import 'screens/pet_alert_screen.dart';
 import 'screens/profile_owner_screen.dart';
 import 'screens/profile_sitter_screen.dart';
+import 'widgets/missing_pet_alert_wrapper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -70,15 +71,29 @@ class PetTrackCareApp extends StatelessWidget {
         '/register': (_) => RegistrationScreen(),
         '/home': (_) {
             final user = Supabase.instance.client.auth.currentUser;
-            return MainNavigation(userId: user!.id);
+            return MissingPetAlertWrapper(
+              child: MainNavigation(userId: user!.id),
+            );
           },
-        '/location_picker': (_) => LocationPicker(),
+        '/location_picker': (_) => MissingPetAlertWrapper(
+            child: LocationPicker(),
+          ),
         '/reset-password': (_) => ResetPasswordScreen(),
-        '/notification' : (_) => NotificationScreen(),
-         '/postDetail': (context) => PostDetailScreen.fromRoute(context),
-          '/petAlert': (context) => PetAlertScreen.fromRoute(context),
-        '/profile_owner': (_) => OwnerProfileScreen(openSavedPosts: false),
-        '/profile_sitter': (_) => SitterProfileScreen(openSavedPosts: false),
+        '/notification' : (_) => MissingPetAlertWrapper(
+            child: NotificationScreen(),
+          ),
+         '/postDetail': (context) => MissingPetAlertWrapper(
+            child: PostDetailScreen.fromRoute(context),
+          ),
+          '/petAlert': (context) => MissingPetAlertWrapper(
+            child: PetAlertScreen.fromRoute(context),
+          ),
+        '/profile_owner': (_) => MissingPetAlertWrapper(
+            child: OwnerProfileScreen(openSavedPosts: false),
+          ),
+        '/profile_sitter': (_) => MissingPetAlertWrapper(
+            child: SitterProfileScreen(openSavedPosts: false),
+          ),
       },
     );
   }
