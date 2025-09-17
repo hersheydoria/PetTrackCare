@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../widgets/saved_posts_modal.dart';
+import 'pets_screen.dart';
 
 // Reuse owner's color palette
 const deepRed = Color(0xFFB82132);
@@ -1334,7 +1335,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
       .from('sitting_jobs')
       .select('''
         pets (
-          id, name, breed, age, owner_id,
+          id, name, breed, age, owner_id, profile_picture,
           users!owner_id (
             name
           )
@@ -1388,11 +1389,32 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
                     color: Colors.white,
                   ),
                   child: ListTile(
-                    leading: Icon(Icons.pets, color: deepRed),
+                    leading: CircleAvatar(
+                      radius: 25,
+                      backgroundColor: Colors.grey[200],
+                      backgroundImage: (pet['profile_picture'] != null && 
+                                     pet['profile_picture'].toString().isNotEmpty)
+                          ? NetworkImage(pet['profile_picture'])
+                          : null,
+                      child: (pet['profile_picture'] == null || 
+                             pet['profile_picture'].toString().isEmpty)
+                          ? Icon(Icons.pets, color: deepRed, size: 30)
+                          : null,
+                    ),
                     title: Text(pet['name'] ?? 'Unnamed'),
                     subtitle: Text(
                       'Breed: ${pet['breed'] ?? 'N/A'} | Age: ${pet['age'] ?? 'N/A'}\nOwner: ${owner?['name'] ?? 'Unknown'}',
                     ),
+                    trailing: Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                    onTap: () {
+                      // Navigate to pet profile screen with the selected pet data
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => PetProfileScreen(initialPet: pet),
+                        ),
+                      );
+                    },
                   ),
                 );
               },

@@ -95,6 +95,15 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   late TabController _tabController;
   final user = Supabase.instance.client.auth.currentUser;
 
+  // Helper method to get user role
+  String _getUserRole() {
+    final metadata = user?.userMetadata ?? {};
+    final role = metadata['role']?.toString() ?? 'Pet Owner';
+    print('DEBUG: User metadata: $metadata');
+    print('DEBUG: User role: $role');
+    return role;
+  }
+
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
 
@@ -178,22 +187,79 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   }
 
   Future<void> _fetchPets() async {
-    final ownerId = user?.id;
-    if (ownerId == null) {
+    final userId = user?.id;
+    if (userId == null) {
       setState(() => _loadingPets = false);
       return;
     }
 
     setState(() => _loadingPets = true);
+    print('DEBUG: Starting _fetchPets for userId: $userId');
+    print('DEBUG: User role: ${_getUserRole()}');
     try {
-      final response = await Supabase.instance.client
-          .from('pets')
-          .select()
-          .eq('owner_id', ownerId)
-          .order('id', ascending: false);
-      final data = response as List?;
-      if (data != null && data.isNotEmpty) {
-        final list = List<Map<String, dynamic>>.from(data);
+      List<Map<String, dynamic>> list = [];
+      
+      if (_getUserRole() == 'Pet Sitter') {
+        // For Pet Sitters: fetch pets they are assigned to through sitting_jobs
+        print('DEBUG: Fetching pets for Pet Sitter with userId: $userId');
+        
+        // First, get the sitting_jobs with status 'Active' for this sitter
+        final sittingJobsResponse = await Supabase.instance.client
+            .from('sitting_jobs')
+            .select('pet_id, status')
+            .eq('sitter_id', userId)
+            .eq('status', 'Active');
+            
+        print('DEBUG: Sitting jobs response: $sittingJobsResponse');
+        final sittingJobsData = sittingJobsResponse as List?;
+        
+        if (sittingJobsData != null && sittingJobsData.isNotEmpty) {
+          print('DEBUG: Found ${sittingJobsData.length} active sitting jobs');
+          
+          // Extract pet IDs
+          final petIds = sittingJobsData
+              .map((job) => job['pet_id'])
+              .where((id) => id != null)
+              .toList();
+          
+          print('DEBUG: Pet IDs from sitting jobs: $petIds');
+          
+          if (petIds.isNotEmpty) {
+            // Now fetch the actual pets using these IDs
+            final petsResponse = await Supabase.instance.client
+                .from('pets')
+                .select()
+                .inFilter('id', petIds)
+                .order('id', ascending: false);
+                
+            print('DEBUG: Pets response: $petsResponse');
+            final petsData = petsResponse as List?;
+            if (petsData != null && petsData.isNotEmpty) {
+              list = List<Map<String, dynamic>>.from(petsData);
+              print('DEBUG: Found ${list.length} pets for Pet Sitter');
+            } else {
+              print('DEBUG: No pets found for Pet Sitter');
+            }
+          } else {
+            print('DEBUG: No valid pet IDs found in sitting jobs');
+          }
+        } else {
+          print('DEBUG: No active sitting jobs found for Pet Sitter');
+        }
+      } else {
+        // For Pet Owners: fetch pets they own
+        final response = await Supabase.instance.client
+            .from('pets')
+            .select()
+            .eq('owner_id', userId)
+            .order('id', ascending: false);
+        final data = response as List?;
+        if (data != null && data.isNotEmpty) {
+          list = List<Map<String, dynamic>>.from(data);
+        }
+      }
+      
+      if (list.isNotEmpty) {
         Map<String, dynamic>? selected;
         // prefer widget.initialPet if provided (match by id), otherwise pick first
         if (widget.initialPet != null) {
@@ -1130,7 +1196,9 @@ void _disconnectDevice() async {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24.0),
                     child: Text(
-                      'No pet. Go to the profile to add a pet',
+                      _getUserRole() == 'Pet Sitter' 
+                          ? 'No assigned pet yet' 
+                          : 'No pet. Go to the profile to add a pet',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: deepRed),
                     ),

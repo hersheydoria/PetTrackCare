@@ -27,6 +27,35 @@ class _LoginScreenState extends State<LoginScreen> {
     final session = Supabase.instance.client.auth.currentSession;
     final user = session?.user;
     if (user != null) {
+      // Check user status in public.users table
+      try {
+        final userData = await Supabase.instance.client
+            .from('users')
+            .select('status')
+            .eq('id', user.id)
+            .single();
+        
+        final userStatus = userData['status']?.toString().toLowerCase();
+        
+        if (userStatus == 'inactive') {
+          // Sign out the user immediately if inactive
+          await Supabase.instance.client.auth.signOut();
+          if (mounted) {
+            setState(() => isCheckingSession = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Your account has been deactivated. Please contact support.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+          return;
+        }
+      } catch (e) {
+        print('Error checking user status: $e');
+        // If we can't check status, allow the session to continue but log the error
+      }
+
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.pushReplacement(
           context,
@@ -54,6 +83,33 @@ class _LoginScreenState extends State<LoginScreen> {
       final user = response.user;
 
       if (user != null) {
+        // Check user status in public.users table
+        try {
+          final userData = await Supabase.instance.client
+              .from('users')
+              .select('status')
+              .eq('id', user.id)
+              .single();
+          
+          final userStatus = userData['status']?.toString().toLowerCase();
+          
+          if (userStatus == 'inactive') {
+            // Sign out the user immediately
+            await Supabase.instance.client.auth.signOut();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Your account has been deactivated. Please contact support.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            setState(() => isLoading = false);
+            return;
+          }
+        } catch (e) {
+          print('Error checking user status: $e');
+          // If we can't check status, allow login but log the error
+        }
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
