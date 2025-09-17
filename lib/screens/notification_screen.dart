@@ -141,14 +141,82 @@ class _NotificationScreenState extends State<NotificationScreen> {
     return null;
   }
 
+  Future<String?> _extractPostIdAsync(Map<String, dynamic> n) async {
+    // First try direct post_id
+    final postId = n['post_id']?.toString();
+    if (postId != null && postId.isNotEmpty) return postId;
+    
+    // For comment-related notifications, get post_id from the comment
+    final type = n['type']?.toString() ?? '';
+    final commentId = n['comment_id']?.toString();
+    final replyId = n['reply_id']?.toString();
+    
+    if ((type == 'comment_like' || type == 'reply') && commentId != null && commentId.isNotEmpty) {
+      try {
+        final commentRes = await supabase
+            .from('comments')
+            .select('post_id')
+            .eq('id', commentId)
+            .maybeSingle();
+        
+        final commentPostId = commentRes?['post_id']?.toString();
+        if (commentPostId != null && commentPostId.isNotEmpty) {
+          return commentPostId;
+        }
+      } catch (e) {
+        print('Error fetching post_id from comment: $e');
+      }
+    }
+    
+    // For reply notifications, we might need to get the post_id from the reply's comment
+    if (type == 'reply' && replyId != null && replyId.isNotEmpty) {
+      try {
+        final replyRes = await supabase
+            .from('replies')
+            .select('comment_id')
+            .eq('id', replyId)
+            .maybeSingle();
+        
+        final parentCommentId = replyRes?['comment_id']?.toString();
+        if (parentCommentId != null && parentCommentId.isNotEmpty) {
+          final commentRes = await supabase
+              .from('comments')
+              .select('post_id')
+              .eq('id', parentCommentId)
+              .maybeSingle();
+          
+          final commentPostId = commentRes?['post_id']?.toString();
+          if (commentPostId != null && commentPostId.isNotEmpty) {
+            return commentPostId;
+          }
+        }
+      } catch (e) {
+        print('Error fetching post_id from reply: $e');
+      }
+    }
+    
+    return null;
+  }
+
   Future<void> _prefetchCaptionsFor(List<Map<String, dynamic>> items) async {
     final ids = <String>{};
+    
+    // First collect post IDs from direct post_id fields
     for (final n in items) {
       final pid = _extractPostId(n);
       if (pid != null && !_postCaptionCache.containsKey(pid)) {
         ids.add(pid);
       }
     }
+    
+    // Then collect post IDs from comment-related notifications
+    for (final n in items) {
+      final pid = await _extractPostIdAsync(n);
+      if (pid != null && !_postCaptionCache.containsKey(pid)) {
+        ids.add(pid);
+      }
+    }
+    
     if (ids.isEmpty) return;
     try {
       final List<dynamic> rows = await supabase
@@ -215,6 +283,10 @@ class _NotificationScreenState extends State<NotificationScreen> {
             return '$actorName replied to your comment';
           case 'follow':
             return '$actorName started following you';
+          case 'missing_pet':
+            return '$actorName posted about a missing pet';
+          case 'found_pet':
+            return '$actorName posted about a found pet';
           default:
             return '$actorName interacted with your content';
         }
@@ -351,7 +423,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   void _handleNotificationTap(BuildContext context, Map<String, dynamic> n) async {
     await _markAsRead(n['id'].toString());
-    final postId = _extractPostId(n);
+    final postId = await _extractPostIdAsync(n);
     print('Notification tapped: postId=$postId');
     if (postId != null && postId.isNotEmpty) {
       Navigator.of(context).pushNamed(

@@ -3,10 +3,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// Sends a notification to all users when a pet is marked missing or found.
 /// [petName] - The name of the pet.
 /// [type] - 'missing' or 'found'.
+/// [postId] - Optional post ID to link the notification to a community post.
 Future<void> sendPetAlertToAllUsers({
   required String petName,
   required String type,
   required String actorId,
+  String? postId,
 }) async {
   final supabase = Supabase.instance.client;
   final message = type == 'missing'
@@ -27,7 +29,8 @@ Future<void> sendPetAlertToAllUsers({
       'user_id': uid, // recipient
       'actor_id': actorId, // user who performed the action
       'message': message,
-      'type': type,
+      'type': type == 'missing' ? 'missing_pet' : 'found_pet',
+      'post_id': postId, // link to community post
       'is_read': false,
       'created_at': DateTime.now().toIso8601String(),
     }).toList();

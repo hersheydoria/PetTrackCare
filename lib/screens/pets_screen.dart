@@ -10,9 +10,7 @@ import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
 import 'package:flutter/services.dart'; // for Clipboard
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:app_settings/app_settings.dart'; 
 import 'package:android_intent_plus/android_intent.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:universal_platform/universal_platform.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart'; 
 import 'package:permission_handler/permission_handler.dart';
@@ -139,6 +137,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   LatLng? _latestDeviceLocation;
   DateTime? _latestDeviceTimestamp;
   String? _latestDeviceId;
+
+  // Current map view location (can be different from latest device location)
+  LatLng? _currentMapLocation;
+  String? _currentMapLabel;
+  String? _currentMapSub;
 
  List<Map<String, dynamic>> _locationHistory = [];
 
@@ -568,6 +571,41 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     return null;
   }
 
+  // Refresh addresses for location history items that don't have addresses yet
+  Future<void> _refreshAddressesForLocationHistory() async {
+    if (_locationHistory.isEmpty) return;
+    
+    bool hasUpdates = false;
+    final updatedHistory = <Map<String, dynamic>>[];
+    
+    for (final record in _locationHistory) {
+      final lat = record['latitude'] as double?;
+      final lng = record['longitude'] as double?;
+      final currentAddress = record['address'] as String?;
+      
+      // If no address exists and we have coordinates, try to get address
+      if ((currentAddress == null || currentAddress.isEmpty) && lat != null && lng != null) {
+        final newAddress = await _reverseGeocode(lat, lng);
+        if (newAddress != null && newAddress.isNotEmpty) {
+          final updatedRecord = Map<String, dynamic>.from(record);
+          updatedRecord['address'] = newAddress;
+          updatedHistory.add(updatedRecord);
+          hasUpdates = true;
+        } else {
+          updatedHistory.add(record);
+        }
+      } else {
+        updatedHistory.add(record);
+      }
+    }
+    
+    if (hasUpdates) {
+      setState(() {
+        _locationHistory = updatedHistory;
+      });
+    }
+  }
+
   String _formatTimestamp(DateTime? dt) {
     if (dt == null) return '-';
     try {
@@ -577,20 +615,65 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
-    // Helper: open maps at given coordinates
-  Future<void> _openMapsAt(LatLng point) async {
-    final lat = point.latitude;
-    final lng = point.longitude;
-    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+  // Helper: expand map view to fullscreen
+  void _expandMapView() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _FullScreenMapView(
+          center: _currentMapLocation ?? _latestDeviceLocation ?? LatLng(9.0, 125.5),
+          markerLocation: _currentMapLocation ?? _latestDeviceLocation,
+          markerLabel: _currentMapLabel ?? (_latestDeviceLocation != null ? 'Current Location' : null),
+          markerSub: _currentMapSub ?? (_latestDeviceTimestamp != null 
+            ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!.toLocal()) 
+            : null),
+          locationHistory: _locationHistory,
+          onLocationSelected: (location, label, subtitle) {
+            Navigator.pop(context);
+            _updateMapView(location, label, subtitle);
+          },
+        ),
+      ),
+    );
+  }
+
+  // Helper: update map view to show specific location from history
+  void _updateMapView(LatLng location, String label, String subtitle) {
+    setState(() {
+      _currentMapLocation = location;
+      _currentMapLabel = label;
+      _currentMapSub = subtitle;
+    });
+  }
+
+  // Get the actual pet owner's name from the database
+  Future<String> _getActualOwnerName() async {
+    if (_selectedPet == null) return 'Unknown Owner';
+    
     try {
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open maps')));
+      final ownerId = _selectedPet!['owner_id'];
+      if (ownerId == null) return 'Unknown Owner';
+      
+      // Fetch owner information from users table
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('name')
+          .eq('id', ownerId)
+          .limit(1);
+          
+      final userData = response as List?;
+      if (userData != null && userData.isNotEmpty) {
+        final user = userData.first as Map<String, dynamic>;
+        final name = user['name']?.toString();
+        
+        // Return name if available, otherwise fallback
+        return name?.isNotEmpty == true ? name! : 'Owner';
       }
-    } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open maps')));
+    } catch (e) {
+      print('Error fetching owner name: $e');
     }
+    
+    return 'Owner';
   }
 
   @override
@@ -784,7 +867,11 @@ void _openBluetoothSettings() async {
     );
     await intent.launch();
   } else if (UniversalPlatform.isIOS) {
-    await launchUrl(Uri.parse('app-settings:'));
+    // iOS Bluetooth settings - would require native implementation
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Please manually enable Bluetooth in iOS Settings'))
+    );
+    return;
   }
 
   // Wait for user to enable Bluetooth
@@ -1043,16 +1130,25 @@ void _disconnectDevice() async {
       ? _formatTimestamp(timestamp)
       : _formatTimestamp(DateTime.now());
   String? resolvedAddress = address;
+  // Always try to get the best address possible
   if ((resolvedAddress == null || resolvedAddress.isEmpty) && lat != null && lng != null) {
-    resolvedAddress = await _reverseGeocode(lat, lng) ?? '';
+    resolvedAddress = await _reverseGeocode(lat, lng);
+    // If reverse geocoding fails, we'll show coordinates as fallback
   }
   final locationStr = (resolvedAddress?.isNotEmpty ?? false)
-      ? resolvedAddress
+      ? (lat != null && lng != null
+          ? '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)} - $resolvedAddress'
+          : resolvedAddress)
       : (lat != null && lng != null
-          ? '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'
+          ? 'Coordinates: ${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'
           : 'No location available');
   final profilePicture = _selectedPet!['profile_picture'];
 
+    // Check if current user is the owner or a sitter
+    final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
+    final userRole = _getUserRole();
+    final isOwner = userRole == 'Pet Owner' && _selectedPet!['owner_id'] == userId;
+    
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1068,15 +1164,20 @@ void _disconnectDevice() async {
             Text('Location: $locationStr'),
             SizedBox(height: 12),
             Text(
-              'This will mark your pet as missing and create a missing post in the community.',
-              style: TextStyle(color: Colors.grey[700]),
+              isOwner 
+                ? 'This will mark your pet as missing and create a missing post in the community.'
+                : 'This will mark the pet as missing and create an urgent missing post in the community. As a pet sitter, this will alert the owner and all community members.',
+              style: TextStyle(
+                color: isOwner ? Colors.grey[700] : Colors.orange[700],
+                fontWeight: isOwner ? FontWeight.normal : FontWeight.w500,
+              ),
             ),
           ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+            style: ElevatedButton.styleFrom(backgroundColor: isOwner ? deepRed : Colors.orange),
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('Confirm'),
           ),
@@ -1097,28 +1198,51 @@ void _disconnectDevice() async {
 
         // Insert lost post into community_post
         final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
-        await Supabase.instance.client
+        
+        // Create different content based on user role (use previously determined isOwner)
+        String content;
+        if (isOwner) {
+          content = 'My pet "$petName" (${breed}) was last seen at $locationStr on $lastSeen.';
+        } else {
+          // Pet sitter is reporting
+          content = 'URGENT: Pet "$petName" (${breed}) went missing while under my care as a pet sitter. Last seen at $locationStr on $lastSeen. Please help find this pet and contact the owner immediately.';
+        }
+        
+        final postResponse = await Supabase.instance.client
             .from('community_posts')
             .insert({
               'type': 'missing',
               'user_id': userId,
-              'content': 'My pet "$petName" (${breed}) was last seen at $locationStr on $lastSeen.',
+              'content': content,
               'latitude': lat,
               'longitude': lng,
               'address': resolvedAddress,
               'image_url': profilePicture,
               'created_at': timestamp?.toIso8601String() ?? DateTime.now().toIso8601String(),
-            });
-         // Send pet alert notification to all users
+            }).select('id');
+            
+         // Get the post ID from the response
+         String? postId;
+         if (postResponse is List && postResponse.isNotEmpty) {
+           postId = postResponse.first['id']?.toString();
+         }
+         
+         // Send pet alert notification to all users with post ID
          await sendPetAlertToAllUsers(
            petName: _selectedPet!['name'] ?? 'Unnamed',
            type: 'missing',
            actorId: userId,
+           postId: postId,
          );
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Pet marked as missing/lost and post created!')),
+            SnackBar(
+              content: Text(isOwner 
+                ? 'Pet marked as missing/lost and post created!'
+                : 'Pet marked as missing! Urgent alert sent to community and owner.'),
+              backgroundColor: isOwner ? null : Colors.orange,
+            ),
           );
         }
       } catch (e) {
@@ -1295,7 +1419,7 @@ void _disconnectDevice() async {
                                     _selectedPet!['is_missing'] = false;
                                   });
 
-                                  // Move lost post to found type in community_posts
+                                  // Move lost post to found type in community_posts and update content
                                   final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
                                   final petName = _selectedPet!['name'] ?? 'Unnamed';
                                   final breed = _selectedPet!['breed'] ?? 'Unknown';
@@ -1308,9 +1432,16 @@ void _disconnectDevice() async {
                                       .ilike('content', '%$petName%');
                                   if (posts is List && posts.isNotEmpty) {
                                     final post = posts.first;
+                                    final currentContent = post['content']?.toString() ?? '';
+                                    final foundDate = DateFormat('MMM d, yyyy • hh:mm a').format(DateTime.now());
+                                    final updatedContent = '$currentContent\n\nUPDATE: Pet is found at $foundDate';
+                                    
                                     await Supabase.instance.client
                                         .from('community_posts')
-                                        .update({'type': 'found'})
+                                        .update({
+                                          'type': 'found',
+                                          'content': updatedContent,
+                                        })
                                         .eq('id', post['id']);
                                   }
 
@@ -1408,8 +1539,18 @@ void _disconnectDevice() async {
     String? markerLabel;
     String? markerSub;
 
-    // Prefer latest device location (if available)
-    if (_latestDeviceLocation != null) {
+    // Use current map location if set, otherwise prefer latest device location
+    if (_currentMapLocation != null) {
+      lat = _currentMapLocation!.latitude;
+      lng = _currentMapLocation!.longitude;
+      markerLabel = _currentMapLabel;
+      markerSub = _currentMapSub;
+      markerWidget = CircleAvatar(
+        radius: 20,
+        backgroundColor: Colors.white,
+        child: Icon(Icons.history, color: Colors.blue),
+      );
+    } else if (_latestDeviceLocation != null) {
       lat = _latestDeviceLocation!.latitude;
       lng = _latestDeviceLocation!.longitude;
       markerWidget = CircleAvatar(
@@ -1417,7 +1558,17 @@ void _disconnectDevice() async {
         backgroundColor: Colors.white,
         child: Icon(Icons.gps_fixed, color: deepRed),
       );
-      markerLabel = _latestDeviceId != null ? _latestDeviceId : 'Device';
+      
+      // Try to get address from location history or reverse geocode
+      String? locationAddress;
+      if (_locationHistory.isNotEmpty) {
+        final latest = _locationHistory.first;
+        locationAddress = latest['address']?.toString();
+      }
+      
+      markerLabel = locationAddress?.isNotEmpty == true 
+          ? '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${locationAddress!.length > 40 ? '${locationAddress.substring(0, 40)}...' : locationAddress}'
+          : '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${_latestDeviceId ?? 'Device Location'}';
       markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!.toLocal()) : 'Last seen: unknown';
     } else if (_selectedPet != null &&
         _selectedPet!['latitude'] != null &&
@@ -1467,26 +1618,42 @@ void _disconnectDevice() async {
                   Marker(
                     point: LatLng(lat!, lng!),
                     width: 160,
-                    height: 80,
+                    height: 120,
                     child: GestureDetector(
-                      onTap: () => _openMapsAt(LatLng(lat!, lng!)),
+                      onTap: () => _expandMapView(),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           markerWidget,
                           SizedBox(height: 4),
-                          Container(
-                            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(6),
-                              boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
-                            ),
-                            child: Column(
-                              children: [
-                                Text(markerLabel ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                if (markerSub != null) Text(markerSub, style: TextStyle(fontSize: 10, color: Colors.grey[700])),
-                              ],
+                          Flexible(
+                            child: Container(
+                              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    markerLabel ?? '', 
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (markerSub != null) 
+                                    Text(
+                                      markerSub, 
+                                      style: TextStyle(fontSize: 9, color: Colors.grey[700]),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                         ],
@@ -1501,16 +1668,21 @@ void _disconnectDevice() async {
         Positioned(
           right: 12,
           top: 12,
-          child: FloatingActionButton(
-            mini: true,
-            backgroundColor: deepRed,
-            child: Icon(Icons.refresh, size: 18, color: Colors.white),
-            onPressed: () async {
-              await _fetchLatestLocationForPet();
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Location refreshed')));
-            },
+          child: Tooltip(
+            message: 'Refresh location and addresses',
+            child: FloatingActionButton(
+              mini: true,
+              backgroundColor: deepRed,
+              child: Icon(Icons.refresh, size: 18, color: Colors.white),
+              onPressed: () async {
+                await _fetchLatestLocationForPet();
+                // Force address refresh for items without addresses
+                await _refreshAddressesForLocationHistory();
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Location and addresses refreshed')));
+              },
             ),
-              ),
+          ),
+        ),
             ],
           ),
         ),
@@ -1532,13 +1704,29 @@ void _disconnectDevice() async {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('Location History', style: TextStyle(fontWeight: FontWeight.bold)),
-                  TextButton.icon(
-                    icon: Icon(Icons.open_in_new, size: 16),
-                    label: Text('Open Maps', style: TextStyle(fontSize: 12)),
-                    onPressed: () {
-                      // open latest location in maps if available
-                      if (_latestDeviceLocation != null) _openMapsAt(_latestDeviceLocation!);
-                    },
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_currentMapLocation != null)
+                        TextButton.icon(
+                          icon: Icon(Icons.refresh, size: 16),
+                          label: Text('Latest', style: TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            setState(() {
+                              _currentMapLocation = null;
+                              _currentMapLabel = null;
+                              _currentMapSub = null;
+                            });
+                          },
+                        ),
+                      TextButton.icon(
+                        icon: Icon(Icons.fullscreen, size: 16),
+                        label: Text('Expand Map', style: TextStyle(fontSize: 12)),
+                        onPressed: () {
+                          _expandMapView();
+                        },
+                      ),
+                    ],
                   )
                 ],
               ),
@@ -1560,16 +1748,48 @@ void _disconnectDevice() async {
                         final lngv = r['longitude'];
                         final ts = r['timestamp'] as DateTime?;
                         final device = r['device_mac']?.toString();
-                        final title = address ?? (latv != null && lngv != null ? '${latv.toStringAsFixed(5)}, ${lngv.toStringAsFixed(5)}' : 'Unknown coords');
+                        
+                        // Prioritize address over coordinates, but show coordinates as fallback with "Coordinates:" prefix
+                        String title;
+                        Widget leadingIcon;
+                        if (address != null && address.isNotEmpty) {
+                          // Show coordinates + address when both are available
+                          if (latv != null && lngv != null) {
+                            title = '${latv.toStringAsFixed(5)}, ${lngv.toStringAsFixed(5)} - $address';
+                          } else {
+                            title = address;
+                          }
+                          leadingIcon = Icon(Icons.location_on, color: deepRed);
+                        } else if (latv != null && lngv != null) {
+                          title = 'Coordinates: ${latv.toStringAsFixed(5)}, ${lngv.toStringAsFixed(5)}';
+                          leadingIcon = Icon(Icons.my_location, color: Colors.orange);
+                        } else {
+                          title = 'Unknown location';
+                          leadingIcon = Icon(Icons.location_off, color: Colors.grey);
+                        }
+                        
                         return ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: Icon(Icons.location_on, color: deepRed),
-                          title: Text(title, style: TextStyle(fontSize: 14)),
+                          leading: leadingIcon,
+                          title: Text(
+                            title, 
+                            style: TextStyle(fontSize: 14),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                           subtitle: Text('${_formatTimestamp(ts)}${device != null ? ' • $device' : ''}', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
                           trailing: IconButton(
-                            icon: Icon(Icons.map, color: deepRed),
-                            onPressed: (latv != null && lngv != null) ? () => _openMapsAt(LatLng(latv, lngv)) : null,
+                            icon: Icon(Icons.visibility, color: deepRed),
+                            tooltip: 'View on map',
+                            onPressed: (latv != null && lngv != null) ? () {
+                              final timestamp = _formatTimestamp(ts);
+                              _updateMapView(LatLng(latv, lngv), title, timestamp);
+                            } : null,
                           ),
+                          onTap: (latv != null && lngv != null) ? () {
+                            final timestamp = _formatTimestamp(ts);
+                            _updateMapView(LatLng(latv, lngv), title, timestamp);
+                          } : null,
                         );
                       },
                     ),
@@ -1600,9 +1820,6 @@ void _disconnectDevice() async {
   }
 
   Widget _buildQRCodeSection() {
-    final ownerMeta = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
-    final ownerName = ownerMeta['name']?.toString() ?? Supabase.instance.client.auth.currentUser?.email ?? 'Owner';
-
     if (_selectedPet == null) {
       return _buildTabContent('No pet selected');
     }
@@ -1640,13 +1857,20 @@ void _disconnectDevice() async {
             ),
           ),
           SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0),
-            child: Text(
-              'Owner: $ownerName\nPet: ${_selectedPet!['name'] ?? 'Unnamed'}\n\nScan opens: $publicUrl',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[800]),
-            ),
+          // Fetch and display the actual pet owner's name
+          FutureBuilder<String>(
+            future: _getActualOwnerName(),
+            builder: (context, snapshot) {
+              final ownerName = snapshot.data ?? 'Loading...';
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Text(
+                  'Owner: $ownerName\nPet: ${_selectedPet!['name'] ?? 'Unnamed'}\n\nScan opens: $publicUrl',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey[800]),
+                ),
+              );
+            },
           ),
           SizedBox(height: 12),
           Row(
@@ -2399,12 +2623,245 @@ void _disconnectDevice() async {
                                     }
                                   }
                                 },
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            );
+                      );
+                    },
+                  );
       }
   }
+
+
+// Full-screen map view widget
+class _FullScreenMapView extends StatefulWidget {
+  final LatLng center;
+  final LatLng? markerLocation;
+  final String? markerLabel;
+  final String? markerSub;
+  final List<Map<String, dynamic>> locationHistory;
+  final Function(LatLng, String, String) onLocationSelected;
+
+  const _FullScreenMapView({
+    required this.center,
+    this.markerLocation,
+    this.markerLabel,
+    this.markerSub,
+    required this.locationHistory,
+    required this.onLocationSelected,
+  });
+
+  @override
+  _FullScreenMapViewState createState() => _FullScreenMapViewState();
+}
+
+class _FullScreenMapViewState extends State<_FullScreenMapView> {
+  late LatLng _currentCenter;
+  late String? _currentLabel;
+  late String? _currentSub;
+  bool _showLocationHistory = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentCenter = widget.markerLocation ?? widget.center;
+    _currentLabel = widget.markerLabel;
+    _currentSub = widget.markerSub;
+  }
+
+  void _updateMapLocation(LatLng location, String label, String subtitle) {
+    setState(() {
+      _currentCenter = location;
+      _currentLabel = label;
+      _currentSub = subtitle;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: lightBlush,
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFCB4154),
+        elevation: 0,
+        title: Text('Pet Location Map', style: TextStyle(fontWeight: FontWeight.bold)),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.history),
+            onPressed: () {
+              setState(() {
+                _showLocationHistory = !_showLocationHistory;
+              });
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.check),
+            onPressed: () {
+              if (_currentLabel != null && _currentSub != null) {
+                widget.onLocationSelected(_currentCenter, _currentLabel!, _currentSub!);
+              } else {
+                Navigator.pop(context);
+              }
+            },
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          FlutterMap(
+            options: MapOptions(
+              initialCenter: _currentCenter,
+              initialZoom: 14,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c'],
+              ),
+              MarkerLayer(
+                markers: [
+                  if (widget.markerLocation != null)
+                    Marker(
+                      point: _currentCenter,
+                      width: 200,
+                      height: 150,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 25,
+                            backgroundColor: Colors.white,
+                            child: Icon(Icons.location_on, color: deepRed, size: 30),
+                          ),
+                          SizedBox(height: 8),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_currentLabel != null)
+                                  Text(
+                                    _currentLabel!,
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                if (_currentSub != null)
+                                  Text(
+                                    _currentSub!,
+                                    style: TextStyle(fontSize: 10, color: Colors.grey[700]),
+                                    textAlign: TextAlign.center,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          if (_showLocationHistory)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Container(
+                height: 250,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8)],
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: deepRed,
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                      ),
+                      child: Row(
+                        children: [
+                          Text('Location History', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          Spacer(),
+                          IconButton(
+                            icon: Icon(Icons.close, color: Colors.white),
+                            onPressed: () {
+                              setState(() {
+                                _showLocationHistory = false;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: widget.locationHistory.isEmpty
+                          ? Center(
+                              child: Text('No recent locations', style: TextStyle(color: Colors.grey[700])),
+                            )
+                          : ListView.separated(
+                              padding: EdgeInsets.all(8),
+                              itemCount: widget.locationHistory.length,
+                              separatorBuilder: (_, __) => Divider(height: 8),
+                              itemBuilder: (context, idx) {
+                                final r = widget.locationHistory[idx];
+                                final address = (r['address'] as String?)?.toString();
+                                final latv = r['latitude'];
+                                final lngv = r['longitude'];
+                                final ts = r['timestamp'] as DateTime?;
+                                
+                                String title;
+                                if (address != null && address.isNotEmpty) {
+                                  if (latv != null && lngv != null) {
+                                    title = '${latv.toStringAsFixed(5)}, ${lngv.toStringAsFixed(5)} - $address';
+                                  } else {
+                                    title = address;
+                                  }
+                                } else if (latv != null && lngv != null) {
+                                  title = 'Coordinates: ${latv.toStringAsFixed(5)}, ${lngv.toStringAsFixed(5)}';
+                                } else {
+                                  title = 'Unknown location';
+                                }
+                                
+                                final timestamp = ts != null 
+                                    ? DateFormat('MMM d, yyyy • hh:mm a').format(ts.toLocal())
+                                    : '-';
+                                
+                                return ListTile(
+                                  dense: true,
+                                  leading: Icon(Icons.location_on, color: deepRed, size: 20),
+                                  title: Text(
+                                    title,
+                                    style: TextStyle(fontSize: 12),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: Text(timestamp, style: TextStyle(fontSize: 10)),
+                                  onTap: (latv != null && lngv != null) ? () {
+                                    _updateMapLocation(LatLng(latv, lngv), title, timestamp);
+                                  } : null,
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
