@@ -186,6 +186,27 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
       print('Comment inserted: $newComment');
 
+      // Wait a moment for any database triggers to create notifications
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      // Get the post owner ID and update any existing notifications for this comment to include actor_id
+      final postData = await Supabase.instance.client
+          .from('community_posts')
+          .select('user_id')
+          .eq('id', postId)
+          .single();
+      
+      final postOwnerId = postData['user_id'];
+      if (postOwnerId != widget.userId) {
+        await Supabase.instance.client
+          .from('notifications')
+          .update({'actor_id': widget.userId})
+          .eq('user_id', postOwnerId)
+          .eq('post_id', postId)
+          .eq('type', 'comment')
+          .isFilter('actor_id', null);
+      }
+
       // Get user data
       final userData = await Supabase.instance.client
           .from('users')
@@ -621,6 +642,28 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         ...Map<String, dynamic>.from(newReply),
         'users': userData,
       };
+
+      // Wait a moment for any database triggers to create notifications
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      // Update any existing notifications for this reply to include actor_id
+      // We need to get the comment owner to send notification to
+      final commentOwner = await Supabase.instance.client
+          .from('comments')
+          .select('user_id')
+          .eq('id', commentId)
+          .single();
+      
+      final commentOwnerId = commentOwner['user_id'];
+      if (commentOwnerId != widget.userId) {
+        await Supabase.instance.client
+          .from('notifications')
+          .update({'actor_id': widget.userId})
+          .eq('user_id', commentOwnerId)
+          .eq('comment_id', commentId)
+          .eq('type', 'reply')
+          .isFilter('actor_id', null);
+      }
 
       setState(() {
         commentReplies.putIfAbsent(commentId, () => []);
@@ -1289,6 +1332,20 @@ void showEditPostModal(Map post) {
                                 await Supabase.instance.client
                                   .from('likes')
                                   .insert({'post_id': postId, 'user_id': widget.userId});
+                                
+                                // Wait a moment for any database triggers to create notifications
+                                await Future.delayed(Duration(milliseconds: 500));
+                                
+                                // Update any existing notifications for this like to include actor_id
+                                if (post['user_id'] != widget.userId) {
+                                  await Supabase.instance.client
+                                    .from('notifications')
+                                    .update({'actor_id': widget.userId})
+                                    .eq('user_id', post['user_id'])
+                                    .eq('post_id', postId)
+                                    .eq('type', 'like')
+                                    .isFilter('actor_id', null);
+                                }
                               } else {
                                 await Supabase.instance.client
                                   .from('likes')
@@ -1601,6 +1658,21 @@ void showEditPostModal(Map post) {
                                                       'comment_id': commentId,
                                                       'user_id': widget.userId
                                                     });
+                                                    
+                                                    // Wait a moment for any database triggers to create notifications
+                                                    await Future.delayed(Duration(milliseconds: 500));
+                                                    
+                                                    // Update any existing notifications for this comment like to include actor_id
+                                                    final commentOwnerId = comment['user_id'];
+                                                    if (commentOwnerId != widget.userId) {
+                                                      await Supabase.instance.client
+                                                        .from('notifications')
+                                                        .update({'actor_id': widget.userId})
+                                                        .eq('user_id', commentOwnerId)
+                                                        .eq('comment_id', commentId)
+                                                        .eq('type', 'comment_like')
+                                                        .isFilter('actor_id', null);
+                                                    }
                                                   } else {
                                                     await Supabase.instance.client
                                                         .from('comment_likes')

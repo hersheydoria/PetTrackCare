@@ -102,7 +102,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
-    final title = _buildSubtitle(n);
+    final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
     const androidDetails = AndroidNotificationDetails(
       'notifications_channel',
@@ -164,11 +164,65 @@ class _NotificationScreenState extends State<NotificationScreen> {
     } catch (_) {}
   }
 
-  String _buildSubtitle(Map<String, dynamic> n) {
+  Future<String> _buildNotificationTitle(Map<String, dynamic> n) async {
+    // First, check if we have a message from the database triggers (with content previews)
     final msg = n['message'];
     if (msg != null && msg.toString().isNotEmpty) {
-      return msg.toString();
+      // If we have actor_id, prepend the actor name to the message
+      final actorId = n['actor_id'];
+      if (actorId != null) {
+        try {
+          final userRow = await supabase
+              .from('users')
+              .select('name')
+              .eq('id', actorId.toString())
+              .maybeSingle();
+          final actorName = userRow?['name']?.toString() ?? 'Someone';
+          
+          // Return actor name + message from database
+          return '$actorName ${msg.toString()}';
+        } catch (e) {
+          print('Error getting actor name: $e');
+          // Return just the message if we can't get actor name
+          return msg.toString();
+        }
+      } else {
+        // Return just the message if no actor_id
+        return msg.toString();
+      }
     }
+    
+    // Fallback to generic messages if no message in database (for older notifications)
+    final actorId = n['actor_id'];
+    if (actorId != null) {
+      try {
+        final userRow = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', actorId.toString())
+            .maybeSingle();
+        final actorName = userRow?['name']?.toString() ?? 'Someone';
+        
+        final type = n['type']?.toString() ?? '';
+        switch (type) {
+          case 'like':
+            return '$actorName liked your post';
+          case 'comment':
+            return '$actorName commented on your post';
+          case 'comment_like':
+            return '$actorName liked your comment';
+          case 'reply':
+            return '$actorName replied to your comment';
+          case 'follow':
+            return '$actorName started following you';
+          default:
+            return '$actorName interacted with your content';
+        }
+      } catch (e) {
+        print('Error building notification title with actor: $e');
+      }
+    }
+    
     return 'You have a new notification';
   }
 
@@ -196,15 +250,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   String? _extractPublicUserId(Map<String, dynamic> n) {
-    // Prefer actor_id for profile picture, fallback to user_id
+    // Use actor_id (the person who performed the action) for profile picture
+    // This should be the person who liked, commented, etc., not the notification recipient
     final actorId = n['actor_id'];
     if (actorId != null && actorId.toString().isNotEmpty) {
       return actorId.toString();
     }
-    final userId = n['user_id'];
-    if (userId != null && userId.toString().isNotEmpty) {
-      return userId.toString();
-    }
+    
+    // Fallback: if no actor_id, don't show user_id as that's the notification recipient
+    // Instead return null to show default avatar
     return null;
   }
 
@@ -388,7 +442,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
                       return ListTile(
                         leading: _leadingAvatar(n, read),
-                        title: Text(_buildSubtitle(n)),
+                        title: FutureBuilder<String>(
+                          future: _buildNotificationTitle(n),
+                          builder: (context, snapshot) {
+                            return Text(snapshot.data ?? 'Loading...');
+                          },
+                        ),
                         subtitle: subtitleText != null
                             ? Text(subtitleText, style: const TextStyle(fontSize: 12))
                             : null,
