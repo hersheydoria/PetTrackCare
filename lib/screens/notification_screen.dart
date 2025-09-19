@@ -101,6 +101,21 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
+    // Check if user has enabled notifications
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user != null) {
+      // Check user preferences from metadata first
+      final metadata = user.userMetadata ?? {};
+      final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+      final notificationsEnabled = notificationPrefs['enabled'] ?? true;
+      
+      // If notifications are disabled, don't show system notification
+      if (!notificationsEnabled) {
+        print('System notifications disabled for user');
+        return;
+      }
+    }
+    
     final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
     
@@ -194,7 +209,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final commentId = n['comment_id']?.toString();
     final replyId = n['reply_id']?.toString();
     
-    if ((type == 'comment_like' || type == 'reply') && commentId != null && commentId.isNotEmpty) {
+    if ((type == 'comment_like' || type == 'reply' || type == 'mention') && commentId != null && commentId.isNotEmpty) {
       try {
         final commentRes = await supabase
             .from('comments')
@@ -324,6 +339,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
             return '$actorName liked your comment';
           case 'reply':
             return '$actorName replied to your comment';
+          case 'mention':
+            return '$actorName mentioned you in a ${n['comment_id'] != null ? 'comment' : 'post'}';
           case 'follow':
             return '$actorName started following you';
           case 'missing_pet':

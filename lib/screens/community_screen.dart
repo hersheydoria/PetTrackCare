@@ -21,6 +21,13 @@ Map<String, int> replyPage = {};
 Map<String, bool> replyHasMore = {};
 Map<String, bool> locallyUpdatedPosts = {}; // Track posts with local comment updates
 Map<String, bool> bookmarkedPosts = {}; // Track bookmarked posts
+
+// Mention feature state
+Map<String, bool> showUserSuggestions = {}; // postId/commentId -> show suggestions
+Map<String, List<Map<String, dynamic>>> userSuggestions = {}; // postId/commentId -> user list
+Map<String, String> currentMentionText = {}; // postId/commentId -> current @text being typed
+Map<String, int> mentionStartPosition = {}; // postId/commentId -> cursor position where @ started
+
 const int replyDisplayThreshold = 3; // only show "View more" when replies >= threshold
 
 
@@ -175,6 +182,10 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
     try {
       print('ADDCOMMENT - Starting database insertion...');
+      
+      // Extract mentions from comment text
+      final mentions = extractMentions(commentText);
+      
       // Insert comment into database
       final newComment = await Supabase.instance.client
           .from('comments')
@@ -205,6 +216,11 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           .eq('post_id', postId)
           .eq('type', 'comment')
           .isFilter('actor_id', null);
+      }
+
+      // Send mention notifications
+      if (mentions.isNotEmpty) {
+        await sendMentionNotifications(mentions, postId, commentId: newComment['id'].toString());
       }
 
       // Get user data
@@ -246,6 +262,14 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       // Clear the input
       commentControllers[postId]?.clear();
       
+      // Hide mention suggestions
+      final fieldId = 'comment_$postId';
+      setState(() {
+        showUserSuggestions[fieldId] = false;
+        userSuggestions[fieldId] = [];
+        currentMentionText[fieldId] = '';
+      });
+      
       // Keep the comment input open so user can see the new comment
       // Don't automatically hide it
       // showCommentInput[postId] = false;
@@ -280,6 +304,179 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     } catch (e) {
       print('Error loading bookmarks: $e');
     }
+  }
+
+  // Search users for mentions
+  Future<void> searchUsersForMention(String fieldId, String query) async {
+    if (query.length < 1) {
+      setState(() {
+        showUserSuggestions[fieldId] = false;
+        userSuggestions[fieldId] = [];
+      });
+      return;
+    }
+
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('id, name, profile_picture')
+          .ilike('name', '%$query%')
+          .limit(5);
+
+      setState(() {
+        userSuggestions[fieldId] = List<Map<String, dynamic>>.from(response);
+        showUserSuggestions[fieldId] = userSuggestions[fieldId]!.isNotEmpty;
+      });
+    } catch (e) {
+      print('Error searching users: $e');
+    }
+  }
+
+  // Handle mention selection
+  void selectMention(String fieldId, Map<String, dynamic> user) {
+    final controller = fieldId.startsWith('comment_') 
+        ? commentControllers[fieldId.substring(8)] 
+        : replyControllers[fieldId];
+    
+    if (controller == null) return;
+
+    final currentText = controller.text;
+    final mentionStart = mentionStartPosition[fieldId] ?? 0;
+    final beforeMention = currentText.substring(0, mentionStart);
+    final afterMention = currentText.substring(controller.selection.start);
+    
+    final newText = '$beforeMention@${user['name']} $afterMention';
+    controller.text = newText;
+    controller.selection = TextSelection.collapsed(
+      offset: (beforeMention.length + user['name'].toString().length + 2),
+    );
+
+    setState(() {
+      showUserSuggestions[fieldId] = false;
+      userSuggestions[fieldId] = [];
+      currentMentionText[fieldId] = '';
+    });
+  }
+
+  // Handle text changes for mention detection
+  void handleTextChange(String fieldId, String text, int cursorPosition) {
+    // Find @ symbol before cursor
+    int atPosition = -1;
+    for (int i = cursorPosition - 1; i >= 0; i--) {
+      if (text[i] == '@') {
+        atPosition = i;
+        break;
+      } else if (text[i] == ' ' || text[i] == '\n') {
+        break;
+      }
+    }
+
+    if (atPosition >= 0) {
+      final mentionText = text.substring(atPosition + 1, cursorPosition);
+      if (!mentionText.contains(' ') && !mentionText.contains('\n')) {
+        setState(() {
+          mentionStartPosition[fieldId] = atPosition;
+          currentMentionText[fieldId] = mentionText;
+        });
+        searchUsersForMention(fieldId, mentionText);
+        return;
+      }
+    }
+
+    // Hide suggestions if no valid mention detected
+    setState(() {
+      showUserSuggestions[fieldId] = false;
+      userSuggestions[fieldId] = [];
+      currentMentionText[fieldId] = '';
+    });
+  }
+
+  // Extract mentions from text
+  List<String> extractMentions(String text) {
+    final mentionRegex = RegExp(r'@(\w+)');
+    final matches = mentionRegex.allMatches(text);
+    return matches.map((match) => match.group(1)!).toList();
+  }
+
+  // Send mention notifications
+  Future<void> sendMentionNotifications(List<String> mentionedUsernames, String postId, {String? commentId}) async {
+    if (mentionedUsernames.isEmpty) return;
+
+    try {
+      // Get user IDs for mentioned usernames
+      final userResponse = await Supabase.instance.client
+          .from('users')
+          .select('id, name')
+          .inFilter('name', mentionedUsernames);
+
+      for (var user in userResponse) {
+        final mentionedUserId = user['id'];
+        if (mentionedUserId == widget.userId) continue; // Don't notify self
+
+        await Supabase.instance.client
+            .from('notifications')
+            .insert({
+          'user_id': mentionedUserId,
+          'actor_id': widget.userId,
+          'message': 'mentioned you in a ${commentId != null ? 'comment' : 'post'}',
+          'type': 'mention',
+          'post_id': postId,
+          'comment_id': commentId,
+          'is_read': false,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+      }
+    } catch (e) {
+      print('Error sending mention notifications: $e');
+    }
+  }
+
+  // Build text with clickable mentions
+  Widget buildTextWithMentions(String text) {
+    final mentionRegex = RegExp(r'@(\w+)');
+    final matches = mentionRegex.allMatches(text).toList();
+    
+    if (matches.isEmpty) {
+      return Text(text);
+    }
+
+    List<TextSpan> spans = [];
+    int lastMatchEnd = 0;
+
+    for (var match in matches) {
+      // Add text before mention
+      if (match.start > lastMatchEnd) {
+        spans.add(TextSpan(
+          text: text.substring(lastMatchEnd, match.start),
+        ));
+      }
+
+      // Add clickable mention
+      spans.add(TextSpan(
+        text: match.group(0),
+        style: TextStyle(
+          color: deepRed,
+          fontWeight: FontWeight.bold,
+        ),
+        // Note: Would need GestureRecognizer for actual clicks in production
+      ));
+
+      lastMatchEnd = match.end;
+    }
+
+    // Add remaining text
+    if (lastMatchEnd < text.length) {
+      spans.add(TextSpan(
+        text: text.substring(lastMatchEnd),
+      ));
+    }
+
+    return RichText(
+      text: TextSpan(
+        style: DefaultTextStyle.of(context).style,
+        children: spans,
+      ),
+    );
   }
 
   // Toggle bookmark status
@@ -624,6 +821,9 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   Future<void> postReply(String commentId, String content) async {
     if (content.trim().isEmpty) return;
     try {
+      // Extract mentions from reply content
+      final mentions = extractMentions(content);
+      
       final newReply = await Supabase.instance.client
           .from('replies')
           .insert({
@@ -650,11 +850,12 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       // We need to get the comment owner to send notification to
       final commentOwner = await Supabase.instance.client
           .from('comments')
-          .select('user_id')
+          .select('user_id, post_id')
           .eq('id', commentId)
           .single();
       
       final commentOwnerId = commentOwner['user_id'];
+      final postId = commentOwner['post_id'];
       if (commentOwnerId != widget.userId) {
         await Supabase.instance.client
           .from('notifications')
@@ -663,6 +864,11 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           .eq('comment_id', commentId)
           .eq('type', 'reply')
           .isFilter('actor_id', null);
+      }
+
+      // Send mention notifications
+      if (mentions.isNotEmpty) {
+        await sendMentionNotifications(mentions, postId, commentId: commentId);
       }
 
       setState(() {
@@ -677,6 +883,12 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
         // Hide the reply input after posting
         showReplyInput[commentId] = false;
+        
+        // Hide mention suggestions
+        final fieldId = 'reply_$commentId';
+        showUserSuggestions[fieldId] = false;
+        userSuggestions[fieldId] = [];
+        currentMentionText[fieldId] = '';
       });
     } catch (e) {
       print('Error posting reply: $e');
@@ -731,6 +943,9 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   Future<void> createPost(String type, String content, File? imageFile) async {
   if (content.trim().isEmpty) return;
   try {
+    // Extract mentions from post content
+    final mentions = extractMentions(content);
+    
     String? imageUrl;
     if (imageFile != null) {
       // Upload image to Supabase Storage and get public URL
@@ -749,13 +964,18 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           .getPublicUrl(filePath);
     }
 
-    await Supabase.instance.client.from('community_posts').insert({
+    final newPost = await Supabase.instance.client.from('community_posts').insert({
       'user_id': widget.userId,
       'type': type,
       'content': content,
       'image_url': imageUrl,
       'created_at': DateTime.now().toIso8601String(),
-    });
+    }).select('id').single();
+
+    // Send mention notifications for posts
+    if (mentions.isNotEmpty) {
+      await sendMentionNotifications(mentions, newPost['id'].toString());
+    }
 
     fetchPosts();
     Navigator.pop(context);
@@ -768,6 +988,12 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     String selectedType = 'general';
     TextEditingController contentController = TextEditingController();
     File? selectedImage;
+    final String postFieldId = 'create_post';
+
+    // Initialize mention state for this modal
+    showUserSuggestions[postFieldId] = false;
+    userSuggestions[postFieldId] = [];
+    currentMentionText[postFieldId] = '';
 
     showModalBottomSheet(
       context: context,
@@ -803,10 +1029,103 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                             }
                           },
                         ),
-                        TextField(
-                          controller: contentController,
-                          decoration: InputDecoration(hintText: 'Write something...'),
-                          maxLines: 3,
+                        // Replace TextField with mention-enabled version
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            TextField(
+                              controller: contentController,
+                              decoration: InputDecoration(hintText: 'Write something...'),
+                              maxLines: 3,
+                              onChanged: (text) {
+                                // Handle mention detection for post creation
+                                int cursorPosition = contentController.selection.start;
+                                
+                                // Find @ symbol before cursor
+                                int atPosition = -1;
+                                for (int i = cursorPosition - 1; i >= 0; i--) {
+                                  if (text[i] == '@') {
+                                    atPosition = i;
+                                    break;
+                                  } else if (text[i] == ' ' || text[i] == '\n') {
+                                    break;
+                                  }
+                                }
+
+                                if (atPosition >= 0) {
+                                  final mentionText = text.substring(atPosition + 1, cursorPosition);
+                                  if (!mentionText.contains(' ') && !mentionText.contains('\n')) {
+                                    mentionStartPosition[postFieldId] = atPosition;
+                                    currentMentionText[postFieldId] = mentionText;
+                                    searchUsersForMention(postFieldId, mentionText).then((_) {
+                                      setModalState(() {}); // Refresh modal state for suggestions
+                                    });
+                                    return;
+                                  }
+                                }
+
+                                // Hide suggestions if no valid mention detected
+                                setModalState(() {
+                                  showUserSuggestions[postFieldId] = false;
+                                  userSuggestions[postFieldId] = [];
+                                  currentMentionText[postFieldId] = '';
+                                });
+                              },
+                            ),
+                            if (showUserSuggestions[postFieldId] == true && (userSuggestions[postFieldId]?.isNotEmpty ?? false))
+                              Container(
+                                constraints: BoxConstraints(maxHeight: 200),
+                                margin: EdgeInsets.only(top: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border.all(color: Colors.grey.shade300),
+                                  borderRadius: BorderRadius.circular(8),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.1),
+                                      blurRadius: 4,
+                                      offset: Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: ListView.builder(
+                                  shrinkWrap: true,
+                                  itemCount: userSuggestions[postFieldId]?.length ?? 0,
+                                  itemBuilder: (context, index) {
+                                    final user = userSuggestions[postFieldId]![index];
+                                    return ListTile(
+                                      dense: true,
+                                      leading: CircleAvatar(
+                                        radius: 16,
+                                        backgroundImage: user['profile_picture'] != null && user['profile_picture'].toString().isNotEmpty
+                                            ? NetworkImage(user['profile_picture'])
+                                            : AssetImage('assets/logo.png') as ImageProvider,
+                                      ),
+                                      title: Text('@${user['name']}'),
+                                      onTap: () {
+                                        // Handle mention selection for post creation
+                                        final currentText = contentController.text;
+                                        final mentionStart = mentionStartPosition[postFieldId] ?? 0;
+                                        final beforeMention = currentText.substring(0, mentionStart);
+                                        final afterMention = currentText.substring(contentController.selection.start);
+                                        
+                                        final newText = '$beforeMention@${user['name']} $afterMention';
+                                        contentController.text = newText;
+                                        contentController.selection = TextSelection.collapsed(
+                                          offset: (beforeMention.length + user['name'].toString().length + 2),
+                                        );
+
+                                        setModalState(() {
+                                          showUserSuggestions[postFieldId] = false;
+                                          userSuggestions[postFieldId] = [];
+                                          currentMentionText[postFieldId] = '';
+                                        });
+                                      },
+                                    );
+                                  },
+                                ),
+                              ),
+                          ],
                         ),
                         if (selectedImage != null)
                           Padding(
@@ -851,7 +1170,15 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                         ),
                         SizedBox(height: 10),
                         ElevatedButton(
-                          onPressed: () => createPost(selectedType, contentController.text, selectedImage),
+                          onPressed: () {
+                            // Clean up mention state when posting
+                            showUserSuggestions.remove(postFieldId);
+                            userSuggestions.remove(postFieldId);
+                            currentMentionText.remove(postFieldId);
+                            mentionStartPosition.remove(postFieldId);
+                            
+                            createPost(selectedType, contentController.text, selectedImage);
+                          },
                           child: Text('Post'),
                         ),
                       ],
@@ -1297,7 +1624,7 @@ void showEditPostModal(Map post) {
                   ],
                 ),
                 SizedBox(height: 10),
-                Text(post['content'] ?? ''),
+                buildTextWithMentions(post['content'] ?? ''),
                 SizedBox(height: 10),
                 if (post['image_url'] != null)
                   ClipRRect(
@@ -1422,12 +1749,17 @@ void showEditPostModal(Map post) {
                         Row(
                           children: [
                             Expanded(
-                              child: TextField(
-                                controller: commentControllers[postId],
-                                decoration: InputDecoration(
-                                  hintText: 'Add a comment...',
-                                  border: OutlineInputBorder(),
-                                ),
+                              child: buildMentionTextField(
+                                fieldId: 'comment_$postId',
+                                controller: commentControllers[postId]!,
+                                hintText: 'Add a comment... (use @username to mention)',
+                                onSubmit: () async {
+                                  final commentText = commentControllers[postId]?.text.trim();
+                                  if (commentText != null && commentText.isNotEmpty) {
+                                    await addComment(postId, commentText);
+                                  }
+                                  FocusScope.of(context).unfocus();
+                                },
                               ),
                             ),
                             IconButton(
@@ -1623,10 +1955,7 @@ void showEditPostModal(Map post) {
                                                   ],
                                                 ),
                                                 SizedBox(height: 4),
-                                                Text(
-                                                  comment['content'] ?? '',
-                                                  style: TextStyle(fontSize: 13),
-                                                ),
+                                                buildTextWithMentions(comment['content'] ?? ''),
                                               ],
                                             ),
                                           ),
@@ -1806,7 +2135,7 @@ void showEditPostModal(Map post) {
                                                               ],
                                                             ),
                                                             SizedBox(height: 2),
-                                                            Text(r['content'] ?? '', style: TextStyle(fontSize: 12)),
+                                                            buildTextWithMentions(r['content'] ?? ''),
                                                           ],
                                                         ),
                                                       ),
@@ -1848,9 +2177,18 @@ void showEditPostModal(Map post) {
                                                 child: Row(
                                                   children: [
                                                     Expanded(
-                                                      child: TextField(
+                                                      child: buildMentionTextField(
+                                                        fieldId: 'reply_$commentId',
                                                         controller: replyControllers.putIfAbsent(commentId, () => TextEditingController()),
-                                                        decoration: InputDecoration(hintText: 'Write a reply...', isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8)),
+                                                        hintText: 'Write a reply... (use @username to mention)',
+                                                        onSubmit: () async {
+                                                          final text = replyControllers[commentId]?.text.trim();
+                                                          if (text != null && text.isNotEmpty) {
+                                                            replyControllers[commentId]?.clear();
+                                                            await postReply(commentId, text);
+                                                            FocusScope.of(context).unfocus();
+                                                          }
+                                                        },
                                                       ),
                                                     ),
                                                     IconButton(
@@ -1993,6 +2331,63 @@ void showEditPostModal(Map post) {
     } else {
       return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
     }
+  }
+
+  // Build mention-enabled text field widget
+  Widget buildMentionTextField({
+    required String fieldId,
+    required TextEditingController controller,
+    required String hintText,
+    required VoidCallback onSubmit,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: controller,
+          decoration: InputDecoration(hintText: hintText),
+          onChanged: (text) {
+            handleTextChange(fieldId, text, controller.selection.start);
+          },
+          onSubmitted: (_) => onSubmit(),
+        ),
+        if (showUserSuggestions[fieldId] == true && (userSuggestions[fieldId]?.isNotEmpty ?? false))
+          Container(
+            constraints: BoxConstraints(maxHeight: 200),
+            margin: EdgeInsets.only(top: 4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 4,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: userSuggestions[fieldId]?.length ?? 0,
+              itemBuilder: (context, index) {
+                final user = userSuggestions[fieldId]![index];
+                return ListTile(
+                  dense: true,
+                  leading: CircleAvatar(
+                    radius: 16,
+                    backgroundImage: user['profile_picture'] != null && user['profile_picture'].toString().isNotEmpty
+                        ? NetworkImage(user['profile_picture'])
+                        : AssetImage('assets/logo.png') as ImageProvider,
+                  ),
+                  title: Text('@${user['name']}'),
+                  onTap: () => selectMention(fieldId, user),
+                );
+              },
+            ),
+          ),
+      ],
+    );
   }
 }
 

@@ -12,6 +12,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:async'; 
 import '../services/notification_service.dart';
+import '../services/missing_pet_alert_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -1410,6 +1411,9 @@ void _disconnectDevice() async {
                                         })
                                         .eq('id', post['id']);
                                   }
+
+                                  // Clear any active missing pet alerts for this pet
+                                  MissingPetAlertService().clearLastMissingPost();
 
                                   if (mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(

@@ -12,6 +12,10 @@ class MissingPetAlertService {
   int? _lastMissingPostId;
   BuildContext? _context;
   bool _isInitialized = false;
+  
+  // Track which alerts have been shown or dismissed by the user
+  final Set<int> _shownAlerts = <int>{};
+  final Set<int> _dismissedAlerts = <int>{};
 
   // Initialize the service with the app's main context
   void initialize(BuildContext context) {
@@ -41,27 +45,80 @@ class MissingPetAlertService {
             .eq('type', 'missing')
             .neq('user_id', currentUserId) // Don't show alerts for your own pets
             .order('created_at', ascending: false)
-            .limit(1);
+            .limit(5); // Get more posts to check for validity
 
-        if (posts is List && posts.isNotEmpty) {
-          final post = posts.first;
-          final postId = post['id'] as int?;
-          final createdAt = DateTime.tryParse(post['created_at']?.toString() ?? '');
+        if (posts.isNotEmpty) {
+          // Check each post to find a valid missing pet alert
+          for (var post in posts) {
+            final postId = post['id'] as int?;
+            final createdAt = DateTime.tryParse(post['created_at']?.toString() ?? '');
+            final postUserId = post['user_id']?.toString();
 
-          // Only show alerts for posts created in the last 2 minutes
-          final now = DateTime.now();
-          final isRecent = createdAt != null && 
-              now.difference(createdAt).inMinutes <= 2;
+            // Show alerts for posts created in the last 4 hours (since pets can be missing for hours)
+            final now = DateTime.now();
+            final isRecent = createdAt != null && 
+                now.difference(createdAt).inHours <= 4;
 
-          if (postId != null && 
-              postId != _lastMissingPostId && 
-              isRecent &&
-              _context != null) {
-            _lastMissingPostId = postId;
-            _showGlobalMissingAlert(post);
-            
-            // Add haptic feedback for urgency
-            HapticFeedback.heavyImpact();
+            // Skip if not recent, already shown/dismissed, or no post ID
+            if (!isRecent || 
+                postId == null || 
+                _shownAlerts.contains(postId) || 
+                _dismissedAlerts.contains(postId)) {
+              continue;
+            }
+
+            // Double-check that this post is still actually missing
+            // by verifying the post type hasn't changed to 'found'
+            try {
+              final recentPost = await Supabase.instance.client
+                  .from('community_posts')
+                  .select('type')
+                  .eq('id', postId)
+                  .single();
+
+              // Skip if post is no longer missing type
+              if (recentPost['type'] != 'missing') {
+                continue;
+              }
+
+              // Additional check: if we can extract pet name, verify pet is still missing
+              final content = post['content'] ?? '';
+              final petNameMatch = RegExp(r'"([^"]+)"').firstMatch(content);
+              final petName = petNameMatch?.group(1);
+
+              if (petName != null && postUserId != null) {
+                // Check if there's a more recent 'found' post for this pet
+                final foundPosts = await Supabase.instance.client
+                    .from('community_posts')
+                    .select('created_at')
+                    .eq('type', 'found')
+                    .eq('user_id', postUserId)
+                    .ilike('content', '%$petName%')
+                    .order('created_at', ascending: false)
+                    .limit(1);
+
+                if (foundPosts.isNotEmpty) {
+                  final foundPostDate = DateTime.tryParse(foundPosts.first['created_at']?.toString() ?? '');
+                  // Skip if there's a found post newer than this missing post
+                  if (foundPostDate != null && foundPostDate.isAfter(createdAt)) {
+                    continue;
+                  }
+                }
+              }
+
+              // This post is valid for alert
+              if (_context != null) {
+                _shownAlerts.add(postId); // Mark this alert as shown
+                _showGlobalMissingAlert(post, postId);
+                
+                // Add haptic feedback for urgency
+                HapticFeedback.heavyImpact();
+                break; // Only show one alert at a time
+              }
+            } catch (e) {
+              print('Error validating missing post $postId: $e');
+              continue;
+            }
           }
         }
       } catch (e) {
@@ -71,7 +128,7 @@ class MissingPetAlertService {
   }
 
   // Show the missing pet alert dialog
-  void _showGlobalMissingAlert(Map<String, dynamic> post) {
+  void _showGlobalMissingAlert(Map<String, dynamic> post, int postId) {
     if (_context == null) return;
 
     final content = post['content'] ?? '';
@@ -91,18 +148,33 @@ class MissingPetAlertService {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.red.shade50,
-        title: Row(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.warning, color: Colors.red, size: 28),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '🚨 MISSING PET ALERT',
-                style: TextStyle(
-                  color: Colors.red.shade700,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
+            Row(
+              children: [
+                Icon(Icons.warning, color: Colors.red, size: 28),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '🚨 MISSING PET ALERT',
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
                 ),
+              ],
+            ),
+            SizedBox(height: 4),
+            Text(
+              'This alert will only show once',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                fontStyle: FontStyle.italic,
               ),
             ),
           ],
@@ -186,8 +258,18 @@ class MissingPetAlertService {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () {
+              _dismissedAlerts.add(postId); // Mark as dismissed
+              Navigator.pop(ctx);
+            },
             child: Text('Dismiss', style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () {
+              _dismissedAlerts.add(postId); // Mark as dismissed
+              Navigator.pop(ctx);
+            },
+            child: Text('Not Interested', style: TextStyle(color: Colors.orange)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -250,5 +332,36 @@ class MissingPetAlertService {
     if (_isInitialized) {
       _startMissingPetAlerts();
     }
+  }
+
+  // Clear the last shown post ID (useful when a pet is marked as found)
+  void clearLastMissingPost() {
+    _lastMissingPostId = null;
+    // Clear shown and dismissed alerts to allow re-showing if needed
+    _shownAlerts.clear();
+    _dismissedAlerts.clear();
+  }
+
+  // Reset the alert state for a specific post ID
+  void resetAlertForPost(int? postId) {
+    if (postId != null) {
+      if (_lastMissingPostId == postId) {
+        _lastMissingPostId = null;
+      }
+      _shownAlerts.remove(postId);
+      _dismissedAlerts.remove(postId);
+    }
+  }
+
+  // Clear all alert tracking (useful for testing or reset)
+  void clearAllAlertHistory() {
+    _shownAlerts.clear();
+    _dismissedAlerts.clear();
+    _lastMissingPostId = null;
+  }
+
+  // Mark a specific alert as dismissed (useful for external dismissal)
+  void dismissAlert(int postId) {
+    _dismissedAlerts.add(postId);
   }
 }

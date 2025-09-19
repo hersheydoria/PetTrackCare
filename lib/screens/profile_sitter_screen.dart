@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import '../widgets/saved_posts_modal.dart';
 import 'pets_screen.dart';
@@ -21,69 +22,6 @@ class SitterProfileScreen extends StatefulWidget {
 }
 
 class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTickerProviderStateMixin {
-  void _openFeedbackDialog() async {
-    TextEditingController feedbackController = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Report or Feedback'),
-        content: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey, width: 1.5),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          padding: EdgeInsets.all(4),
-          child: TextField(
-            controller: feedbackController,
-            style: TextStyle(color: Colors.black),
-            decoration: InputDecoration(
-              hintText: 'Let us know your feedback or report an issue...',
-              hintStyle: TextStyle(color: Colors.grey),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            ),
-            maxLines: 4,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final text = feedbackController.text.trim();
-              if (text.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Please enter your feedback or report.')),
-                );
-                return;
-              }
-              try {
-                await Supabase.instance.client
-                    .from('feedback')
-                    .insert({
-                  'user_id': user?.id,
-                  'message': text,
-                  'created_at': DateTime.now().toIso8601String(),
-                });
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Thank you for your feedback!')),
-                );
-              } catch (e) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to submit feedback. Please try again.')),
-                );
-              }
-            },
-            child: Text('Submit'),
-          ),
-        ],
-      ),
-    );
-  }
   final user = Supabase.instance.client.auth.currentUser;
   final metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
   Map<String, dynamic> userData = {}; // Store user data from public.users table
@@ -406,7 +344,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               ),
                               margin: EdgeInsets.only(bottom: 16),
                               child: SwitchListTile(
-                                title: Text('Enable Notifications'),
+                                title: Text('System Notifications'),
+                                subtitle: Text('Enable push notifications outside the app'),
                                 value: enabled,
                                 onChanged: (v) => setSt(() => enabled = v),
                               ),
@@ -429,6 +368,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                         'notification_preferences': {'enabled': enabled}
                                       })
                                     );
+                                    // Refresh user metadata to ensure changes take effect
+                                    await _refreshUserMetadata();
                                     Navigator.pop(ctx);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text('Notification preferences updated')),
@@ -685,6 +626,163 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
   }
 
   // Open dialog for theme settings
+  // Helper methods for Help & Support functionality
+  void _launchEmail(String email) async {
+    final Uri emailUri = Uri(
+      scheme: 'mailto',
+      path: email,
+      query: 'subject=PetTrackCare Support Request',
+    );
+    try {
+      if (await canLaunchUrl(emailUri)) {
+        await launchUrl(emailUri);
+      } else {
+        // Fallback: show email address to copy
+        _showEmailFallback(email);
+      }
+    } catch (e) {
+      _showEmailFallback(email);
+    }
+  }
+
+  void _showEmailFallback(String email) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Email Support'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Could not open email app. Please contact us at:'),
+            SizedBox(height: 8),
+            SelectableText(
+              email,
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 8),
+            Text('Subject: PetTrackCare Support Request'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _launchPhone(String phone) async {
+    final Uri phoneUri = Uri(scheme: 'tel', path: phone);
+    if (await canLaunchUrl(phoneUri)) {
+      await launchUrl(phoneUri);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open phone app')),
+      );
+    }
+  }
+
+  void _showFAQs() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Frequently Asked Questions'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Q: How do I view my assigned pets?', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('A: Go to the "Assigned Pets" tab to see all pets you\'re caring for.'),
+              SizedBox(height: 12),
+              Text('Q: How do I accept pet sitting jobs?', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('A: Pet owners will send you requests that you can accept or decline.'),
+              SizedBox(height: 12),
+              Text('Q: How do I update my profile?', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('A: Go to Settings > Account to update your information.'),
+              SizedBox(height: 12),
+              Text('Q: How do I communicate with pet owners?', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('A: Use the in-app messaging feature to communicate about pet care.'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _reportIssue() async {
+    TextEditingController issueController = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Report an Issue'),
+        content: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey, width: 1.5),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          padding: EdgeInsets.all(4),
+          child: TextField(
+            controller: issueController,
+            style: TextStyle(color: Colors.black),
+            decoration: InputDecoration(
+              hintText: 'Describe the issue you\'re experiencing...',
+              hintStyle: TextStyle(color: Colors.grey),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+            maxLines: 4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final text = issueController.text.trim();
+              if (text.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Please describe the issue.')),
+                );
+                return;
+              }
+              try {
+                await Supabase.instance.client
+                    .from('feedback')
+                    .insert({
+                  'user_id': user?.id,
+                  'message': text,
+                  'created_at': DateTime.now().toIso8601String(),
+                });
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Issue reported successfully!')),
+                );
+              } catch (e) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to report issue. Please try again.')),
+                );
+              }
+            },
+            child: Text('Report'),
+          ),
+        ],
+      ),
+    );
+  }
+
   // Open dialog for help & support
   void _openHelpSupport() {
     showModalBottomSheet(
@@ -739,7 +837,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               leading: Icon(Icons.support_agent, color: deepRed),
                               trailing: Icon(Icons.arrow_forward_ios, size: 16),
                               onTap: () {
-                                // Add contact support action
+                                Navigator.pop(ctx);
+                                _launchEmail('test@gmail.com');
                               },
                             ),
                             Divider(height: 1),
@@ -749,7 +848,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               leading: Icon(Icons.question_answer, color: deepRed),
                               trailing: Icon(Icons.arrow_forward_ios, size: 16),
                               onTap: () {
-                                // Add FAQs action
+                                Navigator.pop(ctx);
+                                _showFAQs();
                               },
                             ),
                             Divider(height: 1),
@@ -759,7 +859,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               leading: Icon(Icons.bug_report, color: deepRed),
                               trailing: Icon(Icons.arrow_forward_ios, size: 16),
                               onTap: () {
-                                // Add report issue action
+                                Navigator.pop(ctx);
+                                _reportIssue();
                               },
                             ),
                           ],
@@ -777,9 +878,10 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                             ListTile(
                               leading: Icon(Icons.email, color: deepRed),
                               title: Text('Email Support'),
-                              subtitle: Text('support@pettrackcare.com'),
+                              subtitle: Text('test@gmail.com'),
                               onTap: () {
-                                // Add email support action
+                                Navigator.pop(ctx);
+                                _launchEmail('test@gmail.com');
                               },
                             ),
                             Divider(height: 1),
@@ -788,7 +890,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               title: Text('Phone Support'),
                               subtitle: Text('+1 123-456-7890'),
                               onTap: () {
-                                // Add phone support action
+                                Navigator.pop(ctx);
+                                _launchPhone('+1-123-456-7890');
                               },
                             ),
                           ],
@@ -911,7 +1014,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               ),
                               SizedBox(height: 4),
                               Text(
-                                'support@pettrackcare.com',
+                                'test@gmail.com',
                                 style: TextStyle(
                                   color: deepRed,
                                 ),
@@ -1152,10 +1255,9 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                           padding: EdgeInsets.all(16),
                           children: [
                             _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
-                            _settingsTile(Icons.feedback, 'Report or Feedback', onTap: _openFeedbackDialog),
                             _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
                             _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
-                            _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
+                            _notificationSettingsTile(),
                             _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
                             _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
                             SizedBox(height: 16),
@@ -1185,6 +1287,31 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
         leading: Icon(icon, color: deepRed),
         title: Text(title),
         onTap: onTap ?? () {},
+      ),
+    );
+  }
+
+  Widget _notificationSettingsTile() {
+    final currentPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+    final enabled = currentPrefs['enabled'] ?? true;
+    
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+      ),
+      child: ListTile(
+        leading: Icon(Icons.notifications, color: deepRed),
+        title: Text('Notification Preferences'),
+        subtitle: Text(enabled ? 'System notifications enabled' : 'System notifications disabled'),
+        trailing: Icon(
+          enabled ? Icons.notifications_active : Icons.notifications_off,
+          color: enabled ? Colors.green : Colors.grey,
+          size: 20,
+        ),
+        onTap: _openNotificationPreferences,
       ),
     );
   }
