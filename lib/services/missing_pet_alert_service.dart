@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class MissingPetAlertService {
   static final MissingPetAlertService _instance = MissingPetAlertService._internal();
@@ -9,17 +11,21 @@ class MissingPetAlertService {
   MissingPetAlertService._internal();
 
   Timer? _alertTimer;
-  int? _lastMissingPostId;
+  String? _lastMissingPostId; // Changed from int to String for UUID support
   BuildContext? _context;
   bool _isInitialized = false;
   
   // Track which alerts have been shown or dismissed by the user
-  final Set<int> _shownAlerts = <int>{};
-  final Set<int> _dismissedAlerts = <int>{};
+  Set<String> _shownAlerts = <String>{};
+  Set<String> _dismissedAlerts = <String>{};
 
   // Initialize the service with the app's main context
   void initialize(BuildContext context) {
     print('🔔 MissingPetAlertService: Initializing with context');
+    
+    // Force reinitialize sets to ensure proper String type 
+    _resetSets();
+    
     _context = context;
     if (!_isInitialized) {
       print('🔔 MissingPetAlertService: Starting alert monitoring');
@@ -28,6 +34,13 @@ class MissingPetAlertService {
     } else {
       print('🔔 MissingPetAlertService: Already initialized, just updating context');
     }
+  }
+
+  // Force reset sets to ensure proper type initialization
+  void _resetSets() {
+    _shownAlerts = <String>{};
+    _dismissedAlerts = <String>{};
+    print('🔔 MissingPetAlertService: Reset alert tracking sets');
   }
 
   // Update context when navigating between screens
@@ -51,136 +64,189 @@ class MissingPetAlertService {
         
         print('🔔 MissingPetAlertService: User ID: $currentUserId, Context available: ${_context != null}');
 
-        final posts = await Supabase.instance.client
-            .from('community_posts')
-            .select('*, users!inner(name)')
-            .eq('type', 'missing')
-            .neq('user_id', currentUserId) // Don't show alerts for your own pets
-            .order('created_at', ascending: false)
-            .limit(5); // Get more posts to check for validity
+        try {
+          final posts = await Supabase.instance.client
+              .from('community_posts')
+              .select('*, users!inner(name)')
+              .eq('type', 'missing')
+              .neq('user_id', currentUserId) // Don't show alerts for your own pets
+              .order('created_at', ascending: false)
+              .limit(5); // Get more posts to check for validity
 
-        print('🔔 MissingPetAlertService: Found ${posts.length} missing posts');
-
-        if (posts.isNotEmpty) {
-          // Check each post to find a valid missing pet alert
-          for (var post in posts) {
-            final postId = post['id'] as int?;
-            final createdAt = DateTime.tryParse(post['created_at']?.toString() ?? '');
-            final postUserId = post['user_id']?.toString();
-
-            print('🔔 MissingPetAlertService: Checking post ID: $postId, created: $createdAt');
-
-            // Show alerts for posts created in the last 4 hours (since pets can be missing for hours)
-            final now = DateTime.now();
-            final isRecent = createdAt != null && 
-                now.difference(createdAt).inHours <= 4;
-
-            print('🔔 MissingPetAlertService: Post $postId - Recent: $isRecent, Shown: ${_shownAlerts.contains(postId)}, Dismissed: ${_dismissedAlerts.contains(postId)}');
-
-            // Skip if not recent, already shown/dismissed, or no post ID
-            if (!isRecent || 
-                postId == null || 
-                _shownAlerts.contains(postId) || 
-                _dismissedAlerts.contains(postId)) {
-              print('🔔 MissingPetAlertService: Skipping post $postId - not recent, already shown, or dismissed');
-              continue;
-            }
-
-            // Double-check that this post is still actually missing
-            // by verifying the post type hasn't changed to 'found'
-            try {
-              print('🔔 MissingPetAlertService: Validating post $postId is still missing...');
-              final recentPost = await Supabase.instance.client
-                  .from('community_posts')
-                  .select('type')
-                  .eq('id', postId)
-                  .single();
-
-              // Skip if post is no longer missing type
-              if (recentPost['type'] != 'missing') {
-                print('🔔 MissingPetAlertService: Post $postId is no longer missing type (${recentPost['type']})');
-                continue;
-              }
-
-              // Additional check: if we can extract pet name, verify pet is still missing
-              final content = post['content'] ?? '';
-              final petNameMatch = RegExp(r'"([^"]+)"').firstMatch(content);
-              final petName = petNameMatch?.group(1);
-
-              print('🔔 MissingPetAlertService: Extracted pet name: $petName from content: ${content.substring(0, content.length > 50 ? 50 : content.length)}...');
-
-              if (petName != null && postUserId != null) {
-                print('🔔 MissingPetAlertService: Checking for found posts for pet: $petName');
-                // Check if there's a more recent 'found' post for this pet
-                final foundPosts = await Supabase.instance.client
-                    .from('community_posts')
-                    .select('created_at')
-                    .eq('type', 'found')
-                    .eq('user_id', postUserId)
-                    .ilike('content', '%$petName%')
-                    .order('created_at', ascending: false)
-                    .limit(1);
-
-                print('🔔 MissingPetAlertService: Found ${foundPosts.length} found posts for pet $petName');
-
-                if (foundPosts.isNotEmpty) {
-                  final foundPostDate = DateTime.tryParse(foundPosts.first['created_at']?.toString() ?? '');
-                  // Skip if there's a found post newer than this missing post
-                  if (foundPostDate != null && foundPostDate.isAfter(createdAt)) {
-                    print('🔔 MissingPetAlertService: Pet $petName already found, skipping alert');
-                    continue;
-                  }
-                }
-              }
-
-              // This post is valid for alert
-              if (_context != null) {
-                print('🔔 MissingPetAlertService: ✅ SHOWING ALERT for post $postId');
-                _shownAlerts.add(postId); // Mark this alert as shown
-                _showGlobalMissingAlert(post, postId);
+          print('🔔 MissingPetAlertService: Query completed successfully');
+          print('🔔 MissingPetAlertService: Posts raw result: $posts');
+          print('🔔 MissingPetAlertService: Found ${posts.length} missing posts');
+          print('🔔 MissingPetAlertService: Posts data type: ${posts.runtimeType}');
+          
+          print('🔔 MissingPetAlertService: Posts is a List with ${posts.length} items');
+          if (posts.isNotEmpty) {
+            print('🔔 MissingPetAlertService: First post structure: ${posts[0].keys.toList()}');
+            print('🔔 MissingPetAlertService: First post raw: ${posts[0]}');
+            
+            // Check each post to find a valid missing pet alert
+            for (var post in posts) {
+              try {
+                print('🔔 MissingPetAlertService: Processing post: ${post['id']} (type: ${post['id'].runtimeType})');
                 
-                // Add haptic feedback for urgency
-                HapticFeedback.heavyImpact();
-                break; // Only show one alert at a time
-              } else {
-                print('🔔 MissingPetAlertService: ❌ No context available to show alert');
+                // Handle postId as String (UUID) from database
+                final dynamic rawPostId = post['id'];
+                final String? postId = rawPostId?.toString();
+
+                if (postId == null || postId.isEmpty) {
+                  print('🔔 MissingPetAlertService: ⚠️ Skipping post with invalid ID: $rawPostId');
+                  continue;
+                }
+
+                print('🔔 MissingPetAlertService: Post ID: $postId, Already shown: ${_shownAlerts.contains(postId)}');
+
+                if (!_shownAlerts.contains(postId) && !_dismissedAlerts.contains(postId)) {
+                  print('🔔 MissingPetAlertService: Showing alert for post $postId');
+                  _shownAlerts.add(postId);
+
+                  // Get pet name from post content
+                  final petName = post['content'] ?? 'A pet';
+                  final ownerName = post['users']?['name'] ?? 'Someone';
+
+                  print('🔔 MissingPetAlertService: Pet: $petName, Owner: $ownerName');
+
+                  if (_context != null) {
+                    print('🔔 MissingPetAlertService: Showing dialog with context');
+                    _showGlobalMissingAlert(post, postId);
+                  } else {
+                    print('🔔 MissingPetAlertService: ❌ No context available for dialog');
+                  }
+                  return; // Only show one alert at a time
+                }
+              } catch (e, stackTrace) {
+                print('🔔 MissingPetAlertService: ❌ Error processing individual post: $e');
+                print('🔔 MissingPetAlertService: Stack trace: $stackTrace');
+                continue; // Continue with next post
               }
-            } catch (e) {
-              print('🔔 MissingPetAlertService: ❌ Error validating missing post $postId: $e');
-              continue;
             }
           }
-        } else {
-          print('🔔 MissingPetAlertService: No missing posts found');
+        } catch (e, stackTrace) {
+          print('🔔 MissingPetAlertService: ❌ Error in posts query: $e');
+          print('🔔 MissingPetAlertService: Stack trace: $stackTrace');
+          return;
         }
-      } catch (e) {
-        print('🔔 MissingPetAlertService: ❌ Error in missing pet alert service: $e');
+      } catch (e, stackTrace) {
+        print('🔔 MissingPetAlertService: ❌ Error in timer callback: $e');
+        print('🔔 MissingPetAlertService: Stack trace: $stackTrace');
       }
     });
   }
 
   // Show the missing pet alert dialog
-  void _showGlobalMissingAlert(Map<String, dynamic> post, int postId) {
+  void _showGlobalMissingAlert(Map<String, dynamic> post, String postId) {
     print('🔔 MissingPetAlertService: _showGlobalMissingAlert called for post $postId');
     if (_context == null) {
       print('🔔 MissingPetAlertService: ❌ No context available in _showGlobalMissingAlert');
       return;
     }
 
-    final content = post['content'] ?? '';
-    final imageUrl = post['image_url']?.toString();
-    final posterName = post['users']?['name']?.toString() ?? 'Someone';
-    final createdAt = DateTime.tryParse(post['created_at']?.toString() ?? '');
-    final timeAgo = createdAt != null 
-        ? _formatTimeAgo(createdAt)
-        : 'just now';
+    _showAlertWithLocationInfo(post, postId);
+  }
 
-    // Extract pet name from content
+  // Helper method to format time ago
+  String _formatTimeAgo(DateTime dateTime) {
+    final now = DateTime.now();
+    final difference = now.difference(dateTime);
+
+    if (difference.inMinutes < 1) {
+      return 'just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes} minutes ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours} hours ago';
+    } else {
+      return '${difference.inDays} days ago';
+    }
+  }
+
+  // Reverse geocode using Nominatim (OpenStreetMap). Returns display_name or null.
+  Future<String?> _reverseGeocode(double lat, double lng) async {
+    try {
+      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=$lat&lon=$lng');
+      final resp = await http.get(url, headers: {'User-Agent': 'PetTrackCare/1.0 (+your-email@example.com)'});
+      if (resp.statusCode == 200) {
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        final display = body['display_name'];
+        if (display is String && display.isNotEmpty) return display;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // Show alert with location processing
+  Future<void> _showAlertWithLocationInfo(Map<String, dynamic> post, String postId) async {
+    try {
+      final content = post['content']?.toString() ?? '';
+      final imageUrl = post['image_url']?.toString();
+      final posterName = post['users']?['name']?.toString() ?? 'Someone';
+      final createdAt = DateTime.tryParse(post['created_at']?.toString() ?? '');
+      final timeAgo = createdAt != null 
+          ? _formatTimeAgo(createdAt)
+          : 'just now';
+
+      // Extract pet name from content
+      final petNameMatch = RegExp(r'"([^"]+)"').firstMatch(content);
+      final petName = petNameMatch?.group(1) ?? 'Pet';
+
+      // Process location information
+      String locationText = 'Location unknown';
+      final latitude = post['latitude'];
+      final longitude = post['longitude'];
+      final savedAddress = post['address']?.toString();
+
+      if (latitude != null && longitude != null) {
+        final lat = double.tryParse(latitude.toString());
+        final lng = double.tryParse(longitude.toString());
+        
+        if (lat != null && lng != null) {
+          // Use saved address if available, otherwise try reverse geocoding
+          String? address = savedAddress;
+          if (address == null || address.isEmpty) {
+            print('🔔 MissingPetAlertService: Reverse geocoding coordinates: $lat, $lng');
+            address = await _reverseGeocode(lat, lng);
+          }
+          
+          if (address != null && address.isNotEmpty) {
+            locationText = address;
+          } else {
+            // Fallback to coordinates
+            locationText = 'Coordinates: ${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+          }
+        }
+      }
+
+      // Extract time information from content if available
+      String timeText = timeAgo;
+      final timeMatch = RegExp(r'on (.+?)\.').firstMatch(content);
+      if (timeMatch != null) {
+        timeText = timeMatch.group(1) ?? timeAgo;
+      }
+
+      print('🔔 MissingPetAlertService: Showing dialog for pet: $petName, poster: $posterName, location: $locationText');
+
+      _showFormattedAlert(petName, posterName, timeText, locationText, imageUrl, content, postId);
+    } catch (e, stackTrace) {
+      print('🔔 MissingPetAlertService: ❌ Error processing alert location: $e');
+      print('🔔 MissingPetAlertService: Stack trace: $stackTrace');
+      // Fallback to basic alert
+      _showBasicAlert(post, postId);
+    }
+  }
+
+  void _showBasicAlert(Map<String, dynamic> post, String postId) {
+    final content = post['content']?.toString() ?? '';
+    final posterName = post['users']?['name']?.toString() ?? 'Someone';
     final petNameMatch = RegExp(r'"([^"]+)"').firstMatch(content);
     final petName = petNameMatch?.group(1) ?? 'Pet';
+    
+    _showFormattedAlert(petName, posterName, 'Recently', 'Location from post', post['image_url']?.toString(), content, postId);
+  }
 
-    print('🔔 MissingPetAlertService: Showing dialog for pet: $petName, poster: $posterName, time: $timeAgo');
-
+  void _showFormattedAlert(String petName, String posterName, String timeText, String locationText, String? imageUrl, String originalContent, String postId) {
     showDialog(
       context: _context!,
       barrierDismissible: false,
@@ -261,34 +327,54 @@ class MissingPetAlertService {
                 style: TextStyle(fontWeight: FontWeight.w500),
               ),
               Text(
-                'Time: $timeAgo',
+                'Last seen: $timeText',
                 style: TextStyle(color: Colors.grey.shade600),
               ),
-              SizedBox(height: 12),
+              SizedBox(height: 8),
               Container(
-                padding: EdgeInsets.all(12),
+                padding: EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange.shade200),
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.blue.shade200),
                 ),
-                child: Text(
-                  content,
-                  style: TextStyle(fontSize: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.location_on, size: 16, color: Colors.blue.shade700),
+                        SizedBox(width: 4),
+                        Text(
+                          'Last seen location:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.blue.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      locationText,
+                      style: TextStyle(fontSize: 14, color: Colors.blue.shade800),
+                    ),
+                  ],
                 ),
               ),
               SizedBox(height: 12),
               Container(
                 padding: EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
+                  color: Colors.orange.shade50,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   '💡 Please keep an eye out for this pet and contact the owner if you see them!',
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.blue.shade700,
+                    color: Colors.orange.shade700,
                     fontStyle: FontStyle.italic,
                   ),
                 ),
@@ -302,59 +388,33 @@ class MissingPetAlertService {
               _dismissedAlerts.add(postId); // Mark as dismissed
               Navigator.pop(ctx);
             },
-            child: Text('Dismiss', style: TextStyle(color: Colors.grey)),
-          ),
-          TextButton(
-            onPressed: () {
-              _dismissedAlerts.add(postId); // Mark as dismissed
-              Navigator.pop(ctx);
-            },
-            child: Text('Not Interested', style: TextStyle(color: Colors.orange)),
+            child: Text(
+              'Dismiss',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade600,
+              backgroundColor: Colors.blue,
               foregroundColor: Colors.white,
             ),
             onPressed: () {
+              _dismissedAlerts.add(postId); // Also mark as dismissed
               Navigator.pop(ctx);
-              // Navigate to post detail if route exists
-              try {
-                Navigator.pushNamed(_context!, '/postDetail', arguments: {
-                  'postId': post['id']?.toString(),
-                });
-              } catch (e) {
-                // If route doesn't exist, show a snackbar with the information
-                ScaffoldMessenger.of(_context!).showSnackBar(
-                  SnackBar(
-                    content: Text('Missing pet details: $content'),
-                    duration: Duration(seconds: 5),
-                  ),
-                );
-              }
+              // Here you could navigate to community screen or show contact info
+              ScaffoldMessenger.of(_context!).showSnackBar(
+                SnackBar(
+                  content: Text('Check the Community tab for more details about this missing pet'),
+                  backgroundColor: Colors.blue,
+                ),
+              );
             },
-            child: Text('View Details'),
+            child: Text('Help Find'),
           ),
         ],
       );
       },
     );
-  }
-
-  // Helper method to format time ago
-  String _formatTimeAgo(DateTime dateTime) {
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
-
-    if (difference.inMinutes < 1) {
-      return 'just now';
-    } else if (difference.inMinutes < 60) {
-      return '${difference.inMinutes} minutes ago';
-    } else if (difference.inHours < 24) {
-      return '${difference.inHours} hours ago';
-    } else {
-      return '${difference.inDays} days ago';
-    }
   }
 
   // Stop the alert service
@@ -395,7 +455,7 @@ class MissingPetAlertService {
   }
 
   // Reset the alert state for a specific post ID
-  void resetAlertForPost(int? postId) {
+  void resetAlertForPost(String? postId) {
     if (postId != null) {
       print('🔔 MissingPetAlertService: Resetting alert state for post $postId');
       if (_lastMissingPostId == postId) {
@@ -418,7 +478,7 @@ class MissingPetAlertService {
   }
 
   // Mark a specific alert as dismissed (useful for external dismissal)
-  void dismissAlert(int postId) {
+  void dismissAlert(String postId) {
     print('🔔 MissingPetAlertService: Dismissing alert for post $postId');
     _dismissedAlerts.add(postId);
   }
@@ -442,6 +502,6 @@ class MissingPetAlertService {
     };
     
     print('🔔 MissingPetAlertService: Showing test alert');
-    _showGlobalMissingAlert(testPost, 99999);
+    _showGlobalMissingAlert(testPost, 'test-alert-99999');
   }
 }

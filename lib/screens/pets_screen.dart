@@ -1200,15 +1200,6 @@ void _disconnectDevice() async {
         elevation: 0,
         title: Text('Pet Profile', style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
-          // Debug button to test alerts - remove this in production
-          IconButton(
-            icon: Icon(Icons.bug_report, color: Colors.yellow),
-            onPressed: () {
-              print('🧪 DEBUG: Testing alert system...');
-              MissingPetAlertService().showTestAlert();
-            },
-            tooltip: 'Test Alert System',
-          ),
           IconButton(
             icon: Icon(Icons.notifications),
             onPressed: () {
