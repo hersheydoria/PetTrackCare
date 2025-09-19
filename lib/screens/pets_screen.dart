@@ -1200,6 +1200,15 @@ void _disconnectDevice() async {
         elevation: 0,
         title: Text('Pet Profile', style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          // Debug button to test alerts - remove this in production
+          IconButton(
+            icon: Icon(Icons.bug_report, color: Colors.yellow),
+            onPressed: () {
+              print('🧪 DEBUG: Testing alert system...');
+              MissingPetAlertService().showTestAlert();
+            },
+            tooltip: 'Test Alert System',
+          ),
           IconButton(
             icon: Icon(Icons.notifications),
             onPressed: () {
@@ -1413,7 +1422,15 @@ void _disconnectDevice() async {
                                   }
 
                                   // Clear any active missing pet alerts for this pet
-                                  MissingPetAlertService().clearLastMissingPost();
+                                  try {
+                                    print('🧪 DEBUG: Attempting to call clearLastMissingPostData...');
+                                    final alertService = MissingPetAlertService();
+                                    print('🧪 DEBUG: Alert service instance created: ${alertService.runtimeType}');
+                                    alertService.clearLastMissingPostData();
+                                    print('🧪 DEBUG: clearLastMissingPostData called successfully');
+                                  } catch (e) {
+                                    print('🧪 DEBUG: Error calling clearLastMissingPostData: $e');
+                                  }
 
                                   if (mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(

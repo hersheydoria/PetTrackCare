@@ -24,10 +24,14 @@ class _MissingPetAlertWrapperState extends State<MissingPetAlertWrapper> {
   @override
   void initState() {
     super.initState();
+    print('🔔 MissingPetAlertWrapper: initState called');
     // Initialize the service after the first frame is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
+        print('🔔 MissingPetAlertWrapper: Initializing alert service with context');
         _alertService.initialize(context);
+      } else {
+        print('🔔 MissingPetAlertWrapper: Widget not mounted, skipping initialization');
       }
     });
   }
@@ -35,12 +39,14 @@ class _MissingPetAlertWrapperState extends State<MissingPetAlertWrapper> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    print('🔔 MissingPetAlertWrapper: didChangeDependencies called - updating context');
     // Update context when dependencies change (e.g., navigation)
     _alertService.updateContext(context);
   }
 
   @override
   void dispose() {
+    print('🔔 MissingPetAlertWrapper: dispose called - cleaning up alert service');
     _alertService.dispose();
     super.dispose();
   }

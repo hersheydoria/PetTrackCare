@@ -7,6 +7,7 @@ import 'pets_screen.dart';
 import 'profile_owner_screen.dart';
 import 'profile_sitter_screen.dart';
 import 'notification_screen.dart';
+import '../widgets/missing_pet_alert_wrapper.dart';
 
 class MainNavigation extends StatefulWidget {
   final String userId;
@@ -54,6 +55,7 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   List<Widget> getScreens() {
+    print('🚀 MainNavigation: getScreens called, creating PetProfileScreen');
     return [
       HomeScreen(userId: Supabase.instance.client.auth.currentUser!.id),
       PetProfileScreen(), 
@@ -65,6 +67,7 @@ class _MainNavigationState extends State<MainNavigation> {
 
   @override
   Widget build(BuildContext context) {
+    print('🚀 MainNavigation: build called');
     if (_isLoading) {
       return Scaffold(
         body: Center(child: CircularProgressIndicator()),
@@ -73,41 +76,43 @@ class _MainNavigationState extends State<MainNavigation> {
 
     final screens = getScreens();
 
-    return Scaffold(
-      appBar: _selectedIndex == 0
-        ? AppBar(
-            title: const Text('PetTrackCare', style: TextStyle(fontWeight: FontWeight.bold)),
-            backgroundColor: const Color(0xFFCB4154),
-            actions: [
-              IconButton(
-                icon: Icon(Icons.notifications),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const NotificationScreen(),
-                    ),
-                  );
-                },
-              ),
-            ],
-          )
-        : null,
-      body: screens[_selectedIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
-        selectedItemColor: const Color(0xFFCB4154),
-        unselectedItemColor: Colors.grey[600],
-        backgroundColor: Colors.white,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.pets), label: 'Pets'),
-          BottomNavigationBarItem(icon: Icon(Icons.people), label: 'Community'),
-          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble), label: 'Messages'),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
-        ],
+    return MissingPetAlertWrapper(
+      child: Scaffold(
+        appBar: _selectedIndex == 0
+          ? AppBar(
+              title: const Text('PetTrackCare', style: TextStyle(fontWeight: FontWeight.bold)),
+              backgroundColor: const Color(0xFFCB4154),
+              actions: [
+                IconButton(
+                  icon: Icon(Icons.notifications),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const NotificationScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            )
+          : null,
+        body: screens[_selectedIndex],
+        bottomNavigationBar: BottomNavigationBar(
+          type: BottomNavigationBarType.fixed,
+          currentIndex: _selectedIndex,
+          onTap: _onItemTapped,
+          selectedItemColor: const Color(0xFFCB4154),
+          unselectedItemColor: Colors.grey[600],
+          backgroundColor: Colors.white,
+          items: const [
+            BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+            BottomNavigationBarItem(icon: Icon(Icons.pets), label: 'Pets'),
+            BottomNavigationBarItem(icon: Icon(Icons.people), label: 'Community'),
+            BottomNavigationBarItem(icon: Icon(Icons.chat_bubble), label: 'Messages'),
+            BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
+          ],
+        ),
       ),
     );
   }
