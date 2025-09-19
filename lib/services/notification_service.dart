@@ -1,6 +1,4 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'dart:convert';
 
 /// Sends a notification to all users when a pet is marked missing or found.
 /// [petName] - The name of the pet.
@@ -43,56 +41,11 @@ Future<void> sendPetAlertToAllUsers({
     if (response == null || (response is Map && response['error'] != null)) {
       print('Error inserting notifications: ${response?['error'] ?? response}');
     }
-    // For development: show local notifications instead of FCM push notifications
-    try {
-      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-      
-      // Check if the plugin is initialized (should be done in main.dart or notification_screen.dart)
-      // Show local notification for the current user
-      final currentUser = supabase.auth.currentUser;
-      if (currentUser != null) {
-        await _showLocalNotification(
-          flutterLocalNotificationsPlugin,
-          title: 'PetTrackCare: ${type == 'missing' ? 'Missing pet' : 'Pet found'}',
-          body: message,
-          payload: json.encode({
-            'petName': petName,
-            'type': type,
-            if (postId != null) 'postId': postId,
-          }),
-        );
-      }
-    } catch (e) {
-      print('Failed to show local notification: $e');
-    }
+    // Note: Local notifications are automatically shown when users receive the database
+    // notifications via realtime subscriptions in NotificationScreen. Each user's 
+    // notification screen will show a system notification when new rows are inserted.
+    print('Pet alert notifications sent to ${userIds.length} users: $message');
   } catch (e) {
     print('Failed to send pet alert notifications: $e');
   }
-}
-
-/// Shows a local notification for development purposes
-Future<void> _showLocalNotification(
-  FlutterLocalNotificationsPlugin plugin, {
-  required String title,
-  required String body,
-  String? payload,
-}) async {
-  const androidDetails = AndroidNotificationDetails(
-    'pet_alerts',
-    'Pet Alerts',
-    channelDescription: 'Notifications for missing and found pets',
-    importance: Importance.high,
-    priority: Priority.high,
-    showWhen: true,
-  );
-
-  const notificationDetails = NotificationDetails(android: androidDetails);
-
-  await plugin.show(
-    DateTime.now().millisecondsSinceEpoch.remainder(100000), // Simple ID based on timestamp
-    title,
-    body,
-    notificationDetails,
-    payload: payload,
-  );
 }

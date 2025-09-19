@@ -92,25 +92,19 @@ class _NotificationScreenState extends State<NotificationScreen> {
         setState(() {
           notifications = [row, ...notifications];
         });
+        // Show system notification (appears outside the app)
         _showLocalNotification(row);
       },
     );
 
     _realtimeChannel!.subscribe();
-
-    _subscription = supabase
-        .from('notifications')
-        .stream(primaryKey: ['id'])
-        .eq('user_id', userId)
-        .order('created_at', ascending: false)
-        .listen((rows) {
-      setState(() => notifications = rows);
-    });
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
     final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
+    
+    // Enhanced Android notification details for better system notification experience
     const androidDetails = AndroidNotificationDetails(
       'notifications_channel',
       'Notifications',
@@ -118,8 +112,13 @@ class _NotificationScreenState extends State<NotificationScreen> {
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
+      enableVibration: true,
+      showWhen: true,
+      enableLights: true,
+      autoCancel: true, // Notification disappears when tapped
+      icon: '@mipmap/ic_launcher', // Use app icon
     );
-  final details = NotificationDetails(android: androidDetails);
+    const details = NotificationDetails(android: androidDetails);
 
     final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     // Compose a payload so tapping the local notification can navigate to the right place.
@@ -130,7 +129,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final payload = json.encode(payloadMap);
 
     try {
+      // Show system notification (appears in notification tray, works outside app)
       await _localNotifications.show(id, title, body.isNotEmpty ? body : null, details, payload: payload);
+      print('System notification shown: $title');
     } catch (e) {
       print('Local notification error: $e');
     }
@@ -142,19 +143,24 @@ class _NotificationScreenState extends State<NotificationScreen> {
       final postId = map['postId']?.toString();
       final notificationId = map['notificationId']?.toString();
 
+      print('System notification tapped: postId=$postId, notificationId=$notificationId');
+
       // Mark notification as read if we have an ID
       if (notificationId != null) {
         await _markAsRead(notificationId);
       }
 
+      // Navigate to post detail if we have a postId
       if (postId != null && postId.isNotEmpty) {
         if (!mounted) return;
+        // Navigate to post detail page
         Navigator.of(context).pushNamed('/postDetail', arguments: {'postId': postId});
         return;
       }
 
-      // If no postId, just open the Notifications screen (we are here already)
-      // Optionally you could scroll to the specific notification by id.
+      // If no postId, just stay on the Notifications screen 
+      // (user will see the updated notification list)
+      print('No postId available, staying on notifications screen');
     } catch (e) {
       print('Error handling notification payload tap: $e');
     }
