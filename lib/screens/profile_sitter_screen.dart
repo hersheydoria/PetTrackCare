@@ -461,119 +461,6 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
       },
     );
   }
-  // Open dialog for privacy settings
-  void _openPrivacySettings() async {
-    final currentPrivacy = metadata['privacy'] ?? {'profile_visible': true};
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        bool profileVisible = currentPrivacy['profile_visible'] ?? true;
-        return StatefulBuilder(
-          builder: (ctx, setSt) {
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(ctx).viewInsets.bottom,
-                ),
-                child: Container(
-                  color: lightBlush,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: Icon(Icons.arrow_back, color: deepRed),
-                            onPressed: () => Navigator.pop(ctx),
-                          ),
-                          Expanded(
-                            child: Center(
-                              child: Text(
-                                'Privacy',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: deepRed,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 48),
-                        ],
-                      ),
-                      SingleChildScrollView(
-                        padding: EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.grey.shade400),
-                                borderRadius: BorderRadius.circular(12),
-                                color: Colors.white,
-                              ),
-                              margin: EdgeInsets.only(bottom: 16),
-                              child: SwitchListTile(
-                                title: Text('Profile Visible to Others'),
-                                value: profileVisible,
-                                onChanged: (v) => setSt(() => profileVisible = v),
-                              ),
-                            ),
-                            SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
-                                  padding: EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                onPressed: () async {
-                                  try {
-                                    await Supabase.instance.client.auth.updateUser(
-                                      UserAttributes(data: {
-                                        'privacy': {'profile_visible': profileVisible}
-                                      })
-                                    );
-                                    Navigator.pop(ctx);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Privacy settings updated')),
-                                    );
-                                  } catch (e) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Failed to update privacy settings: ${e.toString()}')),
-                                    );
-                                  }
-                                },
-                                child: Text(
-                                  'Save',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 
   // Open dialog for change password
   void _openChangePassword() async {
@@ -1269,7 +1156,6 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                             _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
                             _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
                             _settingsTile(Icons.notifications, 'Notification Preferences', onTap: _openNotificationPreferences),
-                            _settingsTile(Icons.privacy_tip, 'Privacy Settings', onTap: _openPrivacySettings),
                             _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
                             _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
                             SizedBox(height: 16),
@@ -1431,7 +1317,6 @@ class SitterSettingsTab extends StatelessWidget {
       children: [
         _settingsTile(Icons.lock, 'Change Password'),
         _settingsTile(Icons.notifications, 'Notification Preferences'),
-        _settingsTile(Icons.privacy_tip, 'Privacy Settings'),
         _settingsTile(Icons.help_outline, 'Help & Support'),
         _settingsTile(Icons.info_outline, 'About'),
         SizedBox(height: 16),
