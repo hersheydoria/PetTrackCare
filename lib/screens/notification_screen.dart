@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:convert';
 
 class NotificationScreen extends StatefulWidget {
   const NotificationScreen({super.key});
@@ -39,9 +40,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   Future<void> _initLocalNotifications() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    final iosInit = DarwinInitializationSettings();
     await _localNotifications.initialize(
-      InitializationSettings(android: androidInit, iOS: iosInit),
+      InitializationSettings(android: androidInit),
+      onDidReceiveNotificationResponse: (response) {
+        // Called when user taps a notification
+        final payload = response.payload;
+        if (payload != null && payload.isNotEmpty) {
+          _handleNotificationPayloadTap(payload);
+        }
+      },
     );
   }
 
@@ -112,14 +119,44 @@ class _NotificationScreenState extends State<NotificationScreen> {
       priority: Priority.high,
       playSound: true,
     );
-    const iosDetails = DarwinNotificationDetails();
-    final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+  final details = NotificationDetails(android: androidDetails);
 
     final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // Compose a payload so tapping the local notification can navigate to the right place.
+    // We'll include the notification DB id and any postId so NotificationScreen can route.
+    final payloadMap = <String, dynamic>{};
+    if (n['id'] != null) payloadMap['notificationId'] = n['id'].toString();
+    if (n['post_id'] != null) payloadMap['postId'] = n['post_id'].toString();
+    final payload = json.encode(payloadMap);
+
     try {
-      await _localNotifications.show(id, title, body.isNotEmpty ? body : null, details);
+      await _localNotifications.show(id, title, body.isNotEmpty ? body : null, details, payload: payload);
     } catch (e) {
       print('Local notification error: $e');
+    }
+  }
+
+  void _handleNotificationPayloadTap(String payload) async {
+    try {
+      final Map<String, dynamic> map = json.decode(payload) as Map<String, dynamic>;
+      final postId = map['postId']?.toString();
+      final notificationId = map['notificationId']?.toString();
+
+      // Mark notification as read if we have an ID
+      if (notificationId != null) {
+        await _markAsRead(notificationId);
+      }
+
+      if (postId != null && postId.isNotEmpty) {
+        if (!mounted) return;
+        Navigator.of(context).pushNamed('/postDetail', arguments: {'postId': postId});
+        return;
+      }
+
+      // If no postId, just open the Notifications screen (we are here already)
+      // Optionally you could scroll to the specific notification by id.
+    } catch (e) {
+      print('Error handling notification payload tap: $e');
     }
   }
 

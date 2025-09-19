@@ -10,10 +10,6 @@ import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
 import 'package:flutter/services.dart'; // for Clipboard and HapticFeedback
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:android_intent_plus/android_intent.dart';
-import 'package:universal_platform/universal_platform.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart'; 
-import 'package:permission_handler/permission_handler.dart';
 import 'dart:async'; 
 import '../services/notification_service.dart';
 
@@ -221,6 +217,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         setState(() {
           _pets = list;
           _selectedPet = selected;
+          // clear any previously shown device/map info so we don't show another pet's data
+          _currentMapLocation = null;
+          _currentMapLabel = null;
+          _currentMapSub = null;
+          _latestDeviceId = null;
+          _latestDeviceLocation = null;
+          _latestDeviceTimestamp = null;
+          _locationHistory = [];
           // stop showing loader as soon as we have pet data
           _loadingPets = false;
         });
@@ -408,13 +412,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         return;
       }
 
-      // 2) query latest entry in location_history for that device_mac
-      final locResp = await Supabase.instance.client
-          .from('location_history')
-          .select()
-          .eq('device_mac', deviceId)
-          .order('timestamp', ascending: false)
-          .limit(1);
+    // 2) query latest entry in location_history for that device_mac and this pet_id
+    final locResp = await Supabase.instance.client
+      .from('location_history')
+      .select()
+      .eq('device_mac', deviceId)
+      .eq('pet_id', petId)
+      .order('timestamp', ascending: false)
+      .limit(1);
       final locList = locResp as List? ?? [];
       if (locList.isNotEmpty) {
         final row = locList.first as Map<String, dynamic>;
@@ -432,7 +437,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _latestDeviceTimestamp = ts;
           _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
         });
-        await _fetchLocationHistoryForDevice(deviceId);
+  await _fetchLocationHistoryForDevice(deviceId, petId: petId);
       } else {
         // device exists but no location rows yet
         setState(() {
@@ -442,7 +447,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         _locationHistory = [];
         });
         // still attempt to fetch history (will be empty) so UI stays consistent
-        await _fetchLocationHistoryForDevice(deviceId);
+  await _fetchLocationHistoryForDevice(deviceId, petId: petId);
       }
     } catch (e) {
       // ignore but clear device location on error
@@ -456,12 +461,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   }
 
    // Fetch recent location_history rows (limit 10) for device and reverse-geocode addresses.
-  Future<void> _fetchLocationHistoryForDevice(String deviceId, {int limit = 10}) async {
+  Future<void> _fetchLocationHistoryForDevice(String deviceId, {required String petId, int limit = 10}) async {
     try {
       final resp = await Supabase.instance.client
           .from('location_history')
           .select()
           .eq('device_mac', deviceId)
+          .eq('pet_id', petId)
           .order('timestamp', ascending: false)
           .limit(limit);
       final list = resp as List? ?? [];
@@ -634,16 +640,29 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     super.dispose();
   }
 
-  void _showBluetoothConnectionModal(BuildContext context) {
+  void _showBluetoothConnectionModal(BuildContext context) async {
+    // First check if there's already a connected device
+    final currentDeviceId = await _getStoredDeviceId();
+    
+    if (currentDeviceId != null) {
+      // Show device status and disconnect option
+      _showDeviceStatusModal(context, currentDeviceId);
+    } else {
+      // Show connection modal
+      _showConnectDeviceModal(context);
+    }
+  }
+
+  void _showDeviceStatusModal(BuildContext context, String deviceId) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: Row(
             children: [
-              Icon(Icons.bluetooth, color: deepRed),
+              Icon(Icons.device_hub, color: Colors.green),
               SizedBox(width: 8),
-              Text('GPS Device Connection'),
+              Text('GPS Device Connected'),
             ],
           ),
           content: Container(
@@ -653,36 +672,39 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Follow these steps to connect your GPS device:',
+                  'Current connected device:',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
-                SizedBox(height: 16),
-                _buildConnectionStep(
-                  '1',
-                  'Enable Bluetooth',
-                  'Make sure Bluetooth is enabled on your device',
-                  Icons.bluetooth_connected,
-                ),
                 SizedBox(height: 12),
-                _buildConnectionStep(
-                  '2',
-                  'Turn on GPS Device',
-                  'Power on your pet\'s GPS tracking device',
-                  Icons.power_settings_new,
-                ),
-                SizedBox(height: 12),
-                _buildConnectionStep(
-                  '3',
-                  'Open Bluetooth Settings',
-                  'Go to your device\'s Bluetooth settings to pair',
-                  Icons.settings,
-                ),
-                SizedBox(height: 12),
-                _buildConnectionStep(
-                  '4',
-                  'Scan & Pair',
-                  'Look for your GPS device and tap to pair',
-                  Icons.search,
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'MAC Address: $deviceId',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Device is actively tracking location',
+                              style: TextStyle(color: Colors.green.shade700, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 SizedBox(height: 16),
                 Container(
@@ -694,11 +716,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.info, color: deepRed, size: 20),
+                      Icon(Icons.warning, color: deepRed, size: 20),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Make sure your GPS device is in pairing mode before scanning.',
+                          'Disconnecting will stop location tracking for this pet.',
                           style: TextStyle(color: deepRed, fontSize: 12),
                         ),
                       ),
@@ -713,16 +735,23 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               onPressed: () => Navigator.of(context).pop(),
               child: Text('Cancel', style: TextStyle(color: Colors.grey)),
             ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showConnectDeviceModal(context);
+              },
+              child: Text('Change Device', style: TextStyle(color: coral)),
+            ),
             ElevatedButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                _openBluetoothSettings();
+                _disconnectDevice();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: deepRed,
+                backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
               ),
-              child: Text('Open Bluetooth Settings'),
+              child: Text('Disconnect'),
             ),
           ],
         );
@@ -730,274 +759,161 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     );
   }
 
-  Widget _buildConnectionStep(String number, String title, String description, IconData icon) {
-    return Row(
-      children: [
-        Container(
-          width: 24,
-          height: 24,
-          decoration: BoxDecoration(
-            color: deepRed,
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Text(
-              number,
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
+  void _showConnectDeviceModal(BuildContext context) {
+    final TextEditingController _macController = TextEditingController();
+    String? errorMessage;
+    
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.device_hub, color: deepRed),
+                  SizedBox(width: 8),
+                  Text('Connect GPS Device'),
+                ],
               ),
-            ),
-          ),
-        ),
-        SizedBox(width: 12),
-        Icon(icon, color: coral, size: 20),
-        SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
+              content: Container(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Enter your GPS tracking device MAC address:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    SizedBox(height: 16),
+                    TextField(
+                      controller: _macController,
+                      decoration: InputDecoration(
+                        labelText: 'Device MAC Address',
+                        hintText: 'XX:XX:XX:XX:XX:XX',
+                        prefixIcon: Icon(Icons.device_hub, color: coral),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        errorText: errorMessage,
+                      ),
+                      onChanged: (value) {
+                        // Clear error when user starts typing
+                        if (errorMessage != null) {
+                          setState(() {
+                            errorMessage = null;
+                          });
+                        }
+                      },
+                    ),
+                    SizedBox(height: 16),
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: lightBlush,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: coral, width: 1),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info, color: deepRed, size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Find the MAC address on your GPS device label or in device settings.',
+                              style: TextStyle(color: deepRed, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              Text(
-                description,
-                style: TextStyle(
-                  color: Colors.grey[600],
-                  fontSize: 12,
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('Cancel', style: TextStyle(color: Colors.grey)),
                 ),
-              ),
-            ],
-          ),
-        ),
-      ],
+                ElevatedButton(
+                  onPressed: () {
+                    final macAddress = _macController.text.trim();
+                    if (macAddress.isEmpty) {
+                      setState(() {
+                        errorMessage = 'Please enter a MAC address';
+                      });
+                      return;
+                    }
+                    
+                    // Basic MAC address format validation
+                    final macRegex = RegExp(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$');
+                    if (!macRegex.hasMatch(macAddress)) {
+                      setState(() {
+                        errorMessage = 'Invalid MAC address format (use XX:XX:XX:XX:XX:XX)';
+                      });
+                      return;
+                    }
+                    
+                    Navigator.of(context).pop();
+                    _connectToDeviceByMac(macAddress);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: deepRed,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text('Connect Device'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
-  
-BluetoothDevice? _connectedDevice;
-FlutterBluetoothSerial _bluetooth = FlutterBluetoothSerial.instance;
 
-// Helper method to manage connection state (classic Bluetooth)
-void _manageConnection(BluetoothDevice device) {
-  // Classic Bluetooth does not provide a stream for connection state like BLE.
-  // You may poll device.isConnected or rely on callbacks.
-  // For demonstration, show a snackbar after connection.
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('Device connected successfully!'))
-  );
-}
-
-Future<void> requestBluetoothPermissions() async {
-  await [
-    Permission.bluetoothScan,
-    Permission.bluetoothConnect,
-    Permission.location,
-  ].request();
-}
-
-void _openBluetoothSettings() async {
-  // For Android: Use android_intent_plus to open Bluetooth settings
-  if (UniversalPlatform.isAndroid) {
-    const intent = AndroidIntent(
-      action: 'android.settings.BLUETOOTH_SETTINGS',
-    );
-    await intent.launch();
-  } else if (UniversalPlatform.isIOS) {
-    // iOS Bluetooth settings - would require native implementation
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Please manually enable Bluetooth in iOS Settings'))
-    );
-    return;
-  }
-
-  // Wait for user to enable Bluetooth
-  await Future.delayed(Duration(seconds: 3));
-
+// New method to connect device by manually entered MAC address
+Future<void> _connectToDeviceByMac(String macAddress) async {
   if (_selectedPet == null) return;
 
-  // Request runtime permissions before any Bluetooth operation
-  await requestBluetoothPermissions();
-
   try {
-    // Check if Bluetooth is available and enabled
-    bool isAvailable = await _bluetooth.isAvailable ?? false;
-    bool isEnabled = await _bluetooth.isEnabled ?? false;
-    debugPrint('Bluetooth available: $isAvailable, enabled: $isEnabled');
-    if (!isAvailable) {
-      debugPrint('Bluetooth not available on this device.');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Bluetooth not available on this device.'))
-      );
-      return;
-    }
-    if (!isEnabled) {
-      debugPrint('Bluetooth is not enabled.');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please enable Bluetooth and try again.'))
-      );
-      return;
-    }
-
-    // Discover devices
-    List<BluetoothDevice> bondedDevices = [];
-    try {
-      bondedDevices = await _bluetooth.getBondedDevices();
-      debugPrint('Bonded devices: ${bondedDevices.map((d) => '${d.name} (${d.address})').join(', ')}');
-    } catch (e) {
-      debugPrint('Error getting bonded devices: $e');
-      bondedDevices = [];
-    }
-
-    // Try to reconnect to a previously paired device (if device ID exists in DB)
-    final storedDeviceId = await _getStoredDeviceId();
-    debugPrint('Stored device ID from DB: $storedDeviceId');
-    if (storedDeviceId != null && _connectedDevice == null) {
-      final device = bondedDevices.firstWhere(
-        (d) => d.address == storedDeviceId,
-        orElse: () => BluetoothDevice(address: '', name: ''),
-      );
-      debugPrint('Trying to reconnect to device: ${device.name} (${device.address})');
-      if (device.address.isNotEmpty) {
-        try {
-          await BluetoothConnection.toAddress(device.address);
-          _connectedDevice = device;
-          _manageConnection(device);
-          // fetch latest device location now that mapping exists / device connected
-          await _fetchLatestLocationForPet();
-          debugPrint('Successfully reconnected to device: ${device.name} (${device.address})');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Reconnected to GPS device!'))
-          );
-          return;
-        } catch (e) {
-          debugPrint('Reconnection failed: $e');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Reconnection failed, scanning for device...'))
-          );
-        }
-      } else {
-        debugPrint('No matching bonded device found for stored device ID.');
-      }
-    }
-
-    // Fallback: Discover nearby devices
-    List<BluetoothDiscoveryResult> results = [];
-    debugPrint('Starting Bluetooth discovery...');
-    await requestBluetoothPermissions(); // Ensure permissions before discovery
-    
-    // Use a Completer to properly handle the discovery stream
-    Completer<void> discoveryCompleter = Completer<void>();
-    StreamSubscription? discoverySubscription;
-    
-    try {
-      discoverySubscription = _bluetooth.startDiscovery().listen(
-        (BluetoothDiscoveryResult result) {
-          debugPrint('Discovered device: ${result.device.name} (${result.device.address})');
-          results.add(result);
-          
-          // Check if this is a PetTracker device and try to connect immediately
-          final deviceName = result.device.name ?? '';
-          if (deviceName.toLowerCase().contains('pettracker') || deviceName.toLowerCase().contains('tracker')) {
-            debugPrint('Found target device during discovery: $deviceName (${result.device.address})');
-            // Cancel discovery and connect to this device
-            discoverySubscription?.cancel();
-            _connectToDevice(result.device);
-            if (!discoveryCompleter.isCompleted) {
-              discoveryCompleter.complete();
-            }
-          }
-        },
-        onDone: () {
-          debugPrint('Discovery completed normally');
-          if (!discoveryCompleter.isCompleted) {
-            discoveryCompleter.complete();
-          }
-        },
-        onError: (error) {
-          debugPrint('Discovery error: $error');
-          if (!discoveryCompleter.isCompleted) {
-            discoveryCompleter.completeError(error);
-          }
-        },
-      );
-      
-      // Wait for discovery to complete or timeout after 30 seconds
-      await Future.any([
-        discoveryCompleter.future,
-        Future.delayed(Duration(seconds: 30)),
-      ]);
-      
-    } finally {
-      // Ensure discovery is stopped
-      await discoverySubscription?.cancel();
-      await _bluetooth.cancelDiscovery();
-    }
-
-    debugPrint('Discovery finished. Total devices found: ${results.length}');
-
-    // If we haven't connected yet, try to connect to any found tracker devices
-    if (_connectedDevice == null) {
-      for (var result in results) {
-        final device = result.device;
-        final deviceName = device.name ?? '';
-        debugPrint('Checking device: $deviceName (${device.address})');
-        if (deviceName.toLowerCase().contains('pettracker') || deviceName.toLowerCase().contains('tracker')) {
-          await _connectToDevice(device);
-          break; // Stop after first successful connection
-        }
-      }
-    }
-
-    if (_connectedDevice == null) {
-      debugPrint('No GPS/Tracker device found after scan.');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No GPS/Tracker device found. Ensure the device is powered on, in pairing mode, and nearby.'))
-      );
-    }
-
-  } catch (e) {
-    debugPrint('Unexpected error during Bluetooth scan/connect: $e');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Failed to scan or connect: $e'))
-    );
-  }
-}
-
-// New helper method to handle device connection
-Future<void> _connectToDevice(BluetoothDevice device) async {
-  debugPrint('Attempting to connect to device: ${device.name} (${device.address})');
-  try {
-    final connection = await BluetoothConnection.toAddress(device.address);
-    _connectedDevice = device;
-    _manageConnection(device);
-
-    // Store device ID in DB
-    await Supabase.instance.client
+    final petId = _selectedPet!['id'];
+    // Try updating existing mapping for this pet first
+    final updateResp = await Supabase.instance.client
         .from('device_pet_map')
-        .upsert({
-          'device_id': device.address,
-          'pet_id': _selectedPet!['id'],
-        });
+        .update({'device_id': macAddress})
+        .eq('pet_id', petId)
+        .select();
+
+    if (updateResp == null || (updateResp is List && updateResp.isEmpty)) {
+      // No existing mapping updated — insert a new mapping
+      await Supabase.instance.client.from('device_pet_map').insert({
+        'device_id': macAddress,
+        'pet_id': petId,
+      });
+    }
 
     // fetch latest location after associating the device
     await _fetchLatestLocationForPet();
 
-    debugPrint('Device paired and connected! ID: ${device.address}');
+    debugPrint('Device MAC registered/updated! ID: $macAddress');
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Device paired and connected! ID: ${device.address}'))
+      SnackBar(
+        content: Text('GPS device connected successfully! MAC: $macAddress'),
+        backgroundColor: Colors.green,
+      ),
     );
   } catch (e) {
-    debugPrint('Failed to connect to device: $e');
+    debugPrint('Failed to register device MAC: $e');
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Failed to connect: $e'))
+      SnackBar(
+        content: Text('Failed to connect device: $e'),
+        backgroundColor: Colors.red,
+      ),
     );
   }
 }
+
 // Helper method to fetch stored device ID from DB
 Future<String?> _getStoredDeviceId() async {
   try {
@@ -1014,25 +930,103 @@ Future<String?> _getStoredDeviceId() async {
   return null;
 }
 
-// Add this method to manually disconnect the device (call from a button if needed)
+// Method to manually disconnect/remove the device
 void _disconnectDevice() async {
-  if (_connectedDevice != null) {
-    try {
-      // Classic Bluetooth: disconnect by closing the connection
-      // If you have a BluetoothConnection object, call .close()
-      // Here, just clear the reference
-      _connectedDevice = null;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Device disconnected.'))
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to disconnect: $e'))
-      );
-    }
-  } else {
+  if (_selectedPet == null) return;
+  
+  // Show confirmation dialog
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.warning, color: Colors.orange),
+          SizedBox(width: 8),
+          Text('Disconnect GPS Device'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Are you sure you want to disconnect the GPS device?'),
+          SizedBox(height: 8),
+          Container(
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.orange, size: 16),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'This will stop location tracking for this pet.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange.shade700),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false), 
+          child: Text('Cancel')
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text('Disconnect'),
+        ),
+      ],
+    ),
+  );
+
+  if (confirm != true) return;
+
+  try {
+    // Remove device mapping from database
+    await Supabase.instance.client
+        .from('device_pet_map')
+        .delete()
+        .eq('pet_id', _selectedPet!['id']);
+        
+    // Clear local state
+    setState(() {
+      _latestDeviceId = null;
+      _latestDeviceLocation = null;
+      _latestDeviceTimestamp = null;
+      _locationHistory = [];
+      // Also clear current map view if it was showing device location
+      if (_currentMapLocation == _latestDeviceLocation) {
+        _currentMapLocation = null;
+        _currentMapLabel = null;
+        _currentMapSub = null;
+      }
+    });
+    
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('No device connected.'))
+      SnackBar(
+        content: Text('GPS device disconnected successfully'),
+        backgroundColor: Colors.green,
+        action: SnackBarAction(
+          label: 'Connect New',
+          textColor: Colors.white,
+          onPressed: () => _showBluetoothConnectionModal(context),
+        ),
+      ),
+    );
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to disconnect: $e'),
+        backgroundColor: Colors.red,
+      ),
     );
   }
 }
@@ -1216,17 +1210,48 @@ void _disconnectDevice() async {
               );
             },
           ),
-          IconButton(
-            icon: Icon(Icons.bluetooth),
-            onPressed: () {
-              _showBluetoothConnectionModal(context);
-            },
-          ),
+          // Only show device hub for Pet Owners, not Pet Sitters (security measure)
+          if (_getUserRole() == 'Pet Owner')
+            IconButton(
+              icon: Stack(
+                children: [
+                  Icon(Icons.device_hub),
+                  if (_latestDeviceId != null)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: Colors.green,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              onPressed: () {
+                _showBluetoothConnectionModal(context);
+              },
+              tooltip: _latestDeviceId != null 
+                  ? 'GPS Device Connected (${_latestDeviceId})'
+                  : 'Connect GPS Device',
+            ),
           PopupMenuButton<Map<String, dynamic>>(
             icon: Icon(Icons.more_vert),
             onSelected: (pet) async {
               setState(() {
                 _selectedPet = pet;
+                // clear any previously pinned map/device state to avoid showing other pet's info
+                _currentMapLocation = null;
+                _currentMapLabel = null;
+                _currentMapSub = null;
+                _latestDeviceId = null;
+                _latestDeviceLocation = null;
+                _latestDeviceTimestamp = null;
+                _locationHistory = [];
               });
               // update calendar markers right away
               await _fetchBehaviorDates();
