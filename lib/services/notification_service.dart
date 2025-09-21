@@ -76,26 +76,35 @@ void _onNotificationTapped(NotificationResponse response) {
   }
 }
 
-/// Show system notification (Android only)
-Future<void> _showSystemNotification({
+/// Show system notification (Android only) - Public function for use across the app
+Future<void> showSystemNotification({
   required String title,
   required String body,
   String? payload,
   String? type,
   String? recipientId, // Added recipient ID to check if current user should receive notification
 }) async {
+  print('🔔 showSystemNotification called:');
+  print('   Title: $title');
+  print('   Type: $type');
+  print('   RecipientId: $recipientId');
+  
   // Only show notification if the current user is the intended recipient
   final currentUser = Supabase.instance.client.auth.currentUser;
   if (currentUser == null) {
-    print('No current user - skipping system notification');
+    print('❌ No current user - skipping system notification');
     return;
   }
   
+  print('   Current User ID: ${currentUser.id}');
+  
   // If recipientId is specified, only show notification to that user
   if (recipientId != null && currentUser.id != recipientId) {
-    print('System notification not for current user (${currentUser.id}) - intended for $recipientId');
+    print('❌ System notification not for current user (${currentUser.id}) - intended for $recipientId');
     return;
   }
+
+  print('✅ User is intended recipient, checking preferences...');
 
   // Check if user has enabled notifications
   final metadata = currentUser.userMetadata ?? {};
@@ -103,9 +112,11 @@ Future<void> _showSystemNotification({
   final notificationsEnabled = notificationPrefs['enabled'] ?? true;
   
   if (!notificationsEnabled) {
-    print('System notifications disabled by user');
+    print('❌ System notifications disabled by user');
     return;
   }
+
+  print('✅ Notifications enabled, configuring notification...');
 
   // Configure notification based on type
   String channelId = 'general_notifications';
@@ -166,6 +177,7 @@ Future<void> _showSystemNotification({
   final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
   
   try {
+    print('🚀 Attempting to show notification with ID: $id');
     await _localNotifications.show(
       id,
       title,
@@ -173,9 +185,9 @@ Future<void> _showSystemNotification({
       notificationDetails,
       payload: payload,
     );
-    print('Android system notification shown: $title');
+    print('✅ Android system notification shown successfully: $title');
   } catch (e) {
-    print('Failed to show system notification: $e');
+    print('❌ Failed to show system notification: $e');
   }
 }
 
@@ -222,7 +234,7 @@ Future<void> sendPetAlertToAllUsers({
     }
     
     // Show system notification for pet alerts (to all users - will be filtered per user)
-    await _showSystemNotification(
+    await showSystemNotification(
       title: type == 'missing' ? '🚨 Missing Pet Alert' : '✅ Pet Found',
       body: message,
       type: type == 'missing' ? 'missing_pet' : 'found_pet',
@@ -312,7 +324,7 @@ Future<void> sendJobNotification({
         break;
     }
     
-    await _showSystemNotification(
+    await showSystemNotification(
       title: notificationTitle,
       body: message,
       type: type,
@@ -350,6 +362,14 @@ Future<void> sendCommunityNotification({
 }) async {
   final supabase = Supabase.instance.client;
   
+  print('🏘️ sendCommunityNotification called:');
+  print('   Recipient ID: $recipientId');
+  print('   Actor ID: $actorId');
+  print('   Type: $type');
+  print('   Message: $message');
+  print('   Post ID: $postId');
+  print('   Actor Name: $actorName');
+  
   try {
     // Insert notification
     final notificationData = {
@@ -364,7 +384,12 @@ Future<void> sendCommunityNotification({
     if (postId != null) notificationData['post_id'] = postId;
     if (commentId != null) notificationData['comment_id'] = commentId;
     
-    await supabase.from('notifications').insert(notificationData);
+    print('💾 Inserting notification into database...');
+    print('   Data: $notificationData');
+    
+    final insertResult = await supabase.from('notifications').insert(notificationData);
+    print('✅ Notification inserted successfully: $insertResult');
+    
     
     // Show system notification for community interactions
     String notificationTitle;
@@ -386,7 +411,8 @@ Future<void> sendCommunityNotification({
         break;
     }
     
-    await _showSystemNotification(
+    print('📱 Calling showSystemNotification...');
+    await showSystemNotification(
       title: notificationTitle,
       body: message,
       type: type,
@@ -399,9 +425,9 @@ Future<void> sendCommunityNotification({
       }),
     );
     
-    print('Community notification sent: $message to user $recipientId');
+    print('✅ Community notification process completed: $message to user $recipientId');
   } catch (e) {
-    print('Failed to send community notification: $e');
+    print('❌ Failed to send community notification: $e');
   }
 }
 
@@ -418,8 +444,15 @@ Future<void> sendMessageNotification({
 }) async {
   final supabase = Supabase.instance.client;
   
+  print('📨 sendMessageNotification called:');
+  print('   Recipient ID: $recipientId');
+  print('   Sender ID: $senderId');
+  print('   Sender Name: $senderName');
+  print('   Message Preview: $messagePreview');
+  
   try {
     // Store message notification in database
+    print('💾 Storing message notification in database...');
     await supabase.from('notifications').insert({
       'user_id': recipientId,
       'actor_id': senderId,
@@ -428,9 +461,11 @@ Future<void> sendMessageNotification({
       'is_read': false,
       'created_at': DateTime.now().toIso8601String(),
     });
+    print('✅ Message notification stored in database');
     
     // Show system notification
-    await _showSystemNotification(
+    print('🔔 Calling showSystemNotification...');
+    await showSystemNotification(
       title: '💬 $senderName',
       body: messagePreview,
       type: 'message',
@@ -442,8 +477,8 @@ Future<void> sendMessageNotification({
       }),
     );
     
-    print('Message notification sent: $messagePreview from $senderName to user $recipientId');
+    print('✅ Message notification process completed: $messagePreview from $senderName to user $recipientId');
   } catch (e) {
-    print('Failed to send message notification: $e');
+    print('❌ Failed to send message notification: $e');
   }
 }

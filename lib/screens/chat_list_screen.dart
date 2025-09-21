@@ -92,6 +92,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           schema: 'public',
           table: 'messages',
           callback: (payload, [ref]) async {
+            print('🔄 Realtime message received in chat_list_screen');
             fetchMessages(); // Refresh list on new message
 
             // Handle new message notification
@@ -102,8 +103,16 @@ class _ChatListScreenState extends State<ChatListScreen> {
             final messageType = newRow['type']?.toString() ?? 'text';
             final content = newRow['content']?.toString() ?? '';
 
+            print('📩 Realtime message details:');
+            print('   Current User: $currentUserId');
+            print('   Receiver: $receiverId');
+            print('   Sender: $senderId');
+            print('   Type: $messageType');
+            print('   Content: $content');
+
             // Show notification if this user is the receiver and it's not a system message
             if (receiverId == currentUserId && senderId != currentUserId && senderId != null && receiverId != null && messageType != 'call_accept' && messageType != 'call_decline') {
+              print('✅ This user should receive notification - processing...');
               // Get sender name for notification
               try {
                 final senderResponse = await supabase
@@ -130,7 +139,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   senderName: senderName,
                   messagePreview: messagePreview,
                 );
+                print('✅ sendMessageNotification called successfully');
               } catch (e) {
+                print('⚠️ Error getting sender name, using fallback notification');
                 // Fallback notification without sender name
                 await sendMessageNotification(
                   recipientId: receiverId,
@@ -139,6 +150,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   messagePreview: content,
                 );
               }
+            } else {
+              print('❌ Notification conditions not met:');
+              print('   receiverId == currentUserId: ${receiverId == currentUserId}');
+              print('   senderId != currentUserId: ${senderId != currentUserId}');
+              print('   messageType: $messageType (excluded: call_accept, call_decline)');
             }
 
             // Handle call invite globally (even when not inside ChatDetailScreen)

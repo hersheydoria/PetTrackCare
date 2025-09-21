@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
+import '../services/notification_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
-const coral = Color(0xFFD2665A);
+const coral = Color(0xFFF2B28C);
 const peach = Color(0xFFF2B28C);
 const lightBlush = Color(0xFFF6DED8);
 
@@ -65,6 +66,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
       return;
     }
     final userId = user.id;
+    
+    print('🔧 Initializing notifications for user: $userId');
 
     try {
       final res = await supabase
@@ -76,12 +79,17 @@ class _NotificationScreenState extends State<NotificationScreen> {
         notifications = List<Map<String, dynamic>>.from(res);
         isLoading = false;
       });
+      print('📋 Loaded ${notifications.length} existing notifications');
       _prefetchCaptionsFor(notifications);
     } catch (e) {
+      print('❌ Error loading notifications: $e');
       setState(() => isLoading = false);
     }
 
     _realtimeChannel = supabase.channel('notifications_user_$userId');
+    
+    print('📡 Setting up realtime subscription for user: $userId');
+    print('   Channel: notifications_user_$userId');
 
     _realtimeChannel!.onPostgresChanges(
       event: PostgresChangeEvent.insert,
@@ -93,25 +101,44 @@ class _NotificationScreenState extends State<NotificationScreen> {
         value: userId,
       ),
       callback: (payload) {
+        print('🔔 Realtime notification received in notification_screen');
+        print('   User ID filter: $userId');
+        print('   Payload: ${payload.newRecord}');
+        
         final newRow = payload.newRecord;
         final row = Map<String, dynamic>.from(newRow);
+        
+        print('   Processed row: $row');
+        
         setState(() {
           notifications = [row, ...notifications];
         });
+        
+        print('📱 Calling _showLocalNotification for system notification...');
         // Show system notification (appears outside the app)
         _showLocalNotification(row);
       },
     );
 
-    _realtimeChannel!.subscribe();
+    print('🔗 Subscribing to realtime channel...');
+    final subscribeResult = await _realtimeChannel!.subscribe();
+    print('📡 Realtime subscription result: $subscribeResult');
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
+    print('📱 _showLocalNotification called in notification_screen');
+    print('   Notification data: $n');
+    
     // Use the centralized notification service to show system notifications
     final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
     final type = n['type']?.toString();
     final currentUserId = supabase.auth.currentUser?.id;
+    
+    print('   Title: $title');
+    print('   Body: $body');
+    print('   Type: $type');
+    print('   Current User ID: $currentUserId');
     
     // Prepare payload for navigation
     final payloadMap = <String, dynamic>{};
@@ -119,122 +146,39 @@ class _NotificationScreenState extends State<NotificationScreen> {
     if (n['post_id'] != null) payloadMap['postId'] = n['post_id'].toString();
     if (n['job_id'] != null) payloadMap['jobId'] = n['job_id'].toString();
     if (n['type'] != null) payloadMap['type'] = n['type'].toString();
+    if (n['actor_id'] != null) {
+      payloadMap['senderId'] = n['actor_id'].toString();
+      // Get actor name for message notifications
+      if (type == 'message') {
+        try {
+          final actorResponse = await supabase
+              .from('users')
+              .select('name')
+              .eq('id', n['actor_id'])
+              .single();
+          payloadMap['senderName'] = actorResponse['name'] ?? 'Someone';
+        } catch (e) {
+          payloadMap['senderName'] = 'Someone';
+        }
+      }
+    }
     final payload = json.encode(payloadMap);
     
+    print('   Payload: $payload');
+    
     try {
-      // Use the centralized system notification service
-      await _showSystemNotification(
+      // Use the centralized system notification service from notification_service.dart
+      print('🔔 Calling centralized showSystemNotification...');
+      await showSystemNotification(
         title: title,
         body: body.isNotEmpty ? body : title,
         type: type,
         recipientId: currentUserId, // Current user should receive this notification
         payload: payload,
       );
-      print('System notification shown via centralized service: $title');
+      print('✅ System notification completed via centralized service: $title');
     } catch (e) {
-      print('Failed to show system notification: $e');
-    }
-  }
-
-  // Import the centralized system notification function
-  Future<void> _showSystemNotification({
-    required String title,
-    required String body,
-    String? payload,
-    String? type,
-    String? recipientId,
-  }) async {
-    // Only show notification if the current user is the intended recipient
-    final currentUser = Supabase.instance.client.auth.currentUser;
-    if (currentUser == null) {
-      print('No current user - skipping system notification');
-      return;
-    }
-    
-    // If recipientId is specified, only show notification to that user
-    if (recipientId != null && currentUser.id != recipientId) {
-      print('System notification not for current user (${currentUser.id}) - intended for $recipientId');
-      return;
-    }
-
-    // Check if user has enabled notifications
-    final metadata = currentUser.userMetadata ?? {};
-    final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
-    final notificationsEnabled = notificationPrefs['enabled'] ?? true;
-    
-    if (!notificationsEnabled) {
-      print('System notifications disabled by user');
-      return;
-    }
-
-    // Configure notification based on type
-    String channelId = 'general_notifications';
-    String channelName = 'General Notifications';
-    String channelDescription = 'General app notifications';
-    
-    switch (type) {
-      case 'job_request':
-      case 'job_accepted':
-      case 'job_declined':
-      case 'job_completed':
-        channelId = 'job_notifications';
-        channelName = 'Job Notifications';
-        channelDescription = 'Pet sitting job related notifications';
-        break;
-      case 'missing_pet':
-      case 'found_pet':
-        channelId = 'emergency_notifications';
-        channelName = 'Emergency Notifications';
-        channelDescription = 'Missing and found pet alerts';
-        break;
-      case 'message':
-        channelId = 'chat_notifications';
-        channelName = 'Chat Messages';
-        channelDescription = 'New message notifications';
-        break;
-      case 'like':
-      case 'comment':
-      case 'mention':
-        channelId = 'community_notifications';
-        channelName = 'Community Notifications';
-        channelDescription = 'Community interactions and mentions';
-        break;
-    }
-
-    final androidDetails = AndroidNotificationDetails(
-      channelId,
-      channelName,
-      channelDescription: channelDescription,
-      importance: type == 'missing_pet' || type == 'found_pet' ? Importance.max : Importance.high,
-      priority: type == 'missing_pet' || type == 'found_pet' ? Priority.max : Priority.high,
-      icon: '@mipmap/ic_launcher',
-      color: const Color(0xFFB82132),
-      enableVibration: true,
-      playSound: true,
-      showWhen: true,
-      enableLights: true,
-      autoCancel: true,
-      styleInformation: BigTextStyleInformation(body),
-    );
-
-    final notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: null, // iOS notifications disabled
-    );
-
-    final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
-    
-    try {
-      await _localNotifications.show(
-        id,
-        title,
-        body,
-        notificationDetails,
-        payload: payload,
-      );
-      print('Android system notification shown: $title');
-    } catch (e) {
-      print('Failed to show system notification: $e');
+      print('❌ Failed to show system notification: $e');
     }
   }
 
