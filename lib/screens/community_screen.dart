@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 import 'notification_screen.dart';
 
 Map<String, bool> likedPosts = {};
@@ -35,6 +36,39 @@ const deepRed = Color(0xFFB82132);
 const lightBlush = Color(0xFFF6DED8);
 const ownerColor = Color(0xFFECA1A6); 
 const sitterColor = Color(0xFFF2B28C); 
+
+// Helper functions for Philippines timezone conversion
+DateTime convertToPhilippinesTime(DateTime utcTime) {
+  // Convert UTC time to Philippines time (UTC+8)
+  return utcTime.add(Duration(hours: 8));
+}
+
+String formatPhilippinesTime(DateTime dateTime) {
+  // Assume the input dateTime is in UTC and convert to Philippines time
+  final phTime = convertToPhilippinesTime(dateTime);
+  final now = convertToPhilippinesTime(DateTime.now().toUtc());
+  final difference = now.difference(phTime);
+  
+  if (difference.inMinutes < 1) {
+    return 'Just now';
+  } else if (difference.inMinutes < 60) {
+    return '${difference.inMinutes}m ago';
+  } else if (difference.inHours < 24) {
+    return '${difference.inHours}h ago';
+  } else if (difference.inDays < 7) {
+    return '${difference.inDays}d ago';
+  } else {
+    final formatter = DateFormat('MMM d, y');
+    return formatter.format(phTime);
+  }
+}
+
+String getDetailedPhilippinesTime(DateTime dateTime) {
+  // Assume the input dateTime is in UTC and convert to Philippines time
+  final phTime = convertToPhilippinesTime(dateTime);
+  final formatter = DateFormat('MMM d, y \'at\' h:mm a');
+  return formatter.format(phTime);
+}
 
 class CommunityScreen extends StatefulWidget {
   final String userId;
@@ -423,7 +457,6 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           'post_id': postId,
           'comment_id': commentId,
           'is_read': false,
-          'created_at': DateTime.now().toIso8601String(),
         });
       }
     } catch (e) {
@@ -969,7 +1002,6 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       'type': type,
       'content': content,
       'image_url': imageUrl,
-      'created_at': DateTime.now().toIso8601String(),
     }).select('id').single();
 
     // Send mention notifications for posts
@@ -998,195 +1030,754 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Colors.transparent,
       builder: (context) {
-        return Padding(
-          // Make space for the keyboard
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(20),
+              topRight: Radius.circular(20),
+            ),
           ),
-          child: StatefulBuilder(
-            builder: (context, setModalState) {
-              return SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16),
+          child: Padding(
+            // Make space for the keyboard
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+              top: 16,
+              left: 16,
+              right: 16,
+            ),
+            child: StatefulBuilder(
+              builder: (context, setModalState) {
+                return SingleChildScrollView(
                   child: SafeArea(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text('Create Post', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        DropdownButton<String>(
-                          value: selectedType,
-                          items: ['general', 'missing', 'found']
-                              .map((type) => DropdownMenuItem(
-                                    value: type,
-                                    child: Text(type[0].toUpperCase() + type.substring(1)),
-                                  ))
-                              .toList(),
-                          onChanged: (val) {
-                            if (val != null) {
-                              setModalState(() => selectedType = val);
-                            }
-                          },
+                        // Handle bar
+                        Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
-                        // Replace TextField with mention-enabled version
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        SizedBox(height: 16),
+                        Row(
                           children: [
-                            TextField(
-                              controller: contentController,
-                              decoration: InputDecoration(hintText: 'Write something...'),
-                              maxLines: 3,
-                              onChanged: (text) {
-                                // Handle mention detection for post creation
-                                int cursorPosition = contentController.selection.start;
-                                
-                                // Find @ symbol before cursor
-                                int atPosition = -1;
-                                for (int i = cursorPosition - 1; i >= 0; i--) {
-                                  if (text[i] == '@') {
-                                    atPosition = i;
-                                    break;
-                                  } else if (text[i] == ' ' || text[i] == '\n') {
-                                    break;
-                                  }
-                                }
-
-                                if (atPosition >= 0) {
-                                  final mentionText = text.substring(atPosition + 1, cursorPosition);
-                                  if (!mentionText.contains(' ') && !mentionText.contains('\n')) {
-                                    mentionStartPosition[postFieldId] = atPosition;
-                                    currentMentionText[postFieldId] = mentionText;
-                                    searchUsersForMention(postFieldId, mentionText).then((_) {
-                                      setModalState(() {}); // Refresh modal state for suggestions
-                                    });
-                                    return;
-                                  }
-                                }
-
-                                // Hide suggestions if no valid mention detected
-                                setModalState(() {
-                                  showUserSuggestions[postFieldId] = false;
-                                  userSuggestions[postFieldId] = [];
-                                  currentMentionText[postFieldId] = '';
-                                });
-                              },
-                            ),
-                            if (showUserSuggestions[postFieldId] == true && (userSuggestions[postFieldId]?.isNotEmpty ?? false))
-                              Container(
-                                constraints: BoxConstraints(maxHeight: 200),
-                                margin: EdgeInsets.only(top: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(color: Colors.grey.shade300),
-                                  borderRadius: BorderRadius.circular(8),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.1),
-                                      blurRadius: 4,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: ListView.builder(
-                                  shrinkWrap: true,
-                                  itemCount: userSuggestions[postFieldId]?.length ?? 0,
-                                  itemBuilder: (context, index) {
-                                    final user = userSuggestions[postFieldId]![index];
-                                    return ListTile(
-                                      dense: true,
-                                      leading: CircleAvatar(
-                                        radius: 16,
-                                        backgroundImage: user['profile_picture'] != null && user['profile_picture'].toString().isNotEmpty
-                                            ? NetworkImage(user['profile_picture'])
-                                            : AssetImage('assets/logo.png') as ImageProvider,
-                                      ),
-                                      title: Text('@${user['name']}'),
-                                      onTap: () {
-                                        // Handle mention selection for post creation
-                                        final currentText = contentController.text;
-                                        final mentionStart = mentionStartPosition[postFieldId] ?? 0;
-                                        final beforeMention = currentText.substring(0, mentionStart);
-                                        final afterMention = currentText.substring(contentController.selection.start);
-                                        
-                                        final newText = '$beforeMention@${user['name']} $afterMention';
-                                        contentController.text = newText;
-                                        contentController.selection = TextSelection.collapsed(
-                                          offset: (beforeMention.length + user['name'].toString().length + 2),
-                                        );
-
-                                        setModalState(() {
-                                          showUserSuggestions[postFieldId] = false;
-                                          userSuggestions[postFieldId] = [];
-                                          currentMentionText[postFieldId] = '';
-                                        });
-                                      },
-                                    );
-                                  },
-                                ),
+                            Icon(Icons.edit, color: deepRed),
+                            SizedBox(width: 8),
+                            Text(
+                              'Create Post',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
                               ),
+                            ),
                           ],
                         ),
-                        if (selectedImage != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8.0),
-                            child: Image.file(selectedImage!, height: 100),
+                        SizedBox(height: 20),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                        TextButton.icon(
-                          onPressed: () async {
-                            showModalBottomSheet(
-                              context: context,
-                              builder: (_) => Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  ListTile(
-                                    leading: Icon(Icons.photo_library),
-                                    title: Text('Pick Image from Gallery'),
-                                    onTap: () async {
-                                      final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-                                      if (picked != null) {
-                                        setModalState(() => selectedImage = File(picked.path));
-                                      }
-                                      Navigator.pop(context);
-                                    },
-                                  ),
-                                  ListTile(
-                                    leading: Icon(Icons.camera_alt),
-                                    title: Text('Take Photo'),
-                                    onTap: () async {
-                                      final picked = await ImagePicker().pickImage(source: ImageSource.camera);
-                                      if (picked != null) {
-                                        setModalState(() => selectedImage = File(picked.path));
-                                      }
-                                      Navigator.pop(context);
-                                    },
-                                  ),
-                                ],
+                          child: DropdownButton<String>(
+                            value: selectedType,
+                            isExpanded: true,
+                            underline: SizedBox(),
+                            icon: Icon(Icons.arrow_drop_down, color: deepRed),
+                            items: ['general', 'missing', 'found']
+                                .map((type) => DropdownMenuItem(
+                                      value: type,
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            type == 'general' ? Icons.forum
+                                                : type == 'missing' ? Icons.search
+                                                : Icons.pets,
+                                            color: type == 'general' ? Colors.blue
+                                                : type == 'missing' ? Colors.red
+                                                : Colors.green,
+                                            size: 20,
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            type[0].toUpperCase() + type.substring(1),
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ))
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null) {
+                                setModalState(() => selectedType = val);
+                              }
+                            },
+                          ),
+                        ),
+                        SizedBox(height: 16),
+                        // Enhanced text input
+                        Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              TextField(
+                                controller: contentController,
+                                decoration: InputDecoration(
+                                  hintText: 'Write something... (use @username to mention)',
+                                  hintStyle: TextStyle(color: Colors.grey[500]),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.all(16),
+                                ),
+                                maxLines: 4,
+                                minLines: 3,
+                                onChanged: (text) {
+                                  // Handle mention detection for post creation
+                                  int cursorPosition = contentController.selection.start;
+                                  
+                                  // Find @ symbol before cursor
+                                  int atPosition = -1;
+                                  for (int i = cursorPosition - 1; i >= 0; i--) {
+                                    if (text[i] == '@') {
+                                      atPosition = i;
+                                      break;
+                                    } else if (text[i] == ' ' || text[i] == '\n') {
+                                      break;
+                                    }
+                                  }
+
+                                  if (atPosition >= 0) {
+                                    final mentionText = text.substring(atPosition + 1, cursorPosition);
+                                    if (!mentionText.contains(' ') && !mentionText.contains('\n')) {
+                                      mentionStartPosition[postFieldId] = atPosition;
+                                      currentMentionText[postFieldId] = mentionText;
+                                      searchUsersForMention(postFieldId, mentionText).then((_) {
+                                        setModalState(() {}); // Refresh modal state for suggestions
+                                      });
+                                      return;
+                                    }
+                                  }
+
+                                  // Hide suggestions if no valid mention detected
+                                  setModalState(() {
+                                    showUserSuggestions[postFieldId] = false;
+                                    userSuggestions[postFieldId] = [];
+                                    currentMentionText[postFieldId] = '';
+                                  });
+                                },
                               ),
-                            );
-                          },
-                          icon: Icon(Icons.add_a_photo),
-                          label: Text('Add Media'),
+                              if ((showUserSuggestions[postFieldId] ?? false) && 
+                                  (userSuggestions[postFieldId]?.isNotEmpty ?? false))
+                                Container(
+                                  constraints: BoxConstraints(maxHeight: 150),
+                                  decoration: BoxDecoration(
+                                    border: Border(top: BorderSide(color: Colors.grey[200]!)),
+                                  ),
+                                  child: ListView.builder(
+                                    shrinkWrap: true,
+                                    itemCount: userSuggestions[postFieldId]?.length ?? 0,
+                                    itemBuilder: (context, index) {
+                                      final user = userSuggestions[postFieldId]![index];
+                                      return ListTile(
+                                        dense: true,
+                                        leading: CircleAvatar(
+                                          radius: 16,
+                                          backgroundImage: user['profile_picture'] != null && 
+                                              user['profile_picture'].toString().isNotEmpty
+                                              ? NetworkImage(user['profile_picture'])
+                                              : AssetImage('assets/logo.png') as ImageProvider,
+                                        ),
+                                        title: Text('@${user['name']}'),
+                                        onTap: () {
+                                          // Handle mention selection
+                                          final currentText = contentController.text;
+                                          final mentionStart = mentionStartPosition[postFieldId] ?? 0;
+                                          final beforeMention = currentText.substring(0, mentionStart);
+                                          final afterMention = currentText.substring(contentController.selection.start);
+                                          
+                                          final newText = '$beforeMention@${user['name']} $afterMention';
+                                          contentController.text = newText;
+                                          contentController.selection = TextSelection.collapsed(
+                                            offset: (beforeMention.length + user['name'].toString().length + 2),
+                                          );
+
+                                          setModalState(() {
+                                            showUserSuggestions[postFieldId] = false;
+                                            userSuggestions[postFieldId] = [];
+                                            currentMentionText[postFieldId] = '';
+                                          });
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                        SizedBox(height: 10),
-                        ElevatedButton(
-                          onPressed: () {
-                            // Clean up mention state when posting
-                            showUserSuggestions.remove(postFieldId);
-                            userSuggestions.remove(postFieldId);
-                            currentMentionText.remove(postFieldId);
-                            mentionStartPosition.remove(postFieldId);
-                            
-                            createPost(selectedType, contentController.text, selectedImage);
-                          },
-                          child: Text('Post'),
+                        SizedBox(height: 16),
+                        if (selectedImage != null)
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey[300]!),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.file(
+                                selectedImage!,
+                                height: 150,
+                                width: double.infinity,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                        if (selectedImage != null) SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+                                  if (picked != null) {
+                                    setModalState(() => selectedImage = File(picked.path));
+                                  }
+                                },
+                                icon: Icon(Icons.add_a_photo, color: deepRed),
+                                label: Text(
+                                  selectedImage != null ? 'Change Image' : 'Add Image',
+                                  style: TextStyle(color: deepRed),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(color: deepRed),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                ),
+                              ),
+                            ),
+                            if (selectedImage != null) ...[
+                              SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  setModalState(() => selectedImage = null);
+                                },
+                                icon: Icon(Icons.close, color: Colors.red),
+                                label: Text('Remove', style: TextStyle(color: Colors.red)),
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(color: Colors.red),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
+                        SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: () async {
+                              final content = contentController.text.trim();
+                              if (content.isNotEmpty) {
+                                // Clean up mention state when posting
+                                showUserSuggestions.remove(postFieldId);
+                                userSuggestions.remove(postFieldId);
+                                currentMentionText.remove(postFieldId);
+                                mentionStartPosition.remove(postFieldId);
+                                
+                                await createPost(selectedType, content, selectedImage);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Please write something before posting')),
+                                );
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: deepRed,
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.send),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Share Post',
+                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 16),
                       ],
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Enhanced Report Post Modal
+  void _showReportModal(BuildContext context, Map post) {
+    final List<Map<String, dynamic>> violationTypes = [
+      {
+        'type': 'Unattended or Missing Pet Reports',
+        'icon': Icons.pets,
+        'description': 'Reports about lost, missing, or unattended pets'
+      },
+      {
+        'type': 'Irresponsible Sitter Behavior',
+        'icon': Icons.person_off,
+        'description': 'Negligent or inappropriate behavior by pet sitters'
+      },
+      {
+        'type': 'False or Misleading Posts',
+        'icon': Icons.warning,
+        'description': 'Incorrect, fake, or deceptive information'
+      },
+      {
+        'type': 'Inappropriate Content',
+        'icon': Icons.block,
+        'description': 'Offensive, harmful, or inappropriate material'
+      },
+      {
+        'type': 'Pet Endangerment',
+        'icon': Icons.dangerous,
+        'description': 'Content showing or promoting harm to animals'
+      },
+      {
+        'type': 'Neglect or Poor Care Practices',
+        'icon': Icons.health_and_safety,
+        'description': 'Evidence of animal neglect or poor care'
+      },
+      {
+        'type': 'Spam or Commercial Misuse',
+        'icon': Icons.block_outlined,
+        'description': 'Unwanted advertising or spam content'
+      },
+      {
+        'type': 'Privacy Violation',
+        'icon': Icons.privacy_tip,
+        'description': 'Sharing personal information without consent'
+      },
+      {
+        'type': 'Other',
+        'icon': Icons.more_horiz,
+        'description': 'Other violations not listed above'
+      },
+    ];
+
+    String selectedViolation = '';
+    TextEditingController detailsController = TextEditingController();
+    bool isAnonymous = false;
+    bool isSubmitting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(20),
+              topRight: Radius.circular(20),
+            ),
+          ),
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+              top: 16,
+              left: 16,
+              right: 16,
+            ),
+            child: StatefulBuilder(
+              builder: (context, setModalState) {
+                return SingleChildScrollView(
+                  child: SafeArea(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Handle bar
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[300],
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 20),
+                        
+                        // Header
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.red[50],
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.report_outlined,
+                                color: Colors.red[600],
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Report Post',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Help us maintain a safe community',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 24),
+                        
+                        // Violation Types
+                        Text(
+                          'What type of violation is this?',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        
+                        // Violation type options
+                        ...violationTypes.map((violation) {
+                          final bool isSelected = selectedViolation == violation['type'];
+                          return Container(
+                            margin: EdgeInsets.only(bottom: 8),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () {
+                                  setModalState(() {
+                                    selectedViolation = violation['type'];
+                                  });
+                                },
+                                child: Container(
+                                  padding: EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: isSelected ? deepRed : Colors.grey[300]!,
+                                      width: isSelected ? 2 : 1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                    color: isSelected ? deepRed.withOpacity(0.05) : Colors.white,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        padding: EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: isSelected 
+                                              ? deepRed.withOpacity(0.1)
+                                              : Colors.grey[100],
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Icon(
+                                          violation['icon'],
+                                          color: isSelected ? deepRed : Colors.grey[600],
+                                          size: 20,
+                                        ),
+                                      ),
+                                      SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              violation['type'],
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                color: isSelected ? deepRed : Colors.black87,
+                                                fontSize: 14,
+                                              ),
+                                            ),
+                                            SizedBox(height: 2),
+                                            Text(
+                                              violation['description'],
+                                              style: TextStyle(
+                                                color: Colors.grey[600],
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        Icon(
+                                          Icons.check_circle,
+                                          color: deepRed,
+                                          size: 20,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                        
+                        SizedBox(height: 20),
+                        
+                        // Additional details section
+                        Text(
+                          'Additional Details (Optional)',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: TextField(
+                            controller: detailsController,
+                            maxLines: 3,
+                            decoration: InputDecoration(
+                              hintText: 'Provide any additional context that might help us understand the issue...',
+                              hintStyle: TextStyle(color: Colors.grey[500]),
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.all(16),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 16),
+                        
+                        // Anonymous reporting option
+                        Container(
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.blue[50],
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.blue[100]!),
+                          ),
+                          child: Row(
+                            children: [
+                              Checkbox(
+                                value: isAnonymous,
+                                onChanged: (value) {
+                                  setModalState(() {
+                                    isAnonymous = value ?? false;
+                                  });
+                                },
+                                activeColor: deepRed,
+                              ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Submit anonymously',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Your identity will not be shared with the post author',
+                                      style: TextStyle(
+                                        color: Colors.grey[600],
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(height: 24),
+                        
+                        // Action buttons
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                style: TextButton.styleFrom(
+                                  padding: EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side: BorderSide(color: Colors.grey[300]!),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Cancel',
+                                  style: TextStyle(
+                                    color: Colors.grey[700],
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: selectedViolation.isEmpty || isSubmitting
+                                    ? null
+                                    : () async {
+                                        setModalState(() {
+                                          isSubmitting = true;
+                                        });
+                                        
+                                        String reason = selectedViolation;
+                                        if (selectedViolation == 'Other' && detailsController.text.trim().isNotEmpty) {
+                                          reason = detailsController.text.trim();
+                                        } else if (selectedViolation == 'Other') {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Please provide details for "Other" violation type.'),
+                                              backgroundColor: Colors.orange,
+                                            ),
+                                          );
+                                          setModalState(() {
+                                            isSubmitting = false;
+                                          });
+                                          return;
+                                        }
+                                        
+                                        try {
+                                          // Submit report to database
+                                          String finalReason = reason;
+                                          if (isAnonymous) {
+                                            finalReason = '[Anonymous] $reason';
+                                          }
+                                          if (detailsController.text.trim().isNotEmpty) {
+                                            finalReason += ' - ${detailsController.text.trim()}';
+                                          }
+                                          
+                                          await Supabase.instance.client
+                                              .from('reports')
+                                              .insert({
+                                            'post_id': post['id'],
+                                            'user_id': widget.userId,
+                                            'reason': finalReason,
+                                          });
+                                          
+                                          // Update the reported status of the post
+                                          await Supabase.instance.client
+                                              .from('community_posts')
+                                              .update({'reported': true})
+                                              .eq('id', post['id']);
+                                          
+                                          Navigator.pop(context);
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Row(
+                                                children: [
+                                                  Icon(Icons.check_circle, color: Colors.white),
+                                                  SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: Text('Report submitted successfully. Thank you for helping keep our community safe!'),
+                                                  ),
+                                                ],
+                                              ),
+                                              backgroundColor: Colors.green,
+                                              duration: Duration(seconds: 4),
+                                            ),
+                                          );
+                                        } catch (e) {
+                                          Navigator.pop(context);
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Row(
+                                                children: [
+                                                  Icon(Icons.error, color: Colors.white),
+                                                  SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: Text('Failed to submit report. Please try again.'),
+                                                  ),
+                                                ],
+                                              ),
+                                              backgroundColor: Colors.red,
+                                            ),
+                                          );
+                                        }
+                                      },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: deepRed,
+                                  foregroundColor: Colors.white,
+                                  padding: EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                child: isSubmitting
+                                    ? SizedBox(
+                                        height: 20,
+                                        width: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                        ),
+                                      )
+                                    : Text(
+                                        'Submit Report',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
         );
       },
@@ -1347,15 +1938,8 @@ void showEditPostModal(Map post) {
 
         // Profile picture should already be from public.users table via the query
 
-        final createdAt = DateTime.tryParse(post['created_at'] ?? '')?.toLocal() ?? DateTime.now();
-        final timeDiff = DateTime.now().difference(createdAt);
-        final timeAgo = timeDiff.inMinutes < 1
-            ? 'Just now'
-            : timeDiff.inMinutes < 60
-                ? '${timeDiff.inMinutes}m ago'
-                : timeDiff.inHours < 24
-                    ? '${timeDiff.inHours}h ago'
-                    : '${timeDiff.inDays}d ago';
+        final createdAt = DateTime.tryParse(post['created_at'] ?? '') ?? DateTime.now();
+        final timeAgo = formatPhilippinesTime(createdAt);
 
         // Only initialize if not already set
         if (!likedPosts.containsKey(postId)) {
@@ -1376,81 +1960,196 @@ void showEditPostModal(Map post) {
 
         return Card(
           key: postId == widget.targetPostId ? targetPostKey : null,
-          margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          color: highlightedPostId == postId ? Colors.yellow[100] : null, // Highlight target post
+          margin: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          elevation: highlightedPostId == postId ? 8 : 3,
+          shadowColor: highlightedPostId == postId ? deepRed.withOpacity(0.3) : Colors.black.withOpacity(0.1),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          color: Colors.white,
           child: Container(
-            decoration: highlightedPostId == postId 
-                ? BoxDecoration(
-                    border: Border.all(color: deepRed, width: 2),
-                    borderRadius: BorderRadius.circular(12),
-                  )
-                : null,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              gradient: highlightedPostId == postId 
+                  ? LinearGradient(
+                      colors: [Colors.yellow[50]!, Colors.white],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : null,
+              border: highlightedPostId == postId 
+                  ? Border.all(color: deepRed, width: 2)
+                  : null,
+            ),
             child: Padding(
-              padding: EdgeInsets.all(12),
+              padding: EdgeInsets.all(16),
               child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundImage: profilePic != null && profilePic.toString().isNotEmpty
-                          ? NetworkImage(profilePic)
-                          : AssetImage('assets/logo.png') as ImageProvider,
+                    Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: CircleAvatar(
+                        radius: 22,
+                        backgroundColor: Colors.grey[200],
+                        backgroundImage: profilePic != null && profilePic.toString().isNotEmpty
+                            ? NetworkImage(profilePic)
+                            : AssetImage('assets/logo.png') as ImageProvider,
+                      ),
                     ),
-                    SizedBox(width: 10),
+                    SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
+                          Wrap(
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 8,
+                            runSpacing: 4,
                             children: [
                               Text(
                                 userName,
-                                style: TextStyle(fontWeight: FontWeight.bold),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 16,
+                                  color: Colors.black87,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              SizedBox(width: 8),
-                              Text(
-                                timeAgo,
-                                style: TextStyle(fontSize: 12, color: Colors.grey),
+                              GestureDetector(
+                                onTap: () {
+                                  // Show detailed timestamp on tap
+                                  showDialog(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: Text('Posted Time'),
+                                      content: Text(getDetailedPhilippinesTime(createdAt)),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(context),
+                                          child: Text('OK'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey[100],
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    timeAgo,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
                               ),
-                              SizedBox(width: 8),
                               // Post type label
                               if (post['type'] != null && post['type'].toString().isNotEmpty)
                                 Container(
-                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(
-                                    color: post['type'] == 'general'
-                                        ? Colors.blue[400]
-                                        : post['type'] == 'missing'
-                                            ? Colors.red[400]
-                                            : post['type'] == 'found'
-                                                ? Colors.green[400]
-                                                : Colors.grey[400],
-                                    borderRadius: BorderRadius.circular(12),
+                                    gradient: LinearGradient(
+                                      colors: post['type'] == 'general'
+                                          ? [Colors.blue[400]!, Colors.blue[600]!]
+                                          : post['type'] == 'missing'
+                                              ? [Colors.red[400]!, Colors.red[600]!]
+                                              : post['type'] == 'found'
+                                                  ? [Colors.green[400]!, Colors.green[600]!]
+                                                  : [Colors.grey[400]!, Colors.grey[600]!],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.1),
+                                        blurRadius: 2,
+                                        offset: Offset(0, 1),
+                                      ),
+                                    ],
                                   ),
-                                  child: Text(
-                                    post['type'].toString().toUpperCase(),
-                                    style: TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        post['type'] == 'general'
+                                            ? Icons.forum
+                                            : post['type'] == 'missing'
+                                                ? Icons.search
+                                                : post['type'] == 'found'
+                                                    ? Icons.pets
+                                                    : Icons.info,
+                                        size: 10,
+                                        color: Colors.white,
+                                      ),
+                                      SizedBox(width: 3),
+                                      Text(
+                                        post['type'].toString().toUpperCase(),
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                             ],
                           ),
+                          SizedBox(height: 6),
                           Container(
-                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: userRole == 'Pet Owner' ? sitterColor : ownerColor,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              userRole,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.white,
+                              gradient: LinearGradient(
+                                colors: userRole == 'Pet Owner' 
+                                    ? [sitterColor, sitterColor.withOpacity(0.8)]
+                                    : [ownerColor, ownerColor.withOpacity(0.8)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
                               ),
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 2,
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  userRole == 'Pet Owner' ? Icons.pets : Icons.person,
+                                  size: 12,
+                                  color: Colors.white,
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  userRole,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -1474,170 +2173,87 @@ void showEditPostModal(Map post) {
                               ],
                             )
                           : IconButton(
-                              icon: Icon(Icons.report_gmailerrorred, color: Colors.deepOrange),
-                              tooltip: 'Report',
-                              onPressed: () async {
-                                final List<String> violationTypes = [
-                                  'Unattended or Missing Pet Reports',
-                                  'Irresponsible Sitter Behavior',
-                                  'False or Misleading Posts',
-                                  'Inappropriate Content',
-                                  'Pet Endangerment',
-                                  'Uncontrolled Aggressive Pets',
-                                  'Neglect or Poor Care Practices',
-                                  'Unauthorized Job Postings',
-                                  'Violation of Local Pet Rules',
-                                  'Abandonment or Abuse Alerts',
-                                  'Other',
-                                ];
-                                String selectedViolation = violationTypes[0];
-                                TextEditingController otherController = TextEditingController();
-                                FocusNode otherFocusNode = FocusNode();
-                                await showDialog(
-                                  context: context,
-                                  builder: (context) {
-                                    return StatefulBuilder(
-                                      builder: (context, setState) {
-                                        // Auto-focus the input when 'Other' is selected
-                                        if (selectedViolation == 'Other') {
-                                          Future.delayed(Duration(milliseconds: 100), () {
-                                            if (!otherFocusNode.hasFocus) {
-                                              otherFocusNode.requestFocus();
-                                            }
-                                          });
-                                        }
-                                        return AlertDialog(
-                                          title: Text('Report Post'),
-                                          content: SingleChildScrollView(
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text('Select violation type:'),
-                                                SizedBox(height: 8),
-                                                Column(
-                                                  children: violationTypes.map((type) {
-                                                    final bool isSelected = selectedViolation == type;
-                                                    return GestureDetector(
-                                                      onTap: () {
-                                                        setState(() => selectedViolation = type);
-                                                        if (type == 'Other') {
-                                                          Future.delayed(Duration(milliseconds: 100), () {
-                                                            if (!otherFocusNode.hasFocus) {
-                                                              otherFocusNode.requestFocus();
-                                                            }
-                                                          });
-                                                        }
-                                                      },
-                                                      child: Container(
-                                                        margin: EdgeInsets.symmetric(vertical: 4),
-                                                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                                        decoration: BoxDecoration(
-                                                          border: Border.all(
-                                                            color: isSelected ? Colors.deepOrange : Colors.grey,
-                                                            width: 2,
-                                                          ),
-                                                          borderRadius: BorderRadius.circular(8),
-                                                          color: isSelected ? Colors.deepOrange.withOpacity(0.08) : Colors.transparent,
-                                                        ),
-                                                        child: Row(
-                                                          children: [
-                                                            Icon(
-                                                              isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                                                              color: isSelected ? Colors.deepOrange : Colors.grey,
-                                                            ),
-                                                            SizedBox(width: 10),
-                                                            Expanded(child: Text(type, style: TextStyle(color: Colors.black))),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    );
-                                                  }).toList(),
-                                                ),
-                                                if (selectedViolation == 'Other') ...[
-                                                  SizedBox(height: 8),
-                                                  TextField(
-                                                    controller: otherController,
-                                                    focusNode: otherFocusNode,
-                                                    decoration: InputDecoration(
-                                                      hintText: 'Describe the violation',
-                                                      border: OutlineInputBorder(),
-                                                    ),
-                                                    maxLines: 2,
-                                                  ),
-                                                ],
-                                              ],
-                                            ),
-                                          ),
-                                          actions: [
-                                            TextButton(
-                                              onPressed: () => Navigator.pop(context),
-                                              child: Text('Cancel'),
-                                            ),
-                                            ElevatedButton(
-                                              onPressed: () async {
-                                                String reason = selectedViolation == 'Other'
-                                                    ? otherController.text.trim()
-                                                    : selectedViolation;
-                                                if (reason.isEmpty) {
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(content: Text('Please specify the violation.')),
-                                                  );
-                                                  return;
-                                                }
-                                                try {
-                                                  await Supabase.instance.client
-                                                      .from('reports')
-                                                      .insert({
-                                                    'post_id': post['id'],
-                                                    'user_id': widget.userId,
-                                                    'reason': reason,
-                                                    'created_at': DateTime.now().toIso8601String(),
-                                                  });
-                                                  // Update the reported column in community_posts
-                                                  await Supabase.instance.client
-                                                      .from('community_posts')
-                                                      .update({'reported': true})
-                                                      .eq('id', post['id']);
-                                                  Navigator.pop(context);
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(content: Text('Report submitted. Thank you!')),
-                                                  );
-                                                } catch (e) {
-                                                  Navigator.pop(context);
-                                                  ScaffoldMessenger.of(context).showSnackBar(
-                                                    SnackBar(content: Text('Failed to submit report. Please try again.')),
-                                                  );
-                                                }
-                                              },
-                                              child: Text('Submit'),
-                                            ),
-                                          ],
-                                        );
-                                      },
-                                    );
-                                  },
-                                );
-                              },
+                              icon: Icon(Icons.report_outlined, color: Colors.deepOrange),
+                              tooltip: 'Report Post',
+                              onPressed: () => _showReportModal(context, post),
                             ),
                     ),
                   ],
                 ),
-                SizedBox(height: 10),
-                buildTextWithMentions(post['content'] ?? ''),
-                SizedBox(height: 10),
+                SizedBox(height: 12),
+                Container(
+                  padding: EdgeInsets.all(2),
+                  child: buildTextWithMentions(post['content'] ?? ''),
+                ),
+                SizedBox(height: 12),
                 if (post['image_url'] != null)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(post['image_url'], fit: BoxFit.cover),
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        post['image_url'],
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            height: 200,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: deepRed,
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                        loadingProgress.expectedTotalBytes!
+                                    : null,
+                              ),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            height: 200,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[200],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.error_outline, color: Colors.grey[600]),
+                                  SizedBox(height: 8),
+                                  Text('Failed to load image', style: TextStyle(color: Colors.grey[600])),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                   ),
-                SizedBox(height: 10),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                SizedBox(height: 12),
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.spaceAround,
                   children: [
                     Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
+                          iconSize: 20,
+                          padding: EdgeInsets.all(4),
+                          constraints: BoxConstraints(minWidth: 32, minHeight: 32),
                           icon: Icon(
                             (likedPosts[postId] ?? false) ? Icons.favorite : Icons.favorite_border,
                             color: (likedPosts[postId] ?? false) ? Colors.red : deepRed,
@@ -1712,12 +2328,20 @@ void showEditPostModal(Map post) {
                           },
                         ),
                         if (likeCount > 0)
-                          Text('$likeCount'),
+                          Text(
+                            '$likeCount', 
+                            style: TextStyle(fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                       ],
                     ),
                     Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
+                          iconSize: 20,
+                          padding: EdgeInsets.all(4),
+                          constraints: BoxConstraints(minWidth: 32, minHeight: 32),
                           icon: Icon(Icons.comment_outlined, color: deepRed),
                           onPressed: () {
                             // Any user can comment on any post
@@ -1726,10 +2350,17 @@ void showEditPostModal(Map post) {
                             });
                           },
                         ),
-                                  Text('${_getCommentCount(postId)} comments'),
+                        Text(
+                          '${_getCommentCount(postId)} comments',
+                          style: TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
                     IconButton(
+                      iconSize: 20,
+                      padding: EdgeInsets.all(4),
+                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
                       icon: Icon(
                         bookmarkedPosts[postId] == true ? Icons.bookmark : Icons.bookmark_border,
                         color: deepRed,
@@ -1793,26 +2424,50 @@ void showEditPostModal(Map post) {
                               final isLiked = commentLikes.any((like) => like['user_id'] == widget.userId);
                               likedComments[commentId] = isLiked;
 
-                              return Card(
-                                elevation: 1,
-                                margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                              return Container(
+                                margin: EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.05),
+                                      blurRadius: 4,
+                                      offset: Offset(0, 2),
+                                    ),
+                                  ],
+                                  border: Border.all(color: Colors.grey[200]!),
+                                ),
                                 child: Stack(
                                   children: [
                                     Padding(
-                                      padding: EdgeInsets.all(8),
+                                      padding: EdgeInsets.all(12),
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                       Row(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          CircleAvatar(
-                                            radius: 16,
-                                            backgroundImage: commentProfilePic != null && commentProfilePic.toString().isNotEmpty
-                                                ? NetworkImage(commentProfilePic)
-                                                : AssetImage('assets/logo.png') as ImageProvider,
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: Colors.black.withOpacity(0.1),
+                                                  blurRadius: 3,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ],
+                                            ),
+                                            child: CircleAvatar(
+                                              radius: 18,
+                                              backgroundColor: Colors.grey[200],
+                                              backgroundImage: commentProfilePic != null && commentProfilePic.toString().isNotEmpty
+                                                  ? NetworkImage(commentProfilePic)
+                                                  : AssetImage('assets/logo.png') as ImageProvider,
+                                            ),
                                           ),
-                                          SizedBox(width: 8),
+                                          SizedBox(width: 10),
                                           Expanded(
                                             child: Column(
                                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1824,15 +2479,30 @@ void showEditPostModal(Map post) {
                                                       children: [
                                                         Text(
                                                           user['name'] ?? 'Unknown',
-                                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                                          style: TextStyle(
+                                                            fontWeight: FontWeight.w600,
+                                                            fontSize: 14,
+                                                            color: Colors.black87,
+                                                          ),
                                                         ),
                                                         SizedBox(width: 8),
-                                                        Text(
-                                                          _getTimeAgo(
-                                                            DateTime.tryParse((comment['created_at'] ?? '').toString()) ??
-                                                            DateTime.now(),
+                                                        Container(
+                                                          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.grey[100],
+                                                            borderRadius: BorderRadius.circular(6),
                                                           ),
-                                                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                          child: Text(
+                                                            _getTimeAgo(
+                                                              DateTime.tryParse((comment['created_at'] ?? '').toString()) ??
+                                                              DateTime.now(),
+                                                            ),
+                                                            style: TextStyle(
+                                                              fontSize: 11,
+                                                              color: Colors.grey[600],
+                                                              fontWeight: FontWeight.w500,
+                                                            ),
+                                                          ),
                                                         ),
                                                       ],
                                                     ),
@@ -1954,16 +2624,25 @@ void showEditPostModal(Map post) {
                                                       ),
                                                   ],
                                                 ),
-                                                SizedBox(height: 4),
-                                                buildTextWithMentions(comment['content'] ?? ''),
+                                                SizedBox(height: 6),
+                                                Container(
+                                                  padding: EdgeInsets.only(left: 2, right: 2),
+                                                  child: buildTextWithMentions(comment['content'] ?? ''),
+                                                ),
                                               ],
                                             ),
                                           ),
                                         ],
                                       ),
-                                      Padding(
-                                        padding: EdgeInsets.only(left: 40, top: 8),
+                                      Container(
+                                        margin: EdgeInsets.only(left: 44, top: 8),
+                                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey[50],
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
                                         child: Row(
+                                          mainAxisSize: MainAxisSize.min,
                                           children: [
                                             InkWell(
                                               onTap: () async {
@@ -2240,42 +2919,253 @@ void showEditPostModal(Map post) {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFFCB4154),
-        title: Text('Community', style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: deepRed,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: false,
+        title: Row(
+          children: [
+            SizedBox(width: 8),
+            Text(
+              'Community',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 20,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
+          Container(
+            margin: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 4,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: selectedFilter,
                 isDense: true,
                 style: const TextStyle(color: Colors.white),
                 alignment: Alignment.center,
-                items: ['all', 'missing', 'found', 'my posts']
-                    .map(
-                      (type) => DropdownMenuItem(
-                        value: type,
-                        child: Text(
-                          type[0].toUpperCase() + type.substring(1),
-                          style: TextStyle(color: Colors.black),
-                        ),
+                borderRadius: BorderRadius.circular(12),
+                menuMaxHeight: 300,
+                items: [
+                  DropdownMenuItem(
+                    value: 'all',
+                    child: Container(
+                      width: 200, // Fixed width to prevent overflow
+                      child: Row(
+                        children: [
+                          Icon(Icons.dashboard, color: deepRed, size: 16),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'All Posts',
+                                  style: TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  'Show all community posts',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 11,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    )
-                    .toList(),
+                    ),
+                  ),
+                  DropdownMenuItem(
+                    value: 'missing',
+                    child: Container(
+                      width: 200, // Fixed width to prevent overflow
+                      child: Row(
+                        children: [
+                          Icon(Icons.search, color: Colors.orange[700], size: 16),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Missing Pets',
+                                  style: TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  'Posts about lost pets',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 11,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  DropdownMenuItem(
+                    value: 'found',
+                    child: Container(
+                      width: 200, // Fixed width to prevent overflow
+                      child: Row(
+                        children: [
+                          Icon(Icons.pets, color: Colors.green[700], size: 16),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Found Pets',
+                                  style: TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  'Posts about found pets',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 11,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  DropdownMenuItem(
+                    value: 'my posts',
+                    child: Container(
+                      width: 200, // Fixed width to prevent overflow
+                      child: Row(
+                        children: [
+                          Icon(Icons.person, color: deepRed, size: 16),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'My Posts',
+                                  style: TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  'Only your posts',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 11,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
                 onChanged: (val) {
                   if (val != null) {
                     setState(() => selectedFilter = val);
                   }
                 },
-                icon: Icon(Icons.filter_list, color: Colors.white),
+                icon: Icon(Icons.tune, color: Colors.white, size: 20),
                 dropdownColor: Colors.white,
+                elevation: 8,
                 selectedItemBuilder: (context) {
                   return ['all', 'missing', 'found', 'my posts'].map((type) {
-                    return Align(
+                    IconData getFilterIcon() {
+                      switch (type) {
+                        case 'all':
+                          return Icons.dashboard;
+                        case 'missing':
+                          return Icons.search;
+                        case 'found':
+                          return Icons.pets;
+                        case 'my posts':
+                          return Icons.person;
+                        default:
+                          return Icons.filter_list;
+                      }
+                    }
+                    
+                    String getFilterLabel() {
+                      switch (type) {
+                        case 'all':
+                          return 'All Posts';
+                        case 'missing':
+                          return 'Missing';
+                        case 'found':
+                          return 'Found';
+                        case 'my posts':
+                          return 'My Posts';
+                        default:
+                          return type[0].toUpperCase() + type.substring(1);
+                      }
+                    }
+                    
+                    return Container(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
                       alignment: Alignment.center,
-                      child: Text(
-                        type[0].toUpperCase() + type.substring(1),
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            getFilterIcon(),
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                          SizedBox(width: 6),
+                          Text(
+                            getFilterLabel(),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                       ),
                     );
                   }).toList();
@@ -2283,18 +3173,42 @@ void showEditPostModal(Map post) {
               ),
             ),
           ),
-          IconButton(
-            icon: Icon(Icons.notifications),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const NotificationScreen(),
-                ),
-              );
-            },
+          Container(
+            margin: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: IconButton(
+              icon: Icon(
+                Icons.notifications_outlined,
+                color: Colors.white,
+                size: 22,
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const NotificationScreen(),
+                  ),
+                );
+              },
+              tooltip: 'Notifications',
+            ),
           ),
         ],
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                deepRed,
+                deepRed.withOpacity(0.8),
+              ],
+            ),
+          ),
+        ),
       ),
       body: isLoading
           ? Center(child: CircularProgressIndicator())
@@ -2318,7 +3232,10 @@ void showEditPostModal(Map post) {
   }
 
   String _getTimeAgo(DateTime dateTime) {
-    final difference = DateTime.now().difference(dateTime);
+    // Assume the input dateTime is in UTC and convert to Philippines time
+    final phTime = convertToPhilippinesTime(dateTime);
+    final now = convertToPhilippinesTime(DateTime.now().toUtc());
+    final difference = now.difference(phTime);
     
     if (difference.inMinutes < 1) {
       return 'Just now';
@@ -2329,7 +3246,8 @@ void showEditPostModal(Map post) {
     } else if (difference.inDays < 7) {
       return '${difference.inDays}d';
     } else {
-      return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
+      final formatter = DateFormat('MMM d, y');
+      return formatter.format(phTime);
     }
   }
 

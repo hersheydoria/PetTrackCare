@@ -89,7 +89,7 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
-    backgroundColor: Colors.transparent,
+    backgroundColor: lightBlush,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
@@ -338,20 +338,43 @@ Future<void> pickAndUploadImage() async {
                           showModalBottomSheet(
                             context: context,
                             isScrollControlled: true,
+                            backgroundColor: lightBlush,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                             ),
                             builder: (context) {
-                              return Padding(
-                                padding: EdgeInsets.only(
-                                  bottom: MediaQuery.of(context).viewInsets.bottom,
-                                  top: 24,
-                                  left: 16,
-                                  right: 16,
+                              return Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.white,
+                                      lightBlush.withOpacity(0.2),
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.1),
+                                      blurRadius: 20,
+                                      offset: Offset(0, -5),
+                                    ),
+                                  ],
                                 ),
-                                child: _AddPetForm(
-                                  onPetAdded: () => setState(() {}),
-                                  initialPet: pet,
+                                child: SafeArea(
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      bottom: MediaQuery.of(context).viewInsets.bottom,
+                                      top: 20,
+                                      left: 24,
+                                      right: 24,
+                                    ),
+                                    child: _AddPetForm(
+                                      onPetAdded: () => setState(() {}),
+                                      initialPet: pet,
+                                    ),
+                                  ),
                                 ),
                               );
                             },
@@ -773,7 +796,7 @@ Future<void> pickAndUploadImage() async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -1127,7 +1150,7 @@ Future<void> pickAndUploadImage() async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -1451,7 +1474,7 @@ Future<void> pickAndUploadImage() async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -1944,7 +1967,7 @@ Future<void> pickAndUploadImage() async {
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
+        backgroundColor: lightBlush,
         child: Container(
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
           decoration: BoxDecoration(
@@ -2135,7 +2158,7 @@ Future<void> pickAndUploadImage() async {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => Dialog(
-          backgroundColor: Colors.transparent,
+          backgroundColor: lightBlush,
           child: Container(
             constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
             decoration: BoxDecoration(
@@ -2412,7 +2435,7 @@ Future<void> pickAndUploadImage() async {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -2730,7 +2753,7 @@ Future<void> pickAndUploadImage() async {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -3042,7 +3065,7 @@ Future<void> pickAndUploadImage() async {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),

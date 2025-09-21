@@ -75,6 +75,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   double? _sleepHours;
   String? _notes;
 
+  // Latest mood from behavior logs for display in health status
+  String? _latestMood;
+
   // illness risk returned by backend (high/low/null)
   String? _illnessRisk;
   // numeric sleep forecast (7 days) returned by backend
@@ -128,9 +131,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     'Lethargic': '😴',
   };
   final Map<String, String> _activityEmojis = {
-    'High': '🏃',
-    'Medium': '🚶',
-    'Low': '🛋️',
+    'High': '🐕',
+    'Medium': '🐾',
+    'Low': '🐶',
   };
 
   late TextEditingController _sleepController;
@@ -376,8 +379,43 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       });
     }
 
+    // Fetch latest mood from behavior logs
+    await _fetchLatestMood();
+
     // also refresh calendar markers
     await _fetchBehaviorDates();
+  }
+
+  // Fetch the latest mood from behavior logs
+  Future<void> _fetchLatestMood() async {
+    if (_selectedPet == null) return;
+    try {
+      final petId = _selectedPet!['id'];
+      final response = await Supabase.instance.client
+          .from('behavior_logs')
+          .select('mood')
+          .eq('pet_id', petId)
+          .not('mood', 'is', null)
+          .order('log_date', ascending: false)
+          .limit(1);
+
+      final data = response as List?;
+      if (data != null && data.isNotEmpty) {
+        final latestLog = data.first as Map<String, dynamic>;
+        setState(() {
+          _latestMood = latestLog['mood']?.toString();
+        });
+      } else {
+        setState(() {
+          _latestMood = null;
+        });
+      }
+    } catch (e) {
+      print('Error fetching latest mood: $e');
+      setState(() {
+        _latestMood = null;
+      });
+    }
   }
 
   // fetch behavior log dates for the selected pet and populate _events with a marker
@@ -7512,6 +7550,7 @@ void _disconnectDevice() async {
                               // Refresh data
                               await _fetchBehaviorDates();
                               await _fetchAnalyzeFromBackend();
+                              await _fetchLatestMood(); // Refresh latest mood for health status
 
                               // Show success feedback
                               if (mounted) {
@@ -7794,8 +7833,15 @@ void _disconnectDevice() async {
                     child: _buildCompactStatCard(
                       icon: Icons.mood,
                       title: 'Mood',
-                      value: 'Happy',
-                      color: Colors.orange,
+                      value: _latestMood != null ? 
+                        '${_moodEmojis[_latestMood!] ?? ''} $_latestMood' : 'Unknown',
+                      color: _latestMood != null ? 
+                        (_latestMood == 'Happy' ? Colors.green :
+                         _latestMood == 'Anxious' ? Colors.orange :
+                         _latestMood == 'Aggressive' ? Colors.red :
+                         _latestMood == 'Calm' ? Colors.blue :
+                         _latestMood == 'Lethargic' ? Colors.grey :
+                         Colors.orange) : Colors.grey,
                     ),
                   ),
                 ],

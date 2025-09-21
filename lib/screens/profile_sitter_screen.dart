@@ -85,7 +85,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -474,7 +474,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -752,7 +752,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -1186,7 +1186,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
+        backgroundColor: lightBlush,
         child: Container(
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
           decoration: BoxDecoration(
@@ -1354,7 +1354,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => Dialog(
-          backgroundColor: Colors.transparent,
+          backgroundColor: lightBlush,
           child: Container(
             constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
             decoration: BoxDecoration(
@@ -1631,7 +1631,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -1956,7 +1956,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -2267,7 +2267,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: lightBlush,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
