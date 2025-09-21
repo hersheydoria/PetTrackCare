@@ -20,6 +20,7 @@ dependencies:
   latlong2: any
   geocoding: ^4.0.0
   image_picker: ^1.0.5
+  image: ^4.2.0
   path: ^1.9.0
   cupertino_icons: ^1.0.8
   flutter_sound: ^9.2.13+1

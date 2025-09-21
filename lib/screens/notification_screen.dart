@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
 import '../services/notification_service.dart';
+import 'chat_detail_screen.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -212,7 +213,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
       if (notificationType != null && notificationType.startsWith('job_')) {
         if (!mounted) return;
         Navigator.of(context).pushNamedAndRemoveUntil(
-          '/main',
+          '/home',
           (route) => false,
           arguments: {'initialTab': 0}, // Home tab
         );
@@ -502,12 +503,46 @@ class _NotificationScreenState extends State<NotificationScreen> {
     await _markAsRead(n['id'].toString());
     
     final type = n['type']?.toString() ?? '';
+    final actorId = n['actor_id']?.toString();
+    
+    print('In-app notification tapped: type=$type, actorId=$actorId');
+    
+    // Handle message notifications - navigate to chat
+    if (type == 'message' && actorId != null) {
+      // Get sender name for navigation
+      String senderName = 'Chat';
+      try {
+        final userResponse = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', actorId)
+            .single();
+        senderName = userResponse['name'] as String? ?? 'Chat';
+      } catch (e) {
+        print('Error getting sender name: $e');
+      }
+      
+      print('Navigating to chat with senderId=$actorId, senderName=$senderName');
+      final currentUser = supabase.auth.currentUser;
+      if (currentUser != null) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChatDetailScreen(
+              userId: currentUser.id,
+              receiverId: actorId,
+              userName: senderName,
+            ),
+          ),
+        );
+      }
+      return;
+    }
     
     // Handle job notifications differently - navigate to home screen jobs section
     if (type.startsWith('job_')) {
       // Navigate to home screen which shows job management
       Navigator.of(context).pushNamedAndRemoveUntil(
-        '/main', // Assuming main screen route
+        '/home', // Correct route for main navigation
         (route) => false,
         arguments: {'initialTab': 0}, // Home tab
       );
@@ -516,7 +551,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     
     // Handle regular post-related notifications
     final postId = await _extractPostIdAsync(n);
-    print('Notification tapped: postId=$postId');
+    print('Post-related notification tapped: postId=$postId');
     if (postId != null && postId.isNotEmpty) {
       Navigator.of(context).pushNamed(
         '/postDetail',

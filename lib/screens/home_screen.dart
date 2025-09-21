@@ -313,7 +313,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (sitterId != null) {
         final res = await supabase
             .from('sitter_reviews')
-            .select()
+            .select('*, users!reviewer_id(name, profile_picture)')
             .eq('sitter_id', sitterId)
             .order('created_at', ascending: false)
             .limit(10);
@@ -325,7 +325,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       // Useful when direct reads to sitters are restricted by RLS.
       final fallback = await supabase
           .from('sitter_reviews')
-          .select('id, rating, comment, created_at, owner_name, sitters!inner(user_id)')
+          .select('id, rating, comment, created_at, owner_name, reviewer_id, users!reviewer_id(name, profile_picture), sitters!inner(user_id)')
           .eq('sitters.user_id', widget.userId)
           .order('created_at', ascending: false)
           .limit(10);
@@ -358,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (sitterId != null) {
         final res = await supabase
             .from('sitter_reviews')
-            .select()
+            .select('*, users!reviewer_id(name, profile_picture)')
             .eq('sitter_id', sitterId)
             .order('created_at', ascending: false)
             .limit(20);
@@ -367,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       // Fallback join via sitters.user_id
       final res = await supabase
           .from('sitter_reviews')
-          .select('id, rating, comment, created_at, owner_name, sitters!inner(user_id)')
+          .select('id, rating, comment, created_at, owner_name, reviewer_id, users!reviewer_id(name, profile_picture), sitters!inner(user_id)')
           .eq('sitters.user_id', sitterUserId)
           .order('created_at', ascending: false)
           .limit(20);
@@ -467,18 +467,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 ),
                               ),
                             ],
-                          ),
-                        ),
-                        Container(
-                          padding: EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 20,
                           ),
                         ),
                       ],
@@ -1930,7 +1918,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             controller: _locationSearchController,
             decoration: InputDecoration(
               hintText: 'Search Sitters by Location',
-              hintStyle: TextStyle(fontFamily: 'Roboto'),
+              hintStyle: TextStyle(
+                fontFamily: 'Roboto',
+                color: Colors.grey[600],
+              ),
               prefixIcon: Icon(Icons.search, color: coral),
               suffixIcon: _currentSearchQuery.isNotEmpty 
                   ? IconButton(
@@ -2757,6 +2748,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final owner = (review['owner_name'] ?? 'Pet Owner').toString();
     final createdAt = review['created_at']?.toString();
     
+    // Get reviewer info from joined users table
+    final reviewerData = review['users'] as Map<String, dynamic>?;
+    final reviewerName = reviewerData?['name']?.toString() ?? owner;
+    final reviewerProfilePicture = reviewerData?['profile_picture']?.toString();
+    
     String timeAgo = 'Recently';
     if (createdAt != null) {
       try {
@@ -2840,30 +2836,69 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             SizedBox(height: 12),
           ],
           
-          // Owner info
+          // Owner info with profile picture
           Row(
             children: [
+              // Profile picture or default avatar
               Container(
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [coral, peach],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
                   shape: BoxShape.circle,
+                  border: Border.all(color: coral.withOpacity(0.3)),
                 ),
-                child: Center(
-                  child: Text(
-                    owner.isNotEmpty ? owner[0].toUpperCase() : 'O',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontFamily: 'Roboto',
-                    ),
-                  ),
+                child: ClipOval(
+                  child: reviewerProfilePicture != null && reviewerProfilePicture.isNotEmpty
+                      ? Image.network(
+                          reviewerProfilePicture,
+                          width: 32,
+                          height: 32,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [coral, peach],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  reviewerName.isNotEmpty ? reviewerName[0].toUpperCase() : 'O',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    fontFamily: 'Roboto',
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        )
+                      : Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [coral, peach],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              reviewerName.isNotEmpty ? reviewerName[0].toUpperCase() : 'O',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                fontFamily: 'Roboto',
+                              ),
+                            ),
+                          ),
+                        ),
                 ),
               ),
               SizedBox(width: 8),
@@ -2872,7 +2907,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      owner,
+                      reviewerName,
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         color: deepRed,
