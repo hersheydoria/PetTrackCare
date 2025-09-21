@@ -1,10 +1,14 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:convert';
 
 // Initialize local notifications plugin
 final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+
+// Global realtime channel for notifications
+RealtimeChannel? _globalNotificationChannel;
 
 /// Initialize system notifications (Android only)
 Future<void> initializeSystemNotifications() async {
@@ -31,7 +35,276 @@ Future<void> initializeSystemNotifications() async {
     
     // Test notification to verify setup
     await _showTestNotification();
+    
+    // Setup global realtime subscription for system notifications
+    await _setupGlobalNotificationSubscription();
+    
+    // Setup app lifecycle monitoring for background notifications
+    _setupAppLifecycleMonitoring();
   }
+}
+
+/// Setup app lifecycle monitoring for background notification handling
+void _setupAppLifecycleMonitoring() {
+  print('📱 Setting up app lifecycle monitoring for background notifications');
+  
+  // Listen to app lifecycle changes
+  WidgetsBinding.instance.addObserver(_AppLifecycleObserver());
+}
+
+/// App lifecycle observer for background notification handling
+class _AppLifecycleObserver extends WidgetsBindingObserver {
+  DateTime? _lastBackgroundTime;
+  
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    print('📱 App lifecycle state changed: $state');
+    
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // App going to background or being closed
+        _lastBackgroundTime = DateTime.now();
+        print('📱 App went to background at: $_lastBackgroundTime');
+        break;
+        
+      case AppLifecycleState.resumed:
+        // App coming back to foreground
+        print('📱 App resumed from background');
+        if (_lastBackgroundTime != null) {
+          final backgroundDuration = DateTime.now().difference(_lastBackgroundTime!);
+          print('📱 App was in background for: ${backgroundDuration.inSeconds} seconds');
+          
+          // Check for missed notifications if app was in background for more than 5 seconds
+          if (backgroundDuration.inSeconds > 5) {
+            _checkMissedNotifications(_lastBackgroundTime!);
+          }
+        }
+        
+        // Reconnect realtime subscription in case it was dropped
+        _reconnectRealtimeSubscription();
+        break;
+        
+      case AppLifecycleState.inactive:
+        // App is inactive but still visible (e.g., phone call overlay)
+        print('📱 App became inactive');
+        break;
+        
+      case AppLifecycleState.hidden:
+        // App is hidden but still running
+        print('📱 App is hidden');
+        break;
+    }
+  }
+}
+
+/// Check for notifications that might have been missed while app was in background
+Future<void> _checkMissedNotifications(DateTime since) async {
+  final currentUser = Supabase.instance.client.auth.currentUser;
+  if (currentUser == null) return;
+  
+  print('🔍 Checking for missed notifications since: $since');
+  
+  try {
+    final response = await Supabase.instance.client
+        .from('notifications')
+        .select()
+        .eq('user_id', currentUser.id)
+        .eq('is_read', false)
+        .gte('created_at', since.toIso8601String())
+        .order('created_at', ascending: false);
+    
+    final missedNotifications = List<Map<String, dynamic>>.from(response);
+    print('📬 Found ${missedNotifications.length} missed notifications');
+    
+    // Show system notifications for missed notifications
+    for (final notification in missedNotifications) {
+      await _showMissedNotification(notification);
+      
+      // Add small delay between notifications to avoid overwhelming
+      await Future.delayed(Duration(milliseconds: 500));
+    }
+  } catch (e) {
+    print('❌ Error checking missed notifications: $e');
+  }
+}
+
+/// Show system notification for a missed notification
+Future<void> _showMissedNotification(Map<String, dynamic> notification) async {
+  String title = '🔔 Missed Notification';
+  String body = notification['message']?.toString() ?? '';
+  String? type = notification['type']?.toString();
+  
+  // Customize title based on type
+  switch (type) {
+    case 'like':
+      title = '❤️ New Like (while away)';
+      break;
+    case 'comment':
+      title = '💬 New Comment (while away)';
+      break;
+    case 'message':
+      title = '💬 New Message (while away)';
+      break;
+    case 'job_request':
+      title = '🐕 Job Request (while away)';
+      break;
+    case 'job_accepted':
+      title = '✅ Job Accepted (while away)';
+      break;
+    case 'missing_pet':
+      title = '🚨 Missing Pet Alert (while away)';
+      break;
+    case 'found_pet':
+      title = '✅ Pet Found (while away)';
+      break;
+    default:
+      title = '🔔 Missed Notification';
+      break;
+  }
+  
+  // Prepare payload
+  final payloadMap = <String, dynamic>{};
+  if (notification['id'] != null) payloadMap['notificationId'] = notification['id'].toString();
+  if (notification['post_id'] != null) payloadMap['postId'] = notification['post_id'].toString();
+  if (notification['job_id'] != null) payloadMap['jobId'] = notification['job_id'].toString();
+  if (notification['type'] != null) payloadMap['type'] = notification['type'].toString();
+  if (notification['actor_id'] != null) payloadMap['senderId'] = notification['actor_id'].toString();
+  
+  final payloadJson = json.encode(payloadMap);
+  
+  print('📬 Showing missed notification: $title');
+  
+  // Show the notification
+  await showSystemNotification(
+    title: title,
+    body: body.isNotEmpty ? body : title,
+    type: type,
+    recipientId: Supabase.instance.client.auth.currentUser?.id,
+    payload: payloadJson,
+  );
+}
+
+/// Reconnect realtime subscription (in case it was dropped while in background)
+Future<void> _reconnectRealtimeSubscription() async {
+  print('🔄 Reconnecting realtime subscription after resuming from background');
+  await _setupGlobalNotificationSubscription();
+}
+
+/// Setup global realtime subscription for system notifications
+Future<void> _setupGlobalNotificationSubscription() async {
+  final currentUser = Supabase.instance.client.auth.currentUser;
+  if (currentUser == null) {
+    print('❌ No current user - skipping global notification subscription');
+    return;
+  }
+  
+  final userId = currentUser.id;
+  print('🌐 Setting up global notification subscription for user: $userId');
+  
+  // Dispose existing channel if any
+  if (_globalNotificationChannel != null) {
+    await _globalNotificationChannel!.unsubscribe();
+  }
+  
+  _globalNotificationChannel = Supabase.instance.client.channel('global_notifications_$userId');
+  
+  _globalNotificationChannel!.onPostgresChanges(
+    event: PostgresChangeEvent.insert,
+    schema: 'public',
+    table: 'notifications',
+    filter: PostgresChangeFilter(
+      type: PostgresChangeFilterType.eq,
+      column: 'user_id',
+      value: userId,
+    ),
+    callback: (payload) async {
+      print('🌐 Global realtime notification received!');
+      print('   User ID filter: $userId');
+      print('   Payload: ${payload.newRecord}');
+      
+      final newRow = payload.newRecord;
+      
+      // Build notification title and body
+      String title = '🔔 New Notification';
+      String body = newRow['message']?.toString() ?? '';
+      String? type = newRow['type']?.toString();
+      
+      // Customize title based on type
+      switch (type) {
+        case 'like':
+          title = '❤️ New Like';
+          break;
+        case 'comment':
+          title = '💬 New Comment';
+          break;
+        case 'message':
+          title = '💬 New Message';
+          break;
+        case 'job_request':
+          title = '🐕 Job Request';
+          break;
+        case 'job_accepted':
+          title = '✅ Job Accepted';
+          break;
+        case 'missing_pet':
+          title = '🚨 Missing Pet Alert';
+          break;
+        case 'found_pet':
+          title = '✅ Pet Found';
+          break;
+        default:
+          title = '🔔 New Notification';
+          break;
+      }
+      
+      // Prepare payload for navigation
+      final payloadMap = <String, dynamic>{};
+      if (newRow['id'] != null) payloadMap['notificationId'] = newRow['id'].toString();
+      if (newRow['post_id'] != null) payloadMap['postId'] = newRow['post_id'].toString();
+      if (newRow['job_id'] != null) payloadMap['jobId'] = newRow['job_id'].toString();
+      if (newRow['type'] != null) payloadMap['type'] = newRow['type'].toString();
+      if (newRow['actor_id'] != null) {
+        payloadMap['senderId'] = newRow['actor_id'].toString();
+        // For message notifications, try to get sender name
+        if (type == 'message') {
+          try {
+            final actorResponse = await Supabase.instance.client
+                .from('users')
+                .select('name')
+                .eq('id', newRow['actor_id'])
+                .single();
+            payloadMap['senderName'] = actorResponse['name'] ?? 'Someone';
+          } catch (e) {
+            payloadMap['senderName'] = 'Someone';
+          }
+        }
+      }
+      final payloadJson = json.encode(payloadMap);
+      
+      print('🔔 Showing global system notification: $title');
+      
+      // Show system notification directly
+      await showSystemNotification(
+        title: title,
+        body: body.isNotEmpty ? body : title,
+        type: type,
+        recipientId: userId, // Current user should receive this notification
+        payload: payloadJson,
+      );
+    },
+  );
+  
+  print('🔗 Subscribing to global notification channel...');
+  final subscribeResult = await _globalNotificationChannel!.subscribe();
+  print('📡 Global notification subscription result: $subscribeResult');
+}
+
+/// Reinitialize global notification subscription (call after user login)
+Future<void> reinitializeNotificationSubscription() async {
+  print('🔄 Reinitializing global notification subscription...');
+  await _setupGlobalNotificationSubscription();
 }
 
 /// Show a test notification to verify setup
