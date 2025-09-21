@@ -41,18 +41,29 @@ Future<void> _showSystemNotification({
   required String body,
   String? payload,
   String? type,
+  String? recipientId, // Added recipient ID to check if current user should receive notification
 }) async {
+  // Only show notification if the current user is the intended recipient
+  final currentUser = Supabase.instance.client.auth.currentUser;
+  if (currentUser == null) {
+    print('No current user - skipping system notification');
+    return;
+  }
+  
+  // If recipientId is specified, only show notification to that user
+  if (recipientId != null && currentUser.id != recipientId) {
+    print('System notification not for current user (${currentUser.id}) - intended for $recipientId');
+    return;
+  }
+
   // Check if user has enabled notifications
-  final user = Supabase.instance.client.auth.currentUser;
-  if (user != null) {
-    final metadata = user.userMetadata ?? {};
-    final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
-    final notificationsEnabled = notificationPrefs['enabled'] ?? true;
-    
-    if (!notificationsEnabled) {
-      print('System notifications disabled by user');
-      return;
-    }
+  final metadata = currentUser.userMetadata ?? {};
+  final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+  final notificationsEnabled = notificationPrefs['enabled'] ?? true;
+  
+  if (!notificationsEnabled) {
+    print('System notifications disabled by user');
+    return;
   }
 
   // Configure notification based on type
@@ -169,11 +180,12 @@ Future<void> sendPetAlertToAllUsers({
       print('Error inserting notifications: ${response?['error'] ?? response}');
     }
     
-    // Show system notification for pet alerts
+    // Show system notification for pet alerts (to all users - will be filtered per user)
     await _showSystemNotification(
       title: type == 'missing' ? '🚨 Missing Pet Alert' : '✅ Pet Found',
       body: message,
       type: type == 'missing' ? 'missing_pet' : 'found_pet',
+      recipientId: null, // Pet alerts go to all users, so no specific recipient filtering
       payload: json.encode({
         'type': type == 'missing' ? 'missing_pet' : 'found_pet',
         'postId': postId,
@@ -263,6 +275,7 @@ Future<void> sendJobNotification({
       title: notificationTitle,
       body: message,
       type: type,
+      recipientId: recipientId, // Only show to the intended recipient
       payload: json.encode({
         'type': type,
         'jobId': jobId,
@@ -336,6 +349,7 @@ Future<void> sendCommunityNotification({
       title: notificationTitle,
       body: message,
       type: type,
+      recipientId: recipientId, // Only show to the intended recipient
       payload: json.encode({
         'type': type,
         'postId': postId,
@@ -366,6 +380,7 @@ Future<void> sendMessageNotification({
       title: '💬 $senderName',
       body: messagePreview,
       type: 'message',
+      recipientId: recipientId, // Only show to the message recipient
       payload: json.encode({
         'type': 'message',
         'senderId': senderId,
