@@ -143,10 +143,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
     final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     // Compose a payload so tapping the local notification can navigate to the right place.
-    // We'll include the notification DB id and any postId so NotificationScreen can route.
+    // We'll include the notification DB id, postId, jobId, and type so NotificationScreen can route.
     final payloadMap = <String, dynamic>{};
     if (n['id'] != null) payloadMap['notificationId'] = n['id'].toString();
     if (n['post_id'] != null) payloadMap['postId'] = n['post_id'].toString();
+    if (n['job_id'] != null) payloadMap['jobId'] = n['job_id'].toString();
+    if (n['type'] != null) payloadMap['type'] = n['type'].toString();
     final payload = json.encode(payloadMap);
 
     try {
@@ -163,25 +165,36 @@ class _NotificationScreenState extends State<NotificationScreen> {
       final Map<String, dynamic> map = json.decode(payload) as Map<String, dynamic>;
       final postId = map['postId']?.toString();
       final notificationId = map['notificationId']?.toString();
+      final jobId = map['jobId']?.toString();
+      final notificationType = map['type']?.toString();
 
-      print('System notification tapped: postId=$postId, notificationId=$notificationId');
+      print('System notification tapped: postId=$postId, jobId=$jobId, notificationId=$notificationId, type=$notificationType');
 
       // Mark notification as read if we have an ID
       if (notificationId != null) {
         await _markAsRead(notificationId);
       }
 
+      // Handle job notifications - navigate to home screen
+      if (notificationType != null && notificationType.startsWith('job_')) {
+        if (!mounted) return;
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/main',
+          (route) => false,
+          arguments: {'initialTab': 0}, // Home tab
+        );
+        return;
+      }
+
       // Navigate to post detail if we have a postId
       if (postId != null && postId.isNotEmpty) {
         if (!mounted) return;
-        // Navigate to post detail page
         Navigator.of(context).pushNamed('/postDetail', arguments: {'postId': postId});
         return;
       }
 
-      // If no postId, just stay on the Notifications screen 
-      // (user will see the updated notification list)
-      print('No postId available, staying on notifications screen');
+      // If no specific navigation target, just stay on the Notifications screen 
+      print('No specific navigation target, staying on notifications screen');
     } catch (e) {
       print('Error handling notification payload tap: $e');
     }
@@ -353,6 +366,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
             return '$actorName posted about a missing pet';
           case 'found_pet':
             return '$actorName posted about a found pet';
+          case 'job_request':
+            return '$actorName sent you a job request';
+          case 'job_accepted':
+            return '$actorName accepted your job request';
+          case 'job_declined':
+            return '$actorName declined your job request';
+          case 'job_completed':
+            return '$actorName marked a job as completed';
           default:
             return '$actorName interacted with your content';
         }
@@ -398,49 +419,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
     // Fallback: if no actor_id, don't show user_id as that's the notification recipient
     // Instead return null to show default avatar
     return null;
-  }
-
-  Widget _leadingAvatar(Map<String, dynamic> n, bool read) {
-    final baseAvatar = CircleAvatar(
-      radius: 22,
-      backgroundColor: Colors.grey.shade300,
-      child: const Icon(Icons.person, color: Colors.white),
-    );
-
-    Widget fromUrl(String? url) {
-      if (url == null || url.isEmpty) return baseAvatar;
-      return CircleAvatar(
-        radius: 22,
-        backgroundColor: Colors.transparent,
-        child: ClipOval(
-          child: Image.network(
-            url,
-            width: 44,
-            height: 44,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => baseAvatar,
-          ),
-        ),
-      );
-    }
-
-    final publicUserId = _extractPublicUserId(n);
-    if (publicUserId == null) {
-      return Opacity(opacity: read ? 0.6 : 1.0, child: baseAvatar);
-    }
-
-    final cachedUrl = _avatarCache[publicUserId];
-    if (cachedUrl != null) {
-      return Opacity(opacity: read ? 0.6 : 1.0, child: fromUrl(cachedUrl));
-    }
-
-    return Opacity(
-      opacity: read ? 0.6 : 1.0,
-      child: FutureBuilder<String?>(
-        future: _getProfilePicture(publicUserId),
-        builder: (context, snapshot) => fromUrl(snapshot.data),
-      ),
-    );
   }
 
   DateTime? _parseDate(dynamic v) {
@@ -489,6 +467,21 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   void _handleNotificationTap(BuildContext context, Map<String, dynamic> n) async {
     await _markAsRead(n['id'].toString());
+    
+    final type = n['type']?.toString() ?? '';
+    
+    // Handle job notifications differently - navigate to home screen jobs section
+    if (type.startsWith('job_')) {
+      // Navigate to home screen which shows job management
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/main', // Assuming main screen route
+        (route) => false,
+        arguments: {'initialTab': 0}, // Home tab
+      );
+      return;
+    }
+    
+    // Handle regular post-related notifications
     final postId = await _extractPostIdAsync(n);
     print('Notification tapped: postId=$postId');
     if (postId != null && postId.isNotEmpty) {
@@ -498,8 +491,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
       );
       return;
     }
+    
+    // Show message for notifications without specific navigation
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('No details available for this notification.\npostId: $postId')),
+      SnackBar(
+        content: Text('Notification viewed'),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
     );
   }
 
@@ -1115,6 +1115,22 @@ class _NotificationScreenState extends State<NotificationScreen> {
       case 'mention':
         icon = Icons.alternate_email;
         color = Colors.purple;
+        break;
+      case 'job_request':
+        icon = Icons.work;
+        color = Colors.indigo;
+        break;
+      case 'job_accepted':
+        icon = Icons.check_circle;
+        color = Colors.green;
+        break;
+      case 'job_declined':
+        icon = Icons.cancel;
+        color = Colors.red;
+        break;
+      case 'job_completed':
+        icon = Icons.task_alt;
+        color = Colors.blue;
         break;
       default:
         icon = Icons.notifications;

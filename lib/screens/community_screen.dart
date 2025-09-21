@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'notification_screen.dart';
+import '../services/notification_service.dart';
 
 Map<String, bool> likedPosts = {};
 Map<String, TextEditingController> commentControllers = {};
@@ -234,7 +235,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       // Wait a moment for any database triggers to create notifications
       await Future.delayed(Duration(milliseconds: 500));
       
-      // Get the post owner ID and update any existing notifications for this comment to include actor_id
+      // Send comment notification using new service
       final postData = await Supabase.instance.client
           .from('community_posts')
           .select('user_id')
@@ -243,13 +244,23 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       
       final postOwnerId = postData['user_id'];
       if (postOwnerId != widget.userId) {
-        await Supabase.instance.client
-          .from('notifications')
-          .update({'actor_id': widget.userId})
-          .eq('user_id', postOwnerId)
-          .eq('post_id', postId)
-          .eq('type', 'comment')
-          .isFilter('actor_id', null);
+        // Get current user name
+        final currentUserResponse = await Supabase.instance.client
+            .from('users')
+            .select('name')
+            .eq('id', widget.userId)
+            .single();
+        final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+        
+        await sendCommunityNotification(
+          recipientId: postOwnerId,
+          actorId: widget.userId,
+          type: 'comment',
+          message: '$currentUserName commented on your post',
+          postId: postId,
+          commentId: newComment['id'].toString(),
+          actorName: currentUserName,
+        );
       }
 
       // Send mention notifications
@@ -437,6 +448,14 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     if (mentionedUsernames.isEmpty) return;
 
     try {
+      // Get current user name for notification
+      final currentUserResponse = await Supabase.instance.client
+          .from('users')
+          .select('name')
+          .eq('id', widget.userId)
+          .single();
+      final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+
       // Get user IDs for mentioned usernames
       final userResponse = await Supabase.instance.client
           .from('users')
@@ -447,17 +466,18 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         final mentionedUserId = user['id'];
         if (mentionedUserId == widget.userId) continue; // Don't notify self
 
-        await Supabase.instance.client
-            .from('notifications')
-            .insert({
-          'user_id': mentionedUserId,
-          'actor_id': widget.userId,
-          'message': 'mentioned you in a ${commentId != null ? 'comment' : 'post'}',
-          'type': 'mention',
-          'post_id': postId,
-          'comment_id': commentId,
-          'is_read': false,
-        });
+        final message = '$currentUserName mentioned you in a ${commentId != null ? 'comment' : 'post'}';
+        
+        // Use the new notification service
+        await sendCommunityNotification(
+          recipientId: mentionedUserId,
+          actorId: widget.userId,
+          type: 'mention',
+          message: message,
+          postId: postId,
+          commentId: commentId,
+          actorName: currentUserName,
+        );
       }
     } catch (e) {
       print('Error sending mention notifications: $e');
@@ -890,13 +910,23 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       final commentOwnerId = commentOwner['user_id'];
       final postId = commentOwner['post_id'];
       if (commentOwnerId != widget.userId) {
-        await Supabase.instance.client
-          .from('notifications')
-          .update({'actor_id': widget.userId})
-          .eq('user_id', commentOwnerId)
-          .eq('comment_id', commentId)
-          .eq('type', 'reply')
-          .isFilter('actor_id', null);
+        // Get current user name
+        final currentUserResponse = await Supabase.instance.client
+            .from('users')
+            .select('name')
+            .eq('id', widget.userId)
+            .single();
+        final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+        
+        await sendCommunityNotification(
+          recipientId: commentOwnerId,
+          actorId: widget.userId,
+          type: 'reply',
+          message: '$currentUserName replied to your comment',
+          postId: postId,
+          commentId: commentId,
+          actorName: currentUserName,
+        );
       }
 
       // Send mention notifications
@@ -2276,18 +2306,24 @@ void showEditPostModal(Map post) {
                                   .from('likes')
                                   .insert({'post_id': postId, 'user_id': widget.userId});
                                 
-                                // Wait a moment for any database triggers to create notifications
-                                await Future.delayed(Duration(milliseconds: 500));
-                                
-                                // Update any existing notifications for this like to include actor_id
+                                // Send like notification using new service
                                 if (post['user_id'] != widget.userId) {
-                                  await Supabase.instance.client
-                                    .from('notifications')
-                                    .update({'actor_id': widget.userId})
-                                    .eq('user_id', post['user_id'])
-                                    .eq('post_id', postId)
-                                    .eq('type', 'like')
-                                    .isFilter('actor_id', null);
+                                  // Get current user name
+                                  final currentUserResponse = await Supabase.instance.client
+                                      .from('users')
+                                      .select('name')
+                                      .eq('id', widget.userId)
+                                      .single();
+                                  final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+                                  
+                                  await sendCommunityNotification(
+                                    recipientId: post['user_id'],
+                                    actorId: widget.userId,
+                                    type: 'like',
+                                    message: '$currentUserName liked your post',
+                                    postId: postId,
+                                    actorName: currentUserName,
+                                  );
                                 }
                               } else {
                                 await Supabase.instance.client
@@ -2667,19 +2703,25 @@ void showEditPostModal(Map post) {
                                                       'user_id': widget.userId
                                                     });
                                                     
-                                                    // Wait a moment for any database triggers to create notifications
-                                                    await Future.delayed(Duration(milliseconds: 500));
-                                                    
-                                                    // Update any existing notifications for this comment like to include actor_id
+                                                    // Send comment like notification using new service
                                                     final commentOwnerId = comment['user_id'];
                                                     if (commentOwnerId != widget.userId) {
-                                                      await Supabase.instance.client
-                                                        .from('notifications')
-                                                        .update({'actor_id': widget.userId})
-                                                        .eq('user_id', commentOwnerId)
-                                                        .eq('comment_id', commentId)
-                                                        .eq('type', 'comment_like')
-                                                        .isFilter('actor_id', null);
+                                                      // Get current user name
+                                                      final currentUserResponse = await Supabase.instance.client
+                                                          .from('users')
+                                                          .select('name')
+                                                          .eq('id', widget.userId)
+                                                          .single();
+                                                      final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+                                                      
+                                                      await sendCommunityNotification(
+                                                        recipientId: commentOwnerId,
+                                                        actorId: widget.userId,
+                                                        type: 'comment_like',
+                                                        message: '$currentUserName liked your comment',
+                                                        commentId: commentId,
+                                                        actorName: currentUserName,
+                                                      );
                                                     }
                                                   } else {
                                                     await Supabase.instance.client

@@ -12,6 +12,7 @@ import 'screens/pet_alert_screen.dart';
 import 'screens/profile_owner_screen.dart';
 import 'screens/profile_sitter_screen.dart';
 import 'widgets/missing_pet_alert_wrapper.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +21,10 @@ void main() async {
     url: dotenv.env['SUPABASE_URL'] ?? '',
     anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
   );
+  
+  // Initialize system notifications
+  await initializeSystemNotifications();
+  
   runApp(PetTrackCareApp());
 }
 

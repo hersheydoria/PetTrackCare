@@ -1433,7 +1433,7 @@ void _disconnectDevice() async {
     
     // Reward info
     if (_hasReward && _rewardAmountController.text.isNotEmpty) {
-      content += '💰 Reward Offered: ₱${_rewardAmountController.text}\n\n';
+      content += '💰 Reward Offered: ₱ ${_rewardAmountController.text}\n\n';
     }
     
     // Contact info
@@ -1807,7 +1807,7 @@ void _disconnectDevice() async {
               decoration: InputDecoration(
                 labelText: 'Reward Amount',
                 hintText: 'e.g., 500',
-                prefixIcon: Icon(Icons.attach_money, color: Colors.green.shade600),
+                prefixIcon: Icon(Icons.monetization_on, color: Colors.green.shade600),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                 filled: true,
                 fillColor: Colors.white,

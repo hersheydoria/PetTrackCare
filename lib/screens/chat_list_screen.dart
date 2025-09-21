@@ -4,6 +4,7 @@ import 'chat_detail_screen.dart';
 import 'notification_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
+import '../services/notification_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -93,10 +94,54 @@ class _ChatListScreenState extends State<ChatListScreen> {
           callback: (payload, [ref]) async {
             fetchMessages(); // Refresh list on new message
 
-            // Handle call invite globally (even when not inside ChatDetailScreen)
+            // Handle new message notification
             final newRow = payload.newRecord;
-            if (newRow == null) return;
+            final currentUserId = supabase.auth.currentUser?.id;
+            final receiverId = newRow['receiver_id']?.toString();
+            final senderId = newRow['sender_id']?.toString();
+            final messageType = newRow['type']?.toString() ?? 'text';
+            final content = newRow['content']?.toString() ?? '';
 
+            // Show notification if this user is the receiver and it's not a system message
+            if (receiverId == currentUserId && senderId != currentUserId && senderId != null && receiverId != null && messageType != 'call_accept' && messageType != 'call_decline') {
+              // Get sender name for notification
+              try {
+                final senderResponse = await supabase
+                    .from('users')
+                    .select('name')
+                    .eq('id', senderId)
+                    .single();
+                
+                final senderName = senderResponse['name'] as String? ?? 'Someone';
+                
+                // Format message preview
+                String messagePreview = content;
+                if (content.startsWith('[call_')) {
+                  if (content.contains('accept')) messagePreview = '📞 Call accepted';
+                  else if (content.contains('decline')) messagePreview = '📞 Call declined';
+                  else messagePreview = '📞 Incoming call';
+                } else if (content.length > 50) {
+                  messagePreview = '${content.substring(0, 47)}...';
+                }
+                
+                await sendMessageNotification(
+                  recipientId: receiverId,
+                  senderId: senderId,
+                  senderName: senderName,
+                  messagePreview: messagePreview,
+                );
+              } catch (e) {
+                // Fallback notification without sender name
+                await sendMessageNotification(
+                  recipientId: receiverId,
+                  senderId: senderId,
+                  senderName: 'New Message',
+                  messagePreview: content,
+                );
+              }
+            }
+
+            // Handle call invite globally (even when not inside ChatDetailScreen)
             final me = supabase.auth.currentUser?.id;
             if (me == null) return;
 
