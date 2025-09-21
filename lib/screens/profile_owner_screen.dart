@@ -89,18 +89,41 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
+    backgroundColor: Colors.transparent,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
     builder: (context) {
-      return Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-          top: 24,
-          left: 16,
-          right: 16,
+      return Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white,
+              lightBlush.withOpacity(0.2),
+            ],
+          ),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 20,
+              offset: Offset(0, -5),
+            ),
+          ],
         ),
-        child: _AddPetForm(onPetAdded: () => setState(() {})),
+        child: SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+              top: 20,
+              left: 24,
+              right: 24,
+            ),
+            child: _AddPetForm(onPetAdded: () => setState(() {})),
+          ),
+        ),
       );
     },
   );
@@ -210,79 +233,152 @@ Future<void> pickAndUploadImage() async {
     return List<Map<String, dynamic>>.from(response);
   }
 
-  // Render a single pet tile used in the pets list (keeps UI consistent)
+  // Enhanced pet tile with modern styling
   Widget _petListTile(Map<String, dynamic> pet) {
     return Container(
-      margin: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(12),
         color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 15,
+            offset: Offset(0, 3),
+          ),
+        ],
       ),
-      child: ListTile(
-        onTap: () {
-          // open pet profile and show this pet
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => PetProfileScreen(initialPet: pet),
-            ),
-          );
-        },
-        leading: CircleAvatar(
-          radius: 25,
-          backgroundColor: Colors.grey[300],
-          backgroundImage: (pet['profile_picture'] != null &&
-                  pet['profile_picture'].toString().isNotEmpty)
-              ? NetworkImage(pet['profile_picture'])
-              : const AssetImage('assets/pets-profile-pictures.png')
-                  as ImageProvider,
-        ),
-        title: Text(pet['name'] ?? 'Unnamed'),
-        subtitle: Text(
-          'Breed: ${pet['breed'] ?? 'Unknown'} | Age: ${pet['age'] ?? 0}',
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: Icon(Icons.edit, color: deepRed),
-              onPressed: () {
-                // open edit modal with initial pet data
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => PetProfileScreen(initialPet: pet),
+              ),
+            );
+          },
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: coral.withOpacity(0.3), width: 2),
                   ),
-                  builder: (context) {
-                    return Padding(
-                      padding: EdgeInsets.only(
-                        bottom: MediaQuery.of(context).viewInsets.bottom,
-                        top: 24,
-                        left: 16,
-                        right: 16,
+                  child: CircleAvatar(
+                    radius: 30,
+                    backgroundColor: lightBlush,
+                    backgroundImage: (pet['profile_picture'] != null &&
+                            pet['profile_picture'].toString().isNotEmpty)
+                        ? NetworkImage(pet['profile_picture'])
+                        : null,
+                    child: (pet['profile_picture'] == null ||
+                            pet['profile_picture'].toString().isEmpty)
+                        ? Icon(Icons.pets, color: coral, size: 30)
+                        : null,
+                  ),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        pet['name'] ?? 'Unnamed',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: deepRed,
+                        ),
                       ),
-                      child: _AddPetForm(
-                        onPetAdded: () => setState(() {}),
-                        initialPet: pet,
+                      SizedBox(height: 4),
+                      Text(
+                        '${pet['breed'] ?? 'Unknown'} • ${pet['age'] ?? 0} ${(pet['age'] ?? 0) == 1 ? 'year' : 'years'} old',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
                       ),
-                    );
-                  },
-                );
-              },
+                      if (pet['gender'] != null) ...[
+                        SizedBox(height: 2),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: peach.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            pet['gender'],
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: IconButton(
+                        icon: Icon(Icons.edit, color: coral, size: 20),
+                        onPressed: () {
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                            ),
+                            builder: (context) {
+                              return Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: MediaQuery.of(context).viewInsets.bottom,
+                                  top: 24,
+                                  left: 16,
+                                  right: 16,
+                                ),
+                                child: _AddPetForm(
+                                  onPetAdded: () => setState(() {}),
+                                  initialPet: pet,
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: IconButton(
+                        icon: Icon(Icons.delete, color: Colors.red[400], size: 20),
+                        onPressed: () => _deletePet(pet['id']?.toString() ?? ''),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            IconButton(
-              icon: Icon(Icons.delete, color: Colors.grey[700]),
-              onPressed: () => _deletePet(pet['id']?.toString() ?? ''),
-            ),
-          ],
+          ),
         ),
       ),
     );
-  }
-
-  // Delete pet with confirmation dialog, refresh UI (FutureBuilder will refetch)
+  }  // Delete pet with confirmation dialog, refresh UI (FutureBuilder will refetch)
   Future<void> _deletePet(String petId) async {
     if (petId.isEmpty) return;
     final confirmed = await showDialog<bool>(
@@ -316,15 +412,40 @@ Future<void> pickAndUploadImage() async {
     return Scaffold(
       backgroundColor: lightBlush,
       appBar: AppBar(
-        title: Text('Owner Profile', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Color(0xFFCB4154),
+        backgroundColor: deepRed,
         elevation: 0,
+        title: Text(
+          'Owner Profile',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            fontSize: 20,
+            letterSpacing: 0.5,
+          ),
+        ),
         actions: [
-          IconButton(
-            icon: Icon(Icons.logout, color: Colors.white),
-            tooltip: 'Logout',
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
+          Container(
+            margin: EdgeInsets.only(right: 8),
+            child: IconButton(
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(
+                  Icons.logout,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              tooltip: 'Logout',
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
                   title: Text('Confirm Logout'),
@@ -347,268 +468,257 @@ Future<void> pickAndUploadImage() async {
               }
             },
           ),
+          ),
         ],
       ),
-      body: Column(
-        children: [
-          // Profile Info
-Container(
-  margin: EdgeInsets.only(top: 16),
-  child: Stack(
-    alignment: Alignment.bottomRight,
-    children: [
-      Container(
-        padding: EdgeInsets.all(4),
+      body: Container(
+        margin: EdgeInsets.all(16),
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: deepRed, width: 2),
-        ),
-        child: CircleAvatar(
-          radius: 60,
-          backgroundColor: Colors.white,
-          backgroundImage: _profileImage != null
-              ? FileImage(_profileImage!)
-              : (userData['profile_picture'] != null
-                  ? NetworkImage(userData['profile_picture'])
-                  : (metadata['profile_picture'] != null
-                      ? NetworkImage(metadata['profile_picture'])
-                      : AssetImage('assets/default_profile.png'))) as ImageProvider,
-        ),
-      ),
-      Positioned(
-        bottom: 4,
-        right: 4,
-        child: GestureDetector(
-          onTap: _pickProfileImage,
-          child: Container(
-            padding: EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: deepRed,
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 20,
+              offset: Offset(0, 5),
             ),
-            child: Icon(
-              Icons.camera_alt,
-              size: 20,
-              color: Colors.white,
-            ),
-          ),
+          ],
         ),
-      ),
-    ],
-  ),
-),
-
-// 👇 Add this
-SizedBox(height: 12),
-Text(
-  name,
-  style: TextStyle(
-    fontSize: 22,
-    fontWeight: FontWeight.bold,
-    color: deepRed,
-  ),
-),
-Text(
-  email,
-  style: TextStyle(
-    fontSize: 16,
-  ),
-),
-Row(
-  mainAxisAlignment: MainAxisAlignment.center,
-  children: [
-    Icon(Icons.location_on, color: Colors.grey[600], size: 16),
-    SizedBox(width: 4),
-    Text(
-      address,
-      style: TextStyle(fontSize: 14, color: Colors.grey[700]),
-    ),
-  ],
-),
-SizedBox(height: 16),
-
-          // White rounded container with tabs and tab content
-          Expanded(
-            child: Container(
-              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: Column(
-                children: [
-                  TabBar(
-                    controller: _tabController,
-                    indicatorColor: deepRed,
-                    labelColor: deepRed,
-                    unselectedLabelColor: Colors.grey,
-                    tabs: [
-                      Tab(icon: Icon(Icons.pets), text: 'Owned Pets'),
-                      Tab(icon: Icon(Icons.settings), text: 'Settings'),
+        child: Column(
+          children: [
+            // Enhanced Profile Info Section with gradient design
+            Container(
+              margin: EdgeInsets.all(16),
+              child: Card(
+                elevation: 8,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    gradient: LinearGradient(
+                      colors: [deepRed.withOpacity(0.8), coral],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  padding: EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      // Profile picture with camera overlay
+                      Stack(
+                        alignment: Alignment.bottomRight,
+                        children: [
+                          CircleAvatar(
+                            radius: 60,
+                            backgroundColor: Colors.white,
+                            backgroundImage: _profileImage != null
+                                ? FileImage(_profileImage!)
+                                : (userData['profile_picture'] != null
+                                    ? NetworkImage(userData['profile_picture'])
+                                    : (metadata['profile_picture'] != null
+                                        ? NetworkImage(metadata['profile_picture'])
+                                        : null)),
+                            child: (_profileImage == null && 
+                                   userData['profile_picture'] == null && 
+                                   metadata['profile_picture'] == null)
+                                ? Icon(Icons.person, size: 60, color: deepRed)
+                                : null,
+                          ),
+                          Positioned(
+                            bottom: 4,
+                            right: 4,
+                            child: GestureDetector(
+                              onTap: _pickProfileImage,
+                              child: Container(
+                                padding: EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.white,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.2),
+                                      blurRadius: 8,
+                                      offset: Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Icon(
+                                  Icons.camera_alt,
+                                  size: 18,
+                                  color: deepRed,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      // User name centered below picture
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                      ),
+                      SizedBox(height: 12),
+                      // Email and role in a single row
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Expanded(
+                            child: _buildUserInfoCard(
+                              icon: Icons.email,
+                              title: 'Email',
+                              value: email.length > 15 ? '${email.substring(0, 15)}...' : email,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: _buildUserInfoCard(
+                              icon: Icons.location_on,
+                              title: 'Location',
+                              value: address == 'No address provided' ? 'Not set' : 
+                                     (address.length > 12 ? '${address.substring(0, 12)}...' : address),
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
-                  Divider(height: 1, color: Colors.grey.shade300),
+                ),
+              ),
+            ),
 
-                  // Tab content
-                  Expanded(
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: [
-                        // 🐾 Owned Pets
-                        FutureBuilder<List<Map<String, dynamic>>>(
-                          future: _fetchPets(),
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return Center(
-                                  child:
-                                      CircularProgressIndicator(color: deepRed));
-                            }
-                            final pets = snapshot.data ?? [];
-                            // group by type (try 'type' then 'species' then fallback)
-                            final dogPets = pets.where((p) {
-                              final t = (p['type'] ?? p['species'] ?? '')
-                                  .toString()
-                                  .toLowerCase();
-                              return t == 'dog';
-                            }).toList();
-                            final catPets = pets.where((p) {
-                              final t = (p['type'] ?? p['species'] ?? '')
-                                  .toString()
-                                  .toLowerCase();
-                              return t == 'cat';
-                            }).toList();
-                            final otherPets = pets
-                                .where((p) =>
-                                    !dogPets.contains(p) && !catPets.contains(p))
-                                .toList();
-
-                            if (pets.isEmpty) {
-                              return Column(
-                                children: [
-                                  Expanded(
-                                    child: Center(
-                                      child: Text('No pets found.',
-                                          style: TextStyle(color: Colors.grey)),
-                                    ),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.all(16.0),
-                                    child: ElevatedButton.icon(
-                                      onPressed: _addPet,
-                                      icon: Icon(Icons.add),
-                                      label: Text('Add Pet'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: deepRed,
-                                        foregroundColor: Colors.white,
-                                        minimumSize: Size(double.infinity, 48),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(12)),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            }
-
-                            // disable add if already 3 pets
-                            final canAdd = pets.length < 3;
-
-                            return Column(
-                              children: [
-                                Expanded(
-                                  child: ListView(
-                                    padding: EdgeInsets.symmetric(vertical: 8),
-                                    children: [
-                                      if (dogPets.isNotEmpty) ...[
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 16, vertical: 8),
-                                          child: Text("Dogs",
-                                              style: TextStyle(
-                                                  fontWeight: FontWeight.bold)),
-                                        ),
-                                        ...dogPets.map((pet) => _petListTile(pet))
-                                      ],
-                                      if (catPets.isNotEmpty) ...[
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 16, vertical: 8),
-                                          child: Text("Cats",
-                                              style: TextStyle(
-                                                  fontWeight: FontWeight.bold)),
-                                        ),
-                                        ...catPets.map((pet) => _petListTile(pet))
-                                      ],
-                                      if (otherPets.isNotEmpty) ...[
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 16, vertical: 8),
-                                          child: Text("Other",
-                                              style: TextStyle(
-                                                  fontWeight: FontWeight.bold)),
-                                        ),
-                                        ...otherPets.map((pet) => _petListTile(pet))
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.all(16.0),
-                                  child: ElevatedButton.icon(
-                                    onPressed: canAdd
-                                        ? _addPet
-                                        : () {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(SnackBar(
-                                                    content: Text(
-                                                        "You can add up to 3 pets only.")));
-                                          },
-                                    icon: Icon(Icons.add),
-                                    label: Text(canAdd
-                                        ? 'Add Pet'
-                                        : 'Limit reached (3 pets)'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor:
-                                          canAdd ? deepRed : Colors.grey,
-                                      foregroundColor: Colors.white,
-                                      minimumSize: Size(double.infinity, 48),
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(12)),
-                                      elevation: 4,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-
-                        // ⚙️ Settings
-                        ListView(
-                          padding: EdgeInsets.all(16),
-                          children: [
-                            _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
-                            _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
-                            _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
-                            _notificationSettingsTile(),
-                            _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
-                            _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
-                            SizedBox(height: 16),
-                          ],
-                        ),
-
-                      ],
-                    ),
+            // Tab Section
+            Container(
+              decoration: BoxDecoration(
+                color: lightBlush.withOpacity(0.5),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                ),
+              ),
+              child: TabBar(
+                controller: _tabController,
+                indicator: BoxDecoration(
+                  color: deepRed,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                indicatorSize: TabBarIndicatorSize.tab,
+                indicatorPadding: EdgeInsets.all(8),
+                labelColor: Colors.white,
+                unselectedLabelColor: Colors.grey[600],
+                labelStyle: TextStyle(fontWeight: FontWeight.w600),
+                unselectedLabelStyle: TextStyle(fontWeight: FontWeight.w500),
+                tabs: [
+                  Tab(
+                    icon: Icon(Icons.pets),
+                    text: 'My Pets',
+                    height: 60,
+                  ),
+                  Tab(
+                    icon: Icon(Icons.settings),
+                    text: 'Settings',
+                    height: 60,
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+
+            // Tab Content
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  // Pets Tab
+                  Column(
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        margin: EdgeInsets.all(16),
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: deepRed,
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: _addPet,
+                          icon: Icon(Icons.add, color: Colors.white),
+                          label: Text(
+                            'Add New Pet',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: FutureBuilder<List<Map<String, dynamic>>>(
+                          future: _fetchPets(),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return Center(child: CircularProgressIndicator(color: deepRed));
+                            }
+                            if (snapshot.hasError) {
+                              return Center(child: Text('Error: ${snapshot.error}'));
+                            }
+                            final pets = snapshot.data ?? [];
+                            if (pets.isEmpty) {
+                              return Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.pets, size: 64, color: Colors.grey[400]),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'No pets added yet.',
+                                      style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                                    ),
+                                    SizedBox(height: 8),
+                                    Text(
+                                      'Tap "Add New Pet" to get started!',
+                                      style: TextStyle(color: Colors.grey[500]),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                            return ListView.builder(
+                              itemCount: pets.length,
+                              itemBuilder: (context, index) => _petListTile(pets[index]),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Settings Tab
+                  ListView(
+                    padding: EdgeInsets.all(16),
+                    children: [
+                      _settingsTile(Icons.person, 'Account', onTap: _openAccountSettings),
+                      _settingsTile(Icons.lock, 'Change Password', onTap: _openChangePassword),
+                      _settingsTile(Icons.bookmark, 'Saved Posts', onTap: _openSavedPosts),
+                      _notificationSettingsTile(),
+                      _settingsTile(Icons.help_outline, 'Help & Support', onTap: _openHelpSupport),
+                      _settingsTile(Icons.info_outline, 'About', onTap: _openAbout),
+                      SizedBox(height: 16),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -664,101 +774,183 @@ SizedBox(height: 16),
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSt) {
-            return SafeArea(
-              child: Container(
-                color: lightBlush,
+            return Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white,
+                    lightBlush.withOpacity(0.3),
+                  ],
+                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 20,
+                    offset: Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: SafeArea(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back, color: deepRed),
-                          onPressed: () => Navigator.pop(ctx),
-                        ),
-                        Expanded(
-                          child: Center(
+                    // Enhanced Header with modern design
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: deepRed.withOpacity(0.05),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: deepRed.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.person, color: deepRed, size: 20),
+                          ),
+                          SizedBox(width: 12),
+                          Expanded(
                             child: Text(
-                              'Account',
+                              'Account Settings',
                               style: TextStyle(
-                                fontSize: 24,
+                                fontSize: 20,
                                 fontWeight: FontWeight.bold,
                                 color: deepRed,
-                                letterSpacing: 0.5,
                               ),
                             ),
                           ),
-                        ),
-                        SizedBox(width: 48),
-                      ],
-                    ),
-                    SingleChildScrollView(
-                      padding: EdgeInsets.all(16),
-                      child: Column(
-                        children: [
                           Container(
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade400),
+                              color: Colors.grey.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(12),
-                              color: Colors.white,
                             ),
-                            margin: EdgeInsets.only(bottom: 16),
+                            child: IconButton(
+                              icon: Icon(Icons.close, color: Colors.grey[600]),
+                              onPressed: () => Navigator.pop(ctx),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SingleChildScrollView(
+                      padding: EdgeInsets.all(24),
+                      child: Column(
+                        children: [
+                          // Email field with modern styling
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade200),
+                            ),
+                            margin: EdgeInsets.only(bottom: 20),
                             child: TextFormField(
                               enabled: false,
                               initialValue: email,
                               decoration: InputDecoration(
-                                labelText: 'Email',
+                                labelText: 'Email Address',
+                                labelStyle: TextStyle(color: Colors.grey[600], fontWeight: FontWeight.w500),
                                 border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                prefixIcon: Icon(Icons.email_outlined, color: Colors.grey[500]),
+                                suffixIcon: Icon(Icons.lock_outline, color: Colors.grey[400]),
                               ),
+                              style: TextStyle(color: Colors.grey[600]),
                             ),
                           ),
+                          // Name field with enhanced styling
                           Container(
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade400),
-                              borderRadius: BorderRadius.circular(12),
                               color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: coral.withOpacity(0.3)),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
-                            margin: EdgeInsets.only(bottom: 16),
+                            margin: EdgeInsets.only(bottom: 20),
                             child: TextFormField(
                               initialValue: newName,
                               decoration: InputDecoration(
-                                labelText: 'Name',
+                                labelText: 'Full Name',
+                                labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
                                 border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                prefixIcon: Icon(Icons.person_outline, color: deepRed),
                               ),
                               onChanged: (v) => setSt(() => newName = v),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                             ),
                           ),
+                          // Address field with enhanced styling
                           Container(
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade400),
-                              borderRadius: BorderRadius.circular(12),
                               color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: coral.withOpacity(0.3)),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
-                            margin: EdgeInsets.only(bottom: 16),
+                            margin: EdgeInsets.only(bottom: 32),
                             child: TextFormField(
                               initialValue: newAddress,
                               decoration: InputDecoration(
                                 labelText: 'Address',
+                                labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
                                 border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                prefixIcon: Icon(Icons.location_on_outlined, color: deepRed),
                               ),
                               onChanged: (v) => setSt(() => newAddress = v),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                             ),
                           ),
-                          SizedBox(height: 16),
+                          // Enhanced Save button
                           Container(
                             width: double.infinity,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [deepRed, coral],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: deepRed.withOpacity(0.3),
+                                  blurRadius: 15,
+                                  offset: Offset(0, 5),
+                                ),
+                              ],
+                            ),
                             child: ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: deepRed,
-                                padding: EdgeInsets.symmetric(vertical: 12),
+                                backgroundColor: Colors.transparent,
+                                shadowColor: Colors.transparent,
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                                  borderRadius: BorderRadius.circular(16),
                                 ),
                               ),
                               onPressed: () async {
@@ -783,55 +975,98 @@ SizedBox(height: 16),
                                   
                                   await _refreshUserMetadata();
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Account updated')),
+                                    SnackBar(
+                                      content: Row(
+                                        children: [
+                                          Icon(Icons.check_circle, color: Colors.white),
+                                          SizedBox(width: 8),
+                                          Text('Account updated successfully'),
+                                        ],
+                                      ),
+                                      backgroundColor: Colors.green,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
                                   );
                                   Navigator.pop(ctx);
                                 } catch (e) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Failed to update account: ${e.toString()}')),
+                                    SnackBar(
+                                      content: Row(
+                                        children: [
+                                          Icon(Icons.error, color: Colors.white),
+                                          SizedBox(width: 8),
+                                          Expanded(child: Text('Failed to update account: ${e.toString()}')),
+                                        ],
+                                      ),
+                                      backgroundColor: Colors.red,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
                                   );
                                 }
                                 setSt(() => isLoading = false);
                               },
                               child: isLoading
                                   ? SizedBox(
-                                      width: 20,
-                                      height: 20,
+                                      width: 24,
+                                      height: 24,
                                       child: CircularProgressIndicator(
                                         color: Colors.white,
-                                        strokeWidth: 2,
+                                        strokeWidth: 2.5,
                                       ),
                                     )
-                                  : Text(
-                                      'Save Changes',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                  : Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.save, color: Colors.white),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Save Changes',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                             ),
                           ),
-                          SizedBox(height: 16),
+                          SizedBox(height: 20),
+                          // Enhanced Delete button
                           Container(
                             width: double.infinity,
-                            child: TextButton(
-                              style: TextButton.styleFrom(
-                                foregroundColor: Colors.red,
+                            height: 50,
+                            child: OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: Colors.red.shade300, width: 1.5),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
                               ),
                               onPressed: () async {
                                 final confirm = await showDialog<bool>(
                                   context: context,
                                   builder: (context) => AlertDialog(
-                                    title: Text('Delete Account'),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    title: Row(
+                                      children: [
+                                        Icon(Icons.warning, color: Colors.red),
+                                        SizedBox(width: 8),
+                                        Text('Delete Account', style: TextStyle(color: Colors.red)),
+                                      ],
+                                    ),
                                     content: Text('Are you sure you want to delete your account? This action cannot be undone.'),
                                     actions: [
                                       TextButton(
                                         onPressed: () => Navigator.pop(context, false),
-                                        child: Text('Cancel'),
+                                        child: Text('Cancel', style: TextStyle(color: Colors.grey)),
                                       ),
-                                      TextButton(
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                                         onPressed: () => Navigator.pop(context, true),
-                                        child: Text('Delete', style: TextStyle(color: Colors.red)),
+                                        child: Text('Delete'),
                                       ),
                                     ],
                                   ),
@@ -841,16 +1076,37 @@ SizedBox(height: 16),
                                   try {
                                     await Supabase.instance.client.auth.signOut();
                                     await Supabase.instance.client.from('users').delete().eq('id', user!.id);
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Account deleted successfully'),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
                                     Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
                                   } catch (e) {
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting account: $e')));
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Error deleting account: $e')),
+                                    );
                                   }
                                 }
                               },
-                              child: Text('Delete Account'),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.delete_outline, color: Colors.red),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Delete Account',
+                                    style: TextStyle(
+                                      color: Colors.red,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
+                          SizedBox(height: 20),
                         ],
                       ),
                     ),
@@ -871,113 +1127,314 @@ SizedBox(height: 16),
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
         bool enabled = currentPrefs['enabled'] ?? true;
+        bool isLoading = false;
         return StatefulBuilder(
           builder: (ctx, setSt) {
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            return Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white,
+                    lightBlush.withOpacity(0.2),
+                  ],
                 ),
-                child: Container(
-                  color: lightBlush,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 20,
+                    offset: Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Enhanced Header
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: deepRed.withOpacity(0.05),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                      ),
+                      child: Row(
                         children: [
-                          IconButton(
-                            icon: Icon(Icons.arrow_back, color: deepRed),
-                            onPressed: () => Navigator.pop(ctx),
+                          Container(
+                            padding: EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: deepRed.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.notifications, color: deepRed, size: 20),
                           ),
+                          SizedBox(width: 12),
                           Expanded(
-                            child: Center(
-                              child: Text(
-                                'Notifications',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: deepRed,
-                                  letterSpacing: 0.5,
-                                ),
+                            child: Text(
+                              'Notification Settings',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: deepRed,
                               ),
                             ),
                           ),
-                          SizedBox(width: 48),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.grey.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: IconButton(
+                              icon: Icon(Icons.close, color: Colors.grey[600]),
+                              onPressed: () => Navigator.pop(ctx),
+                            ),
+                          ),
                         ],
                       ),
-                      SingleChildScrollView(
-                        padding: EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.grey.shade400),
-                                borderRadius: BorderRadius.circular(12),
-                                color: Colors.white,
-                              ),
-                              margin: EdgeInsets.only(bottom: 16),
-                              child: SwitchListTile(
-                                title: Text('System Notifications'),
-                                subtitle: Text('Enable push notifications outside the app'),
-                                value: enabled,
-                                onChanged: (v) => setSt(() => enabled = v),
+                    ),
+                    SingleChildScrollView(
+                      padding: EdgeInsets.all(24),
+                      child: Column(
+                        children: [
+                          // Modern notification toggle card
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: coral.withOpacity(0.3)),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            margin: EdgeInsets.only(bottom: 24),
+                            child: Padding(
+                              padding: EdgeInsets.all(20),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: enabled ? deepRed.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      enabled ? Icons.notifications_active : Icons.notifications_off,
+                                      color: enabled ? deepRed : Colors.grey,
+                                      size: 24,
+                                    ),
+                                  ),
+                                  SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Push Notifications',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          'Receive notifications when the app is closed',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey[600],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Transform.scale(
+                                    scale: 1.2,
+                                    child: Switch(
+                                      value: enabled,
+                                      onChanged: (v) => setSt(() => enabled = v),
+                                      activeColor: deepRed,
+                                      activeTrackColor: deepRed.withOpacity(0.3),
+                                      inactiveThumbColor: Colors.grey,
+                                      inactiveTrackColor: Colors.grey.withOpacity(0.3),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
-                                  padding: EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
+                          ),
+                          // Notification types preview
+                          Container(
+                            padding: EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: lightBlush.withOpacity(0.5),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: coral.withOpacity(0.2)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.info_outline, color: coral, size: 20),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Notification Types',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: deepRed,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                onPressed: () async {
-                                  try {
-                                    await Supabase.instance.client.auth.updateUser(
-                                      UserAttributes(data: {
-                                        'notification_preferences': {'enabled': enabled}
-                                      })
-                                    );
-                                    // Refresh user metadata to ensure changes take effect
-                                    await _refreshUserMetadata();
-                                    Navigator.pop(ctx);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Notification preferences updated')),
-                                    );
-                                  } catch (e) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('Failed to update preferences: ${e.toString()}')),
-                                    );
-                                  }
-                                },
-                                child: Text(
-                                  'Save',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                SizedBox(height: 12),
+                                _notificationTypeItem('Pet care reminders', Icons.pets),
+                                _notificationTypeItem('Chat messages', Icons.message),
+                                _notificationTypeItem('Pet health alerts', Icons.health_and_safety),
+                                _notificationTypeItem('Appointment updates', Icons.calendar_today),
+                              ],
+                            ),
+                          ),
+                          SizedBox(height: 32),
+                          // Enhanced Save button
+                          Container(
+                            width: double.infinity,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [deepRed, coral],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: deepRed.withOpacity(0.3),
+                                  blurRadius: 15,
+                                  offset: Offset(0, 5),
+                                ),
+                              ],
+                            ),
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.transparent,
+                                shadowColor: Colors.transparent,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
                                 ),
                               ),
+                              onPressed: () async {
+                                setSt(() => isLoading = true);
+                                try {
+                                  await Supabase.instance.client.auth.updateUser(
+                                    UserAttributes(data: {
+                                      'notification_preferences': {'enabled': enabled}
+                                    })
+                                  );
+                                  // Refresh user metadata to ensure changes take effect
+                                  await _refreshUserMetadata();
+                                  Navigator.pop(ctx);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Row(
+                                        children: [
+                                          Icon(Icons.check_circle, color: Colors.white),
+                                          SizedBox(width: 8),
+                                          Text('Notification preferences updated'),
+                                        ],
+                                      ),
+                                      backgroundColor: Colors.green,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
+                                  );
+                                } catch (e) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Row(
+                                        children: [
+                                          Icon(Icons.error, color: Colors.white),
+                                          SizedBox(width: 8),
+                                          Expanded(child: Text('Failed to update preferences: ${e.toString()}')),
+                                        ],
+                                      ),
+                                      backgroundColor: Colors.red,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
+                                  );
+                                }
+                                setSt(() => isLoading = false);
+                              },
+                              child: isLoading
+                                  ? SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    )
+                                  : Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.save, color: Colors.white),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Save Preferences',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                             ),
-                          ],
-                        ),
+                          ),
+                          SizedBox(height: 20),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );
           },
         );
       },
+    );
+  }
+
+  Widget _notificationTypeItem(String title, IconData icon) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(icon, color: coral, size: 16),
+          SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[700],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -994,212 +1451,432 @@ SizedBox(height: 16),
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSt) {
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            bool _hasValidLength = _newPasswordController.text.length >= 8;
+            bool _hasUppercase = RegExp(r'[A-Z]').hasMatch(_newPasswordController.text);
+            bool _hasLowercase = RegExp(r'[a-z]').hasMatch(_newPasswordController.text);
+            bool _hasNumber = RegExp(r'[0-9]').hasMatch(_newPasswordController.text);
+            bool _hasSpecialChar = RegExp(r'[!@#\$&*~_.,%^()\-\+=]').hasMatch(_newPasswordController.text);
+            bool _passwordsMatch = _newPasswordController.text == _confirmPasswordController.text && _newPasswordController.text.isNotEmpty;
+
+            return Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white,
+                    lightBlush.withOpacity(0.2),
+                  ],
                 ),
-                child: Container(
-                  color: lightBlush,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 20,
+                    offset: Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Enhanced Header
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: deepRed.withOpacity(0.05),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                      ),
+                      child: Row(
                         children: [
-                          IconButton(
-                            icon: Icon(Icons.arrow_back, color: deepRed),
-                            onPressed: () => Navigator.pop(ctx),
+                          Container(
+                            padding: EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: deepRed.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(Icons.lock, color: deepRed, size: 20),
                           ),
+                          SizedBox(width: 12),
                           Expanded(
-                            child: Center(
-                              child: Text(
-                                'Change Password',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: deepRed,
-                                  letterSpacing: 0.5,
-                                ),
+                            child: Text(
+                              'Change Password',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: deepRed,
                               ),
                             ),
                           ),
-                          SizedBox(width: 48),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.grey.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: IconButton(
+                              icon: Icon(Icons.close, color: Colors.grey[600]),
+                              onPressed: () => Navigator.pop(ctx),
+                            ),
+                          ),
                         ],
                       ),
-                      Flexible(
-                        child: SingleChildScrollView(
-                          padding: EdgeInsets.all(16),
-                          child: Column(
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade400),
-                                  borderRadius: BorderRadius.circular(12),
-                                  color: Colors.white,
-                                ),
-                                margin: EdgeInsets.only(bottom: 16),
-                                child: TextFormField(
-                                  controller: _currentPasswordController,
-                                  obscureText: !_showCurrentPassword,
-                                  decoration: InputDecoration(
-                                    labelText: 'Current Password',
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    suffixIcon: IconButton(
-                                      icon: Icon(_showCurrentPassword ? Icons.visibility_off : Icons.visibility),
-                                      onPressed: () => setSt(() => _showCurrentPassword = !_showCurrentPassword),
-                                    ),
+                    ),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.all(24),
+                        child: Column(
+                          children: [
+                            // Current Password field
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.3)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 10,
+                                    offset: Offset(0, 2),
                                   ),
-                                ),
+                                ],
                               ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade400),
-                                  borderRadius: BorderRadius.circular(12),
-                                  color: Colors.white,
-                                ),
-                                margin: EdgeInsets.only(bottom: 16),
-                                child: TextFormField(
-                                  controller: _newPasswordController,
-                                  obscureText: !_showNewPassword,
-                                  decoration: InputDecoration(
-                                    labelText: 'New Password',
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    suffixIcon: IconButton(
-                                      icon: Icon(_showNewPassword ? Icons.visibility_off : Icons.visibility),
-                                      onPressed: () => setSt(() => _showNewPassword = !_showNewPassword),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey.shade400),
-                                  borderRadius: BorderRadius.circular(12),
-                                  color: Colors.white,
-                                ),
-                                margin: EdgeInsets.only(bottom: 16),
-                                child: TextFormField(
-                                  controller: _confirmPasswordController,
-                                  obscureText: !_showConfirmPassword,
-                                  decoration: InputDecoration(
-                                    labelText: 'Confirm New Password',
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    suffixIcon: IconButton(
-                                      icon: Icon(_showConfirmPassword ? Icons.visibility_off : Icons.visibility),
-                                      onPressed: () => setSt(() => _showConfirmPassword = !_showConfirmPassword),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              // Password requirements text
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 16, left: 4),
-                                  child: Text(
-                                    'Password must contain:\n• At least 8 characters\n• One uppercase letter\n• One lowercase letter\n• One number\n• One special character',
-                                    style: TextStyle(
+                              margin: EdgeInsets.only(bottom: 20),
+                              child: TextFormField(
+                                controller: _currentPasswordController,
+                                obscureText: !_showCurrentPassword,
+                                decoration: InputDecoration(
+                                  labelText: 'Current Password',
+                                  labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                  prefixIcon: Icon(Icons.lock_outline, color: deepRed),
+                                  suffixIcon: IconButton(
+                                    icon: Icon(
+                                      _showCurrentPassword ? Icons.visibility_off : Icons.visibility,
                                       color: Colors.grey[600],
-                                      fontSize: 12,
                                     ),
-                                    textAlign: TextAlign.left,
+                                    onPressed: () => setSt(() => _showCurrentPassword = !_showCurrentPassword),
                                   ),
                                 ),
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                               ),
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: deepRed,
-                                    padding: EdgeInsets.symmetric(vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
+                            ),
+                            // New Password field
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.3)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 10,
+                                    offset: Offset(0, 2),
                                   ),
-                                  onPressed: _isLoading ? null : () async {
-                                    if (_newPasswordController.text.isEmpty ||
-                                        _currentPasswordController.text.isEmpty ||
-                                        _confirmPasswordController.text.isEmpty) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Please fill in all fields')),
-                                      );
-                                      return;
-                                    }
-
-                                    if (_newPasswordController.text != _confirmPasswordController.text) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('New passwords do not match')),
-                                      );
-                                      return;
-                                    }
-
-                                    final password = _newPasswordController.text;
-                                    if (password.length < 8 ||
-                                        !RegExp(r'[A-Z]').hasMatch(password) ||
-                                        !RegExp(r'[a-z]').hasMatch(password) ||
-                                        !RegExp(r'[0-9]').hasMatch(password) ||
-                                        !RegExp(r'[!@#\$&*~_.,%^()\-\+=]').hasMatch(password)) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Password does not meet requirements')),
-                                      );
-                                      return;
-                                    }
-
-                                    setSt(() => _isLoading = true);
-                                    try {
-                                      await Supabase.instance.client.auth.updateUser(
-                                        UserAttributes(password: _newPasswordController.text.trim()),
-                                      );
-                                      Navigator.pop(ctx);
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Password updated successfully')),
-                                      );
-                                    } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Failed to update password: ${e.toString()}')),
-                                      );
-                                    }
-                                    setSt(() => _isLoading = false);
-                                  },
-                                  child: _isLoading
-                                      ? SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            color: Colors.white,
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : Text(
-                                          'Update Password',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                          ),
+                                ],
+                              ),
+                              margin: EdgeInsets.only(bottom: 20),
+                              child: TextFormField(
+                                controller: _newPasswordController,
+                                obscureText: !_showNewPassword,
+                                onChanged: (value) => setSt(() {}),
+                                decoration: InputDecoration(
+                                  labelText: 'New Password',
+                                  labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                  prefixIcon: Icon(Icons.lock_reset, color: deepRed),
+                                  suffixIcon: IconButton(
+                                    icon: Icon(
+                                      _showNewPassword ? Icons.visibility_off : Icons.visibility,
+                                      color: Colors.grey[600],
+                                    ),
+                                    onPressed: () => setSt(() => _showNewPassword = !_showNewPassword),
+                                  ),
+                                ),
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                              ),
+                            ),
+                            // Confirm Password field
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: _newPasswordController.text.isNotEmpty
+                                      ? (_passwordsMatch ? Colors.green.withOpacity(0.5) : Colors.red.withOpacity(0.5))
+                                      : coral.withOpacity(0.3),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 10,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              margin: EdgeInsets.only(bottom: 20),
+                              child: TextFormField(
+                                controller: _confirmPasswordController,
+                                obscureText: !_showConfirmPassword,
+                                onChanged: (value) => setSt(() {}),
+                                decoration: InputDecoration(
+                                  labelText: 'Confirm New Password',
+                                  labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                  prefixIcon: Icon(Icons.check_circle_outline, color: deepRed),
+                                  suffixIcon: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (_newPasswordController.text.isNotEmpty && _confirmPasswordController.text.isNotEmpty)
+                                        Icon(
+                                          _passwordsMatch ? Icons.check_circle : Icons.error,
+                                          color: _passwordsMatch ? Colors.green : Colors.red,
+                                          size: 20,
                                         ),
+                                      IconButton(
+                                        icon: Icon(
+                                          _showConfirmPassword ? Icons.visibility_off : Icons.visibility,
+                                          color: Colors.grey[600],
+                                        ),
+                                        onPressed: () => setSt(() => _showConfirmPassword = !_showConfirmPassword),
+                                      ),
+                                    ],
+                                  ),
                                 ),
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                               ),
-                            ],
-                          ),
+                            ),
+                            // Password Requirements with visual indicators
+                            Container(
+                              padding: EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: lightBlush.withOpacity(0.5),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                              ),
+                              margin: EdgeInsets.only(bottom: 32),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.security, color: coral, size: 20),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Password Requirements',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 12),
+                                  _passwordRequirement('At least 8 characters', _hasValidLength),
+                                  _passwordRequirement('One uppercase letter', _hasUppercase),
+                                  _passwordRequirement('One lowercase letter', _hasLowercase),
+                                  _passwordRequirement('One number', _hasNumber),
+                                  _passwordRequirement('One special character', _hasSpecialChar),
+                                  if (_newPasswordController.text.isNotEmpty && _confirmPasswordController.text.isNotEmpty)
+                                    _passwordRequirement('Passwords match', _passwordsMatch),
+                                ],
+                              ),
+                            ),
+                            // Enhanced Update button
+                            Container(
+                              width: double.infinity,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [deepRed, coral],
+                                  begin: Alignment.centerLeft,
+                                  end: Alignment.centerRight,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.3),
+                                    blurRadius: 15,
+                                    offset: Offset(0, 5),
+                                  ),
+                                ],
+                              ),
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.transparent,
+                                  shadowColor: Colors.transparent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                onPressed: _isLoading ? null : () async {
+                                  if (_newPasswordController.text.isEmpty ||
+                                      _currentPasswordController.text.isEmpty ||
+                                      _confirmPasswordController.text.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Row(
+                                          children: [
+                                            Icon(Icons.warning, color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Text('Please fill in all fields'),
+                                          ],
+                                        ),
+                                        backgroundColor: Colors.orange,
+                                        behavior: SnackBarBehavior.floating,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      ),
+                                    );
+                                    return;
+                                  }
+
+                                  if (!_passwordsMatch) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Row(
+                                          children: [
+                                            Icon(Icons.error, color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Text('New passwords do not match'),
+                                          ],
+                                        ),
+                                        backgroundColor: Colors.red,
+                                        behavior: SnackBarBehavior.floating,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      ),
+                                    );
+                                    return;
+                                  }
+
+                                  if (!(_hasValidLength && _hasUppercase && _hasLowercase && _hasNumber && _hasSpecialChar)) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Row(
+                                          children: [
+                                            Icon(Icons.error, color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Text('Password does not meet requirements'),
+                                          ],
+                                        ),
+                                        backgroundColor: Colors.red,
+                                        behavior: SnackBarBehavior.floating,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      ),
+                                    );
+                                    return;
+                                  }
+
+                                  setSt(() => _isLoading = true);
+                                  try {
+                                    await Supabase.instance.client.auth.updateUser(
+                                      UserAttributes(password: _newPasswordController.text.trim()),
+                                    );
+                                    Navigator.pop(ctx);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Row(
+                                          children: [
+                                            Icon(Icons.check_circle, color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Text('Password updated successfully'),
+                                          ],
+                                        ),
+                                        backgroundColor: Colors.green,
+                                        behavior: SnackBarBehavior.floating,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Row(
+                                          children: [
+                                            Icon(Icons.error, color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Expanded(child: Text('Failed to update password: ${e.toString()}')),
+                                          ],
+                                        ),
+                                        backgroundColor: Colors.red,
+                                        behavior: SnackBarBehavior.floating,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      ),
+                                    );
+                                  }
+                                  setSt(() => _isLoading = false);
+                                },
+                                child: _isLoading
+                                    ? SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2.5,
+                                        ),
+                                      )
+                                    : Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(Icons.lock_reset, color: Colors.white),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'Update Password',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                              ),
+                            ),
+                            SizedBox(height: 20),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );
           },
         );
       },
+    );
+  }
+
+  Widget _passwordRequirement(String text, bool isValid) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(
+            isValid ? Icons.check_circle : Icons.radio_button_unchecked,
+            color: isValid ? Colors.green : Colors.grey,
+            size: 16,
+          ),
+          SizedBox(width: 8),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 14,
+              color: isValid ? Colors.green : Colors.grey[700],
+              fontWeight: isValid ? FontWeight.w500 : FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1266,31 +1943,184 @@ SizedBox(height: 16),
   void _showFAQs() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Frequently Asked Questions'),
-        content: SingleChildScrollView(
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white,
+                lightBlush.withOpacity(0.2),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Q: How do I add a new pet?', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('A: Go to the "Owned Pets" tab and tap the "Add Pet" button.'),
-              SizedBox(height: 12),
-              Text('Q: How do I find a pet sitter?', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('A: Browse the pet sitter profiles in the main app and send a request.'),
-              SizedBox(height: 12),
-              Text('Q: How do I update my profile?', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('A: Go to Settings > Account to update your information.'),
-              SizedBox(height: 12),
-              Text('Q: How do I report a missing pet?', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('A: Use the "Report Missing" feature in your pet\'s profile.'),
+              // Enhanced Header
+              Container(
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: deepRed.withOpacity(0.05),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: deepRed.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(Icons.quiz, color: deepRed, size: 20),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Frequently Asked Questions',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: deepRed,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Enhanced Content
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _faqItem(
+                        'How do I add a new pet?',
+                        'Go to the "Owned Pets" tab and tap the "Add Pet" button.',
+                        Icons.pets,
+                      ),
+                      _faqItem(
+                        'How do I find a pet sitter?',
+                        'Browse the pet sitter profiles in the main app and send a request.',
+                        Icons.person_search,
+                      ),
+                      _faqItem(
+                        'How do I update my profile?',
+                        'Go to Settings > Account to update your information.',
+                        Icons.edit,
+                      ),
+                      _faqItem(
+                        'How do I report a missing pet?',
+                        'Use the "Report Missing" feature in your pet\'s profile.',
+                        Icons.report_problem,
+                      ),
+                      _faqItem(
+                        'How do I contact support?',
+                        'Use the Help & Support section to email or call our team.',
+                        Icons.support_agent,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Enhanced Action Button
+              Container(
+                padding: EdgeInsets.all(20),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: deepRed,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 2,
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(
+                      'Close',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Close'),
+      ),
+    );
+  }
+
+  Widget _faqItem(String question, String answer, IconData icon) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 16),
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: coral.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: coral.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: coral, size: 16),
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  question,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: deepRed,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 8),
+          Padding(
+            padding: EdgeInsets.only(left: 32),
+            child: Text(
+              answer,
+              style: TextStyle(
+                color: Colors.grey[700],
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
           ),
         ],
       ),
@@ -1299,64 +2129,280 @@ SizedBox(height: 16),
 
   void _reportIssue() async {
     TextEditingController issueController = TextEditingController();
+    bool isLoading = false;
+    
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Report an Issue'),
-        content: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey, width: 1.5),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          padding: EdgeInsets.all(4),
-          child: TextField(
-            controller: issueController,
-            style: TextStyle(color: Colors.black),
-            decoration: InputDecoration(
-              hintText: 'Describe the issue you\'re experiencing...',
-              hintStyle: TextStyle(color: Colors.grey),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.grey.shade100,
+                  lightBlush.withOpacity(0.5),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
             ),
-            maxLines: 4,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Enhanced Header
+                Container(
+                  padding: EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.05),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.bug_report, color: deepRed, size: 20),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Report an Issue',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: deepRed,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Enhanced Content
+                Flexible(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Help us improve PetTrackCare by describing the issue you\'re experiencing:',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[700],
+                            height: 1.4,
+                          ),
+                        ),
+                        SizedBox(height: 16),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: TextField(
+                            controller: issueController,
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontSize: 14,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Describe the issue you\'re experiencing...\n\nPlease include:\n• What you were trying to do\n• What went wrong\n• When it happened',
+                              hintStyle: TextStyle(
+                                color: Colors.grey[500],
+                                fontSize: 13,
+                                height: 1.4,
+                              ),
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.all(20),
+                              prefixIcon: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: Icon(Icons.edit, color: coral, size: 20),
+                              ),
+                            ),
+                            maxLines: 6,
+                            minLines: 6,
+                          ),
+                        ),
+                        SizedBox(height: 20),
+                        // Info section
+                        Container(
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: lightBlush.withOpacity(0.5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: coral.withOpacity(0.2)),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.info_outline, color: coral, size: 16),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Your feedback helps us make the app better for all pet owners.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[700],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Enhanced Action Buttons
+                Container(
+                  padding: EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: BorderSide(color: Colors.grey.shade300),
+                            ),
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                          child: Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: deepRed,
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 2,
+                          ),
+                          onPressed: isLoading ? null : () async {
+                            final text = issueController.text.trim();
+                            if (text.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Row(
+                                    children: [
+                                      Icon(Icons.warning, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Text('Please describe the issue.'),
+                                    ],
+                                  ),
+                                  backgroundColor: Colors.orange,
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                              );
+                              return;
+                            }
+                            setState(() => isLoading = true);
+                            try {
+                              await Supabase.instance.client
+                                  .from('feedback')
+                                  .insert({
+                                'user_id': user?.id,
+                                'message': text,
+                                'created_at': DateTime.now().toIso8601String(),
+                              });
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Row(
+                                    children: [
+                                      Icon(Icons.check_circle, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Text('Issue reported successfully!'),
+                                    ],
+                                  ),
+                                  backgroundColor: Colors.green,
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                              );
+                            } catch (e) {
+                              setState(() => isLoading = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Row(
+                                    children: [
+                                      Icon(Icons.error, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Expanded(child: Text('Failed to report issue. Please try again.')),
+                                    ],
+                                  ),
+                                  backgroundColor: Colors.red,
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                              );
+                            }
+                          },
+                          child: isLoading
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.send, color: Colors.white, size: 16),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Report Issue',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final text = issueController.text.trim();
-              if (text.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Please describe the issue.')),
-                );
-                return;
-              }
-              try {
-                await Supabase.instance.client
-                    .from('feedback')
-                    .insert({
-                  'user_id': user?.id,
-                  'message': text,
-                  'created_at': DateTime.now().toIso8601String(),
-                });
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Issue reported successfully!')),
-                );
-              } catch (e) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to report issue. Please try again.')),
-                );
-              }
-            },
-            child: Text('Report'),
-          ),
-        ],
       ),
     );
   }
@@ -1367,100 +2413,225 @@ SizedBox(height: 16),
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (ctx) {
-        return SafeArea(
-          child: Container(
-            color: lightBlush,
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white,
+                lightBlush.withOpacity(0.2),
+              ],
+            ),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: SafeArea(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back, color: deepRed),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                    Expanded(
-                      child: Center(
+                // Enhanced Header
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.05),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.help_outline, color: deepRed, size: 20),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
                         child: Text(
                           'Help & Support',
                           style: TextStyle(
-                            fontSize: 24,
+                            fontSize: 20,
                             fontWeight: FontWeight.bold,
                             color: deepRed,
-                            letterSpacing: 0.5,
                           ),
                         ),
                       ),
-                    ),
-                    SizedBox(width: 48),
-                  ],
-                ),
-                SingleChildScrollView(
-                  padding: EdgeInsets.all(16),
-                  child: Column(
-                    children: [
                       Container(
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade400),
+                          color: Colors.grey.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
-                          color: Colors.white,
                         ),
-                        margin: EdgeInsets.only(bottom: 16),
-                        child: Column(
-                          children: [
-                            ListTile(
-                              title: Text('Contact Support'),
-                              subtitle: Text('Reach out to our support team'),
-                              leading: Icon(Icons.support_agent, color: deepRed),
-                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
-                              onTap: () => _launchEmail('test@gmail.com'),
-                            ),
-                            Divider(height: 1),
-                            ListTile(
-                              title: Text('FAQs'),
-                              subtitle: Text('Find answers to common questions'),
-                              leading: Icon(Icons.question_answer, color: deepRed),
-                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
-                              onTap: _showFAQs,
-                            ),
-                            Divider(height: 1),
-                            ListTile(
-                              title: Text('Report an Issue'),
-                              subtitle: Text('Let us know if something\'s not working'),
-                              leading: Icon(Icons.bug_report, color: deepRed),
-                              trailing: Icon(Icons.arrow_forward_ios, size: 16),
-                              onTap: _reportIssue,
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade400),
-                          borderRadius: BorderRadius.circular(12),
-                          color: Colors.white,
-                        ),
-                        margin: EdgeInsets.only(bottom: 16),
-                        child: Column(
-                          children: [
-                            ListTile(
-                              leading: Icon(Icons.email, color: deepRed),
-                              title: Text('Email Support'),
-                              subtitle: Text('test@gmail.com'),
-                              onTap: () => _launchEmail('test@gmail.com'),
-                            ),
-                            Divider(height: 1),
-                            ListTile(
-                              leading: Icon(Icons.phone, color: deepRed),
-                              title: Text('Phone Support'),
-                              subtitle: Text('+1 123-456-7890'),
-                              onTap: () => _launchPhone('+1 123-456-7890'),
-                            ),
-                          ],
+                        child: IconButton(
+                          icon: Icon(Icons.close, color: Colors.grey[600]),
+                          onPressed: () => Navigator.pop(ctx),
                         ),
                       ),
                     ],
+                  ),
+                ),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.all(24),
+                    child: Column(
+                      children: [
+                        // Contact Section
+                        Container(
+                          padding: EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          margin: EdgeInsets.only(bottom: 20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.support_agent, color: coral, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Get Support',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: deepRed,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 16),
+                              _supportItem(
+                                icon: Icons.email,
+                                title: 'Email Support',
+                                subtitle: 'Get help via email',
+                                detail: 'test@gmail.com',
+                                onTap: () => _launchEmail('test@gmail.com'),
+                              ),
+                              SizedBox(height: 12),
+                              _supportItem(
+                                icon: Icons.phone,
+                                title: 'Phone Support',
+                                subtitle: 'Speak with our team',
+                                detail: '+1 123-456-7890',
+                                onTap: () => _launchPhone('+1 123-456-7890'),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Help Resources Section
+                        Container(
+                          padding: EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          margin: EdgeInsets.only(bottom: 20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.menu_book, color: coral, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Resources',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: deepRed,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 16),
+                              _supportItem(
+                                icon: Icons.question_answer,
+                                title: 'FAQs',
+                                subtitle: 'Common questions and answers',
+                                onTap: _showFAQs,
+                              ),
+                              SizedBox(height: 12),
+                              _supportItem(
+                                icon: Icons.bug_report,
+                                title: 'Report an Issue',
+                                subtitle: 'Let us know about problems',
+                                onTap: _reportIssue,
+                              ),
+                              SizedBox(height: 12),
+                              _supportItem(
+                                icon: Icons.feedback,
+                                title: 'Send Feedback',
+                                subtitle: 'Share your thoughts with us',
+                                onTap: () => _launchEmail('feedback@pettrackcare.com'),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Quick Tips Section
+                        Container(
+                          padding: EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [lightBlush.withOpacity(0.5), peach.withOpacity(0.2)],
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.2)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.lightbulb_outline, color: coral, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Quick Tips',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: deepRed,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+                              _tipItem('• Enable notifications to stay updated on your pet\'s activities'),
+                              _tipItem('• Update your profile regularly for better pet care recommendations'),
+                              _tipItem('• Use the search feature to quickly find specific information'),
+                              _tipItem('• Check your internet connection if experiencing sync issues'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -1471,115 +2642,357 @@ SizedBox(height: 16),
     );
   }
 
+  Widget _supportItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    String? detail,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: lightBlush.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: coral.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: coral.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: deepRed, size: 20),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: deepRed,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  if (detail != null) ...[
+                    SizedBox(height: 4),
+                    Text(
+                      detail,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: coral,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios, color: Colors.grey[400], size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tipItem(String tip) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: Text(
+        tip,
+        style: TextStyle(
+          fontSize: 13,
+          color: Colors.grey[700],
+          height: 1.4,
+        ),
+      ),
+    );
+  }
+
   // Open dialog for about information
   void _openAbout() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white,
+                lightBlush.withOpacity(0.2),
+              ],
             ),
-            child: Container(
-              color: lightBlush,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Enhanced Header
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.05),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  child: Row(
                     children: [
-                      IconButton(
-                        icon: Icon(Icons.arrow_back, color: deepRed),
-                        onPressed: () => Navigator.pop(ctx),
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.info_outline, color: deepRed, size: 20),
                       ),
+                      SizedBox(width: 12),
                       Expanded(
-                        child: Center(
-                          child: Text(
-                            'About',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              color: deepRed,
-                              letterSpacing: 0.5,
-                            ),
+                        child: Text(
+                          'About PetTrackCare',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: deepRed,
                           ),
                         ),
                       ),
-                      SizedBox(width: 48),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: IconButton(
+                          icon: Icon(Icons.close, color: Colors.grey[600]),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ),
                     ],
                   ),
-                  SingleChildScrollView(
-                    padding: EdgeInsets.all(16),
+                ),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.all(24),
                     child: Column(
                       children: [
+                        // App Info Section
                         Container(
+                          padding: EdgeInsets.all(24),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey.shade400),
-                            borderRadius: BorderRadius.circular(12),
                             color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
                           ),
-                          margin: EdgeInsets.only(bottom: 16),
-                          padding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                          margin: EdgeInsets.only(bottom: 20),
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // App Icon
+                              Container(
+                                width: 80,
+                                height: 80,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [deepRed, coral],
+                                  ),
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: deepRed.withOpacity(0.2),
+                                      blurRadius: 10,
+                                      offset: Offset(0, 5),
+                                    ),
+                                  ],
+                                ),
+                                child: Icon(
+                                  Icons.pets,
+                                  color: Colors.white,
+                                  size: 40,
+                                ),
+                              ),
+                              SizedBox(height: 16),
                               Text(
                                 'PetTrackCare',
                                 style: TextStyle(
-                                  fontSize: 20,
+                                  fontSize: 24,
                                   fontWeight: FontWeight.bold,
                                   color: deepRed,
                                 ),
                               ),
                               SizedBox(height: 8),
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: coral.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: coral.withOpacity(0.3)),
+                                ),
+                                child: Text(
+                                  'Version 1.0.0',
+                                  style: TextStyle(
+                                    color: coral,
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(height: 16),
                               Text(
-                                'Version 1.0.0',
+                                'A comprehensive app designed to help pet owners monitor and manage their pets\' health, activities, and daily care routines with care and precision.',
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[700],
+                                  height: 1.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Features Section
+                        Container(
+                          padding: EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          margin: EdgeInsets.only(bottom: 20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.star, color: coral, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Key Features',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: deepRed,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 16),
+                              _featureItem(Icons.health_and_safety, 'Health Monitoring'),
+                              _featureItem(Icons.calendar_today, 'Activity Tracking'),
+                              _featureItem(Icons.notifications, 'Smart Reminders'),
+                              _featureItem(Icons.people, 'Pet Sitting Services'),
+                              _featureItem(Icons.analytics, 'Health Analytics'),
+                            ],
+                          ),
+                        ),
+                        // Team & Contact Section
+                        Container(
+                          padding: EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [lightBlush.withOpacity(0.5), peach.withOpacity(0.2)],
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: coral.withOpacity(0.2)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.groups, color: coral, size: 20),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Our Team',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: deepRed,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Developed with ❤️ by the PetTrackCare Team',
+                                style: TextStyle(
+                                  fontSize: 14,
                                   color: Colors.grey[700],
                                 ),
                               ),
                               SizedBox(height: 16),
-                              Text(
-                                'PetTrackCare is a comprehensive app designed to help pet owners monitor and manage their pets\' health, activities, and daily care routines.',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  color: Colors.grey[800],
-                                ),
+                              Row(
+                                children: [
+                                  Icon(Icons.email, color: coral, size: 16),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Contact us: ',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
+                                  InkWell(
+                                    onTap: () => _launchEmail('test@gmail.com'),
+                                    child: Text(
+                                      'test@gmail.com',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: deepRed,
+                                        fontWeight: FontWeight.w500,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                              SizedBox(height: 16),
-                              Divider(),
-                              SizedBox(height: 16),
+                              SizedBox(height: 12),
                               Text(
-                                'Developed by:',
+                                '© 2024 PetTrackCare. All rights reserved.',
                                 style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.grey[800],
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'PetTrackCare Team',
-                                style: TextStyle(
-                                  color: Colors.grey[700],
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                'Contact:',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.grey[800],
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'test@gmail.com',
-                                style: TextStyle(
-                                  color: deepRed,
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
                                 ),
                               ),
                             ],
@@ -1588,12 +3001,39 @@ SizedBox(height: 16),
                       ],
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _featureItem(IconData icon, String title) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: coral.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: coral, size: 16),
+          ),
+          SizedBox(width: 12),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1602,12 +3042,148 @@ SizedBox(height: 16),
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
-        return SavedPostsModal(userId: user?.id ?? '');
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white,
+                lightBlush.withOpacity(0.2),
+              ],
+            ),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Enhanced Header
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.05),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.bookmark, color: deepRed, size: 20),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Saved Posts',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: deepRed,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: IconButton(
+                          icon: Icon(Icons.close, color: Colors.grey[600]),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Enhanced SavedPostsModal with modern container
+                Expanded(
+                  child: Container(
+                    margin: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: coral.withOpacity(0.3)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: SavedPostsModal(userId: user?.id ?? ''),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
       },
+    );
+  }
+
+  // Helper method for info cards
+  Widget _buildUserInfoCard({
+    required IconData icon,
+    required String title,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3), width: 1),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 18),
+          SizedBox(height: 4),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 11,
+              color: color.withOpacity(0.8),
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+          ),
+          SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              color: color,
+              fontWeight: FontWeight.bold,
+            ),
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1794,92 +3370,196 @@ class _AddPetFormState extends State<_AddPetForm> {
   Widget build(BuildContext context) {
     return Form(
       key: _formKey,
-      child: Wrap(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(widget.initialPet != null ? "Edit Pet" : "Add New Pet",
-              style: TextStyle(
-                  fontSize: 20, fontWeight: FontWeight.bold, color: deepRed)),
-          SizedBox(height: 16),
-
-           // species selector
-           Row(
-             mainAxisAlignment: MainAxisAlignment.center,
-             children: [
-               ChoiceChip(
-                 label: Text(
-                   'Dog',
-                   style: TextStyle(
-                     color: _species == 'Dog' ? Colors.white : deepRed,
-                     fontWeight: FontWeight.w600,
-                   ),
-                 ),
-                 selected: _species == 'Dog',
-                 selectedColor: deepRed,
-                 backgroundColor: Colors.grey.shade200,
-                 onSelected: (_) => setState(() {
-                   _species = 'Dog';
-                   // ensure breed matches selected species
-                   if (!dogBreeds.contains(breed)) breed = dogBreeds.first;
-                 }),
-               ),
-               SizedBox(width: 8),
-               ChoiceChip(
-                 label: Text(
-                   'Cat',
-                   style: TextStyle(
-                     color: _species == 'Cat' ? Colors.white : deepRed,
-                     fontWeight: FontWeight.w600,
-                   ),
-                 ),
-                 selected: _species == 'Cat',
-                 selectedColor: deepRed,
-                 backgroundColor: Colors.grey.shade200,
-                 onSelected: (_) => setState(() {
-                   _species = 'Cat';
-                   // ensure breed matches selected species
-                   if (!catBreeds.contains(breed)) breed = catBreeds.first;
-                 }),
-               ),
-             ],
-           ),
-           SizedBox(height: 12),
-
-          // Image picker section
-          Center(
-            child: Stack(
-              alignment: Alignment.bottomRight,
+          // Enhanced Header
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              color: deepRed.withOpacity(0.05),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: Row(
               children: [
-                CircleAvatar(
-                  radius: 50,
-                  backgroundColor: Colors.grey[300],
-                  backgroundImage: _petImage != null 
-                      ? FileImage(_petImage!) 
-                      : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
-                          ? NetworkImage(widget.initialPet!['profile_picture'])
-                          : null,
-                  child: (_petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null))
-                      ? Icon(Icons.pets, size: 50, color: Colors.white)
-                      : null,
+                Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.pets, color: deepRed, size: 20),
                 ),
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: GestureDetector(
-                    onTap: _pickPetImage,
-                    child: Container(
-                      padding: EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: deepRed,
-                      ),
-                      child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    widget.initialPet != null ? "Edit Pet" : "Add New Pet",
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: deepRed,
                     ),
+                  ),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: IconButton(
+                    icon: Icon(Icons.close, color: Colors.grey[600]),
+                    onPressed: () => Navigator.pop(context),
                   ),
                 ),
               ],
             ),
           ),
-          SizedBox(height: 16),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  // Species selector with modern styling
+                  Container(
+                    padding: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: coral.withOpacity(0.3)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    margin: EdgeInsets.only(bottom: 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.category, color: coral, size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              'Pet Type',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: deepRed,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _speciesChip('Dog', Icons.pets),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: _speciesChip('Cat', Icons.pets),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Enhanced Image picker section
+                  Container(
+                    padding: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: coral.withOpacity(0.3)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    margin: EdgeInsets.only(bottom: 20),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.photo_camera, color: coral, size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              'Pet Photo',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: deepRed,
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 16),
+                        Center(
+                          child: Stack(
+                            alignment: Alignment.bottomRight,
+                            children: [
+                              Container(
+                                width: 100,
+                                height: 100,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: coral.withOpacity(0.3), width: 3),
+                                  gradient: _petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null)
+                                      ? LinearGradient(
+                                          colors: [lightBlush.withOpacity(0.3), peach.withOpacity(0.1)],
+                                        )
+                                      : null,
+                                ),
+                                child: ClipOval(
+                                  child: _petImage != null 
+                                      ? Image.file(_petImage!, fit: BoxFit.cover, width: 100, height: 100)
+                                      : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
+                                          ? Image.network(widget.initialPet!['profile_picture'], fit: BoxFit.cover, width: 100, height: 100)
+                                          : Icon(Icons.pets, size: 40, color: coral),
+                                ),
+                              ),
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: GestureDetector(
+                                  onTap: _pickPetImage,
+                                  child: Container(
+                                    padding: EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: LinearGradient(colors: [deepRed, coral]),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: deepRed.withOpacity(0.3),
+                                          blurRadius: 8,
+                                          offset: Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'Tap the camera icon to add a photo',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
           _buildTextField(
             label: "Name", 
@@ -1968,6 +3648,10 @@ class _AddPetFormState extends State<_AddPetForm> {
           SizedBox(height: 16),
         ],
       ),
+    )
+          ),
+        ]
+      ),
     );
   }
 
@@ -1977,20 +3661,101 @@ class _AddPetFormState extends State<_AddPetForm> {
     TextInputType keyboardType = TextInputType.text,
     required FormFieldSetter<String> onSaved,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: coral.withOpacity(0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      margin: EdgeInsets.only(bottom: 16),
       child: TextFormField(
         initialValue: initialValue,
         keyboardType: keyboardType,
         decoration: InputDecoration(
           labelText: label,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          prefixIcon: _getFieldIcon(label),
         ),
+        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
         validator: (value) =>
             (value == null || value.isEmpty) ? 'Required' : null,
         onSaved: onSaved,
       ),
     );
+  }
+
+  Widget _speciesChip(String species, IconData icon) {
+    bool isSelected = _species == species;
+    return InkWell(
+      onTap: () => setState(() {
+        _species = species;
+        // ensure breed matches selected species
+        if (species == 'Dog' && !dogBreeds.contains(breed)) {
+          breed = dogBreeds.first;
+        } else if (species == 'Cat' && !catBreeds.contains(breed)) {
+          breed = catBreeds.first;
+        }
+      }),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          gradient: isSelected 
+              ? LinearGradient(colors: [deepRed, coral])
+              : null,
+          color: isSelected ? null : lightBlush.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? Colors.transparent : coral.withOpacity(0.3),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? Colors.white : deepRed,
+              size: 18,
+            ),
+            SizedBox(width: 8),
+            Text(
+              species,
+              style: TextStyle(
+                color: isSelected ? Colors.white : deepRed,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Icon _getFieldIcon(String label) {
+    switch (label.toLowerCase()) {
+      case 'name':
+        return Icon(Icons.pets, color: deepRed);
+      case 'breed':
+        return Icon(Icons.category, color: deepRed);
+      case 'age':
+        return Icon(Icons.cake, color: deepRed);
+      case 'weight':
+        return Icon(Icons.monitor_weight, color: deepRed);
+      case 'health':
+        return Icon(Icons.health_and_safety, color: deepRed);
+      default:
+        return Icon(Icons.info, color: deepRed);
+    }
   }
 }
 

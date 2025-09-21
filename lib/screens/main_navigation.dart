@@ -9,6 +9,12 @@ import 'profile_sitter_screen.dart';
 import 'notification_screen.dart';
 import '../widgets/missing_pet_alert_wrapper.dart';
 
+// Color constants for consistent theming
+const deepRed = Color(0xFFB82132);
+const coral = Color(0xFFD2665A);
+const peach = Color(0xFFF2B28C);
+const lightBlush = Color(0xFFF6DED8);
+
 class MainNavigation extends StatefulWidget {
   final String userId;
 
@@ -80,38 +86,191 @@ class _MainNavigationState extends State<MainNavigation> {
       child: Scaffold(
         appBar: _selectedIndex == 0
           ? AppBar(
-              title: const Text('PetTrackCare', style: TextStyle(fontWeight: FontWeight.bold)),
-              backgroundColor: const Color(0xFFCB4154),
+              backgroundColor: deepRed,
+              elevation: 0,
+              title: Row(
+                children: [
+                  SizedBox(width: 12),
+                  Text(
+                    'PetTrackCare',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontSize: 20,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
               actions: [
-                IconButton(
-                  icon: Icon(Icons.notifications),
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const NotificationScreen(),
+                Container(
+                  margin: EdgeInsets.only(right: 8),
+                  child: IconButton(
+                    icon: Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.3),
+                          width: 1,
+                        ),
                       ),
-                    );
-                  },
+                      child: Icon(
+                        Icons.notifications_outlined,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const NotificationScreen(),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ],
             )
           : null,
         body: screens[_selectedIndex],
-        bottomNavigationBar: BottomNavigationBar(
-          type: BottomNavigationBarType.fixed,
-          currentIndex: _selectedIndex,
-          onTap: _onItemTapped,
-          selectedItemColor: const Color(0xFFCB4154),
-          unselectedItemColor: Colors.grey[600],
-          backgroundColor: Colors.white,
-          items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-            BottomNavigationBarItem(icon: Icon(Icons.pets), label: 'Pets'),
-            BottomNavigationBarItem(icon: Icon(Icons.people), label: 'Community'),
-            BottomNavigationBarItem(icon: Icon(Icons.chat_bubble), label: 'Messages'),
-            BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
-          ],
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: BottomNavigationBar(
+            type: BottomNavigationBarType.fixed,
+            currentIndex: _selectedIndex,
+            onTap: _onItemTapped,
+            selectedItemColor: deepRed,
+            unselectedItemColor: Colors.grey[600],
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            selectedLabelStyle: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
+            unselectedLabelStyle: TextStyle(
+              fontWeight: FontWeight.w500,
+              fontSize: 11,
+            ),
+            items: [
+              BottomNavigationBarItem(
+                icon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: _selectedIndex == 0
+                      ? BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        )
+                      : null,
+                  child: Icon(Icons.home_outlined),
+                ),
+                activeIcon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.home, color: deepRed),
+                ),
+                label: 'Home',
+              ),
+              BottomNavigationBarItem(
+                icon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: _selectedIndex == 1
+                      ? BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        )
+                      : null,
+                  child: Icon(Icons.pets_outlined),
+                ),
+                activeIcon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.pets, color: deepRed),
+                ),
+                label: 'Pets',
+              ),
+              BottomNavigationBarItem(
+                icon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: _selectedIndex == 2
+                      ? BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        )
+                      : null,
+                  child: Icon(Icons.people_outline),
+                ),
+                activeIcon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.people, color: deepRed),
+                ),
+                label: 'Community',
+              ),
+              BottomNavigationBarItem(
+                icon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: _selectedIndex == 3
+                      ? BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        )
+                      : null,
+                  child: Icon(Icons.chat_bubble_outline),
+                ),
+                activeIcon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.chat_bubble, color: deepRed),
+                ),
+                label: 'Messages',
+              ),
+              BottomNavigationBarItem(
+                icon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: _selectedIndex == 4
+                      ? BoxDecoration(
+                          color: deepRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        )
+                      : null,
+                  child: Icon(Icons.person_outline),
+                ),
+                activeIcon: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: deepRed.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.person, color: deepRed),
+                ),
+                label: 'Profile',
+              ),
+            ],
+          ),
         ),
       ),
     );

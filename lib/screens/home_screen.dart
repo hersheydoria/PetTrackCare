@@ -105,9 +105,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       final userRes = await supabase.from('users').select().eq('id', widget.userId).maybeSingle();
       if (userRes == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('User profile not found. Please contact support.')),
-        );
+        _showEnhancedSnackBar('User profile not found. Please contact support.', isError: true);
         setState(() => isLoading = false);
         return;
       }
@@ -191,21 +189,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (matchingSitters.isEmpty && sittersWithAddress.isNotEmpty) {
           // If no sitters match the location, show message but still display all
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('No sitters found in "$locationQuery". Showing all available sitters.')),
-            );
+            _showEnhancedSnackBar('No sitters found in "$locationQuery". Showing all available sitters.');
           }
           filteredSitters = sittersWithAddress;
         } else {
           filteredSitters = matchingSitters;
           // Show success message for location search
           if (mounted && matchingSitters.isNotEmpty) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Found ${matchingSitters.length} sitter(s) in "$locationQuery"'),
-                duration: Duration(seconds: 2),
-              ),
-            );
+            _showEnhancedSnackBar('Found ${matchingSitters.length} sitter(s) in "$locationQuery"');
           }
         }
       }
@@ -214,9 +205,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     } catch (e) {
       print('❌ fetchAvailableSitters ERROR: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading sitters. Please try again.')),
-        );
+        _showEnhancedSnackBar('Error loading sitters. Please try again.', isError: true);
       }
     }
   }
@@ -389,50 +378,199 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> _showSitterReviewsModal(Map<String, dynamic> sitter) async {
     final sitterUserId = sitter['id']?.toString();
     if (sitterUserId == null || sitterUserId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid sitter id.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Invalid sitter id.'),
+          backgroundColor: deepRed,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       return;
     }
 
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: Colors.transparent,
       builder: (context) {
-        return FractionallySizedBox(
-          heightFactor: 0.7,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.8,
+          decoration: BoxDecoration(
+            color: lightBlush,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              // Enhanced header with gradient
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [deepRed, coral],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                 ),
-                Text('Reviews for ${sitter['name'] ?? 'Sitter'}',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed, fontFamily: 'Roboto')),
-                SizedBox(height: 12),
-                Expanded(
+                child: Column(
+                  children: [
+                    // Handle bar
+                    Container(
+                      height: 4,
+                      width: 40,
+                      margin: EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    // Header content
+                    Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.rate_review,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Reviews',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.white70,
+                                  fontFamily: 'Roboto',
+                                ),
+                              ),
+                              Text(
+                                sitter['name'] ?? 'Sitter',
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  fontFamily: 'Roboto',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Content area
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.all(20),
                   child: FutureBuilder<List<dynamic>>(
                     future: _fetchReviewsForSitterUser(sitterUserId),
                     builder: (context, snap) {
                       if (snap.connectionState != ConnectionState.done) {
-                        return Center(child: CircularProgressIndicator(color: deepRed));
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 60,
+                                height: 60,
+                                padding: EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: coral.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: CircularProgressIndicator(
+                                  color: deepRed,
+                                  strokeWidth: 3,
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              Text(
+                                'Loading reviews...',
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontFamily: 'Roboto',
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
                       }
                       final items = snap.data ?? [];
                       if (items.isEmpty) {
-                        return Center(child: Text('No reviews yet', style: TextStyle(color: Colors.grey[600], fontFamily: 'Roboto')));
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 80,
+                                height: 80,
+                                decoration: BoxDecoration(
+                                  color: coral.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.reviews_outlined,
+                                  size: 40,
+                                  color: coral,
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              Text(
+                                'No Reviews Yet',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: deepRed,
+                                  fontFamily: 'Roboto',
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'This sitter hasn\'t received any reviews yet.',
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontFamily: 'Roboto',
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        );
                       }
                       return ListView.separated(
                         itemCount: items.length,
-                        separatorBuilder: (_, __) => SizedBox(height: 12),
-                        itemBuilder: (_, i) => _buildReviewCardFromData(items[i] as Map<String, dynamic>),
+                        separatorBuilder: (_, __) => SizedBox(height: 16),
+                        itemBuilder: (_, i) => _buildEnhancedReviewCard(items[i] as Map<String, dynamic>),
                       );
                     },
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
@@ -506,11 +644,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ]);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Job $status.')));
+        _showEnhancedSnackBar('Job $status.');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+        _showEnhancedSnackBar('Failed to update: $e', isError: true);
       }
     }
   }
@@ -529,12 +667,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // Simplified Hire modal: remove start/end date selection
+  // Enhanced Hire modal with modern design
   Future<void> _showHireModal(Map<String, dynamic> sitter) async {
     if (pets.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('You have no pets. Add a pet before hiring a sitter.')),
-      );
+      _showEnhancedSnackBar('You have no pets. Add a pet before hiring a sitter.', isError: true);
       return;
     }
 
@@ -543,66 +679,289 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: Colors.transparent,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-                left: 16,
-                right: 16,
-                top: 16,
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.6,
+              decoration: BoxDecoration(
+                color: lightBlush,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        height: 6,
-                        width: 60,
-                        margin: EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
+              child: Column(
+                children: [
+                  // Enhanced header
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [deepRed, coral],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Column(
+                      children: [
+                        // Handle bar
+                        Container(
+                          height: 4,
+                          width: 40,
+                          margin: EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        // Header content
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                Icons.pets,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Hire Sitter',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white70,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                  Text(
+                                    sitter['name'] ?? 'Sitter',
+                                    style: TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content area
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Sitter info card
+                            Container(
+                              padding: EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.08),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 50,
+                                    height: 50,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [coral, peach],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        (sitter['name'] ?? 'S')[0].toUpperCase(),
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          sitter['name'] ?? 'Sitter',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: deepRed,
+                                            fontFamily: 'Roboto',
+                                          ),
+                                        ),
+                                        if (sitter['rate_per_hour'] != null)
+                                          Text(
+                                            '₱${sitter['rate_per_hour']}/hour',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.green[700],
+                                              fontWeight: FontWeight.w600,
+                                              fontFamily: 'Roboto',
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: 20),
+                            
+                            // Pet selection
+                            Text(
+                              'Select Pet to Care For',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: deepRed,
+                                fontFamily: 'Roboto',
+                              ),
+                            ),
+                            SizedBox(height: 8),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: coral.withOpacity(0.3)),
+                              ),
+                              child: DropdownButtonFormField<String>(
+                                value: selectedPetId,
+                                items: pets.map<DropdownMenuItem<String>>((p) {
+                                  return DropdownMenuItem(
+                                    value: p['id'] as String?,
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          width: 30,
+                                          height: 30,
+                                          decoration: BoxDecoration(
+                                            color: peach.withOpacity(0.3),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: Icon(
+                                            Icons.pets,
+                                            size: 16,
+                                            color: coral,
+                                          ),
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          p['name'] ?? 'Unnamed',
+                                          style: TextStyle(fontFamily: 'Roboto'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: (v) => setModalState(() => selectedPetId = v),
+                                decoration: InputDecoration(
+                                  border: InputBorder.none,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                  hintText: 'Choose a pet...',
+                                ),
+                              ),
+                            ),
+                            SizedBox(height: 30),
+                            
+                            // Action buttons
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => Navigator.of(context).pop(),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: coral,
+                                      side: BorderSide(color: coral),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      padding: EdgeInsets.symmetric(vertical: 16),
+                                    ),
+                                    child: Text(
+                                      'Cancel',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'Roboto',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () async {
+                                      if (selectedPetId == null) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Please select a pet.'),
+                                            backgroundColor: deepRed,
+                                            behavior: SnackBarBehavior.floating,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      Navigator.of(context).pop();
+                                      await _createSittingJob(sitter['id'] as String, selectedPetId!);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: deepRed,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      padding: EdgeInsets.symmetric(vertical: 16),
+                                      elevation: 2,
+                                    ),
+                                    child: Text(
+                                      'Confirm Hire',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontFamily: 'Roboto',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    Text(
-                      'Hire ${sitter['name'] ?? 'Sitter'}',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed, fontFamily: 'Roboto'),
-                    ),
-                    SizedBox(height: 8),
-                    Divider(),
-                    SizedBox(height: 8),
-                    Text('Select which pet this sitter will look after:', style: TextStyle(color: deepRed, fontFamily: 'Roboto')),
-                    SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                      value: selectedPetId,
-                      items: pets.map<DropdownMenuItem<String>>((p) {
-                        return DropdownMenuItem(value: p['id'] as String?, child: Text(p['name'] ?? 'Unnamed', style: TextStyle(fontFamily: 'Roboto')));
-                      }).toList(),
-                      onChanged: (v) => setModalState(() => selectedPetId = v),
-                      decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8))),
-                    ),
-                    SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          if (selectedPetId == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please select a pet.')));
-                            return;
-                          }
-                          Navigator.of(context).pop();
-                          await _createSittingJob(sitter['id'] as String, selectedPetId!);
-                        },
-                        child: Text('Confirm Hire', style: TextStyle(fontFamily: 'Roboto')),
-                        style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                      ),
-                    ),
-                    SizedBox(height: 12),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
           },
@@ -625,11 +984,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       setState(() {
         pendingSitterIds.add(sitterId);
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sitter hired — request sent.')));
+      _showEnhancedSnackBar('Sitter hired — request sent.');
       await Future.wait([fetchOwnerPendingRequests(), fetchOwnerActiveJobs()]);
     } catch (e) {
       print('❌ createSittingJob ERROR: $e');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create sitting job.')));
+      _showEnhancedSnackBar('Failed to create sitting job.', isError: true);
     }
   }
 
@@ -679,119 +1038,353 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  // Modal to finish job and add a quick review
+  // Enhanced modal to finish job and add a review
   Future<void> _showFinishJobModal(Map<String, dynamic> job) async {
     double rating = 5;
     String comment = '';
+    final petName = (job['pets']?['name'] ?? job['pet_id'] ?? 'Pet').toString();
+    
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
-        // Make the bottom sheet stateful so the Slider works properly
         return StatefulBuilder(
           builder: (ctx, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(ctx).viewInsets.bottom,
-                left: 16, right: 16, top: 16,
+            return Container(
+              height: MediaQuery.of(ctx).size.height * 0.75,
+              decoration: BoxDecoration(
+                color: lightBlush,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               ),
-              child: Wrap(
+              child: Column(
                 children: [
-                  Center(
-                    child: Container(height: 5, width: 60, margin: EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(3))),
+                  // Enhanced header
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [deepRed, coral],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Column(
+                      children: [
+                        // Handle bar
+                        Container(
+                          height: 4,
+                          width: 40,
+                          margin: EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        // Header content
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                Icons.task_alt,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Complete Job',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white70,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                  Text(
+                                    'Caring for $petName',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                  Text('Finish Job & Review', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: deepRed, fontFamily: 'Roboto')),
-                  SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Text('Rating:', style: TextStyle(color: deepRed, fontFamily: 'Roboto')),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Slider(
-                          min: 1, max: 5, divisions: 4,
-                          label: rating.round().toString(),
-                          value: rating,
-                          onChanged: (v) => setModalState(() => rating = v),
+                  // Content area
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Rating section
+                            Container(
+                              padding: EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.08),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.star,
+                                        color: coral,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Rate the sitter',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 16),
+                                  // Star rating display
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: List.generate(5, (index) {
+                                      return GestureDetector(
+                                        onTap: () => setModalState(() => rating = index + 1.0),
+                                        child: Container(
+                                          padding: EdgeInsets.all(4),
+                                          child: Icon(
+                                            index < rating ? Icons.star : Icons.star_border,
+                                            size: 32,
+                                            color: coral,
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                  ),
+                                  SizedBox(height: 8),
+                                  Center(
+                                    child: Text(
+                                      '${rating.round()} out of 5 stars',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey[600],
+                                        fontFamily: 'Roboto',
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: 20),
+                            
+                            // Comment section
+                            Container(
+                              padding: EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.08),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.comment,
+                                        color: coral,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Leave a comment (optional)',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 16),
+                                  TextField(
+                                    maxLines: 4,
+                                    decoration: InputDecoration(
+                                      hintText: 'Tell others about your experience...',
+                                      hintStyle: TextStyle(color: Colors.grey[400]),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        borderSide: BorderSide(color: coral.withOpacity(0.3)),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        borderSide: BorderSide(color: coral, width: 2),
+                                      ),
+                                      filled: true,
+                                      fillColor: lightBlush.withOpacity(0.3),
+                                      contentPadding: EdgeInsets.all(16),
+                                    ),
+                                    style: TextStyle(fontFamily: 'Roboto'),
+                                    onChanged: (v) => setModalState(() => comment = v),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: 30),
+                            
+                            // Action buttons
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => Navigator.of(ctx).pop(),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: coral,
+                                      side: BorderSide(color: coral),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      padding: EdgeInsets.symmetric(vertical: 16),
+                                    ),
+                                    child: Text(
+                                      'Cancel',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'Roboto',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: deepRed,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      padding: EdgeInsets.symmetric(vertical: 16),
+                                      elevation: 2,
+                                    ),
+                                    onPressed: () async {
+                                      Navigator.of(ctx).pop();
+                                      try {
+                                        // 1) complete job
+                                        await _updateJobStatus(job['id'].toString(), 'Completed');
+
+                                        // 2) sitter_reviews.sitter_id must be sitters.id.
+                                        final sitterUserId = job['sitter_id']?.toString();
+                                        final sitterIdForReview = sitterUserId == null
+                                            ? null
+                                            : await _resolveSitterIdForReview(sitterUserId);
+
+                                        if (sitterIdForReview == null) {
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('Cannot post review: sitter profile not found.'),
+                                                backgroundColor: deepRed,
+                                                behavior: SnackBarBehavior.floating,
+                                              ),
+                                            );
+                                          }
+                                          return;
+                                        }
+
+                                        // Force integer rating and request the inserted id back for verification.
+                                        await supabase
+                                            .from('sitter_reviews')
+                                            .insert({
+                                              'sitter_id': sitterIdForReview,
+                                              'reviewer_id': widget.userId,                    // users.id (uuid)
+                                              'rating': rating.round(),                        // strict int 1..5
+                                              'comment': comment.trim().isEmpty ? null : comment.trim(),
+                                              'owner_name': (userName.isEmpty ? 'Pet Owner' : userName),
+                                            })
+                                            .select('id')
+                                            .single();
+
+                                        // Optional: refresh reviews (useful if current user is the sitter)
+                                        await fetchSitterReviews();
+
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Job completed and review posted successfully!'),
+                                              backgroundColor: Colors.green,
+                                              behavior: SnackBarBehavior.floating,
+                                            ),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        // Show detailed error for easier debugging (e.g., FK violations, privileges)
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Failed to complete job: $e'),
+                                              backgroundColor: deepRed,
+                                              behavior: SnackBarBehavior.floating,
+                                            ),
+                                          );
+                                        }
+                                        print('❌ Review insert failed: $e');
+                                      }
+                                    },
+                                    child: Text(
+                                      'Complete & Review',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontFamily: 'Roboto',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
-                      Text(rating.round().toString(), style: TextStyle(fontFamily: 'Roboto')),
-                    ],
-                  ),
-                  SizedBox(height: 8),
-                  TextField(
-                    maxLines: 3,
-                    decoration: InputDecoration(
-                      hintText: 'Optional comment',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                      filled: true, fillColor: Colors.white,
-                    ),
-                    style: TextStyle(fontFamily: 'Roboto'),
-                    onChanged: (v) => setModalState(() => comment = v),
-                  ),
-                  SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                      onPressed: () async {
-                        Navigator.of(ctx).pop();
-                        try {
-                          // 1) complete job
-                          await _updateJobStatus(job['id'].toString(), 'Completed');
-
-                          // 2) sitter_reviews.sitter_id must be sitters.id.
-                          final sitterUserId = job['sitter_id']?.toString();
-                          final sitterIdForReview = sitterUserId == null
-                              ? null
-                              : await _resolveSitterIdForReview(sitterUserId);
-
-                          if (sitterIdForReview == null) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Cannot post review: sitter profile not found.')),
-                              );
-                            }
-                            return;
-                          }
-
-                          // Force integer rating and request the inserted id back for verification.
-                          final inserted = await supabase
-                              .from('sitter_reviews')
-                              .insert({
-                                'sitter_id': sitterIdForReview,
-                                'reviewer_id': widget.userId,                    // users.id (uuid)
-                                'rating': rating.round(),                        // strict int 1..5
-                                'comment': comment.trim().isEmpty ? null : comment.trim(),
-                                'owner_name': (userName.isEmpty ? 'Pet Owner' : userName),
-                              })
-                              .select('id')
-                              .single();
-
-                          // Optional: refresh reviews (useful if current user is the sitter)
-                          await fetchSitterReviews();
-
-                          if (mounted) {
-                            final id = (inserted is Map && inserted['id'] != null) ? inserted['id'].toString() : '';
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(id.isEmpty ? 'Job finished and review posted.' : 'Review posted (id: $id).')),
-                            );
-                          }
-                        } catch (e) {
-                          // Show detailed error for easier debugging (e.g., FK violations, privileges)
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Finish failed: $e')),
-                            );
-                          }
-                          print('❌ Review insert failed: $e');
-                        }
-                      },
-                      child: Text('Submit', style: TextStyle(fontFamily: 'Roboto')),
                     ),
                   ),
-                  SizedBox(height: 12),
                 ],
               ),
             );
@@ -1138,9 +1731,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+  // Enhanced sitter list with modern card design
   Widget _buildSitterList(List<dynamic> sitters) {
+    if (sitters.isEmpty) {
+      return _buildEmptyState(
+        icon: Icons.person_search,
+        title: 'No Sitters Found',
+        subtitle: 'Try adjusting your search or check back later',
+      );
+    }
+
     return RefreshIndicator(
       onRefresh: _refreshAll,
+      color: deepRed,
+      backgroundColor: Colors.white,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.all(12),
@@ -1152,197 +1756,341 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           final dynamic rateVal = sitter['rate_per_hour'];
           final String? profilePic = sitter['profile_picture'];
 
-          return Card(
+          return Container(
             margin: EdgeInsets.only(bottom: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      CircleAvatar(
-                        radius: 35,
-                        backgroundImage: profilePic != null && profilePic.isNotEmpty
-                            ? NetworkImage(profilePic)
-                            : AssetImage('assets/sitter_placeholder.png') as ImageProvider,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _showSitterReviewsModal(sitter),
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isAvail ? coral.withOpacity(0.3) : Colors.grey.shade300,
+                      width: isAvail ? 2 : 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: isAvail 
+                          ? deepRed.withOpacity(0.1) 
+                          : Colors.grey.withOpacity(0.08),
+                        blurRadius: isAvail ? 12 : 8,
+                        offset: Offset(0, isAvail ? 4 : 2),
                       ),
-                      SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              sitter['name'] ?? 'Unnamed',
-                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'Roboto'),
-                            ),
-                            SizedBox(height: 6),
-                            Row(
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Enhanced avatar with status indicator
+                          Stack(
+                            children: [
+                              Container(
+                                width: 60,
+                                height: 60,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: isAvail ? coral : Colors.grey.shade300,
+                                    width: 3,
+                                  ),
+                                ),
+                                child: ClipOval(
+                                  child: profilePic != null && profilePic.isNotEmpty
+                                      ? Image.network(
+                                          profilePic,
+                                          width: 54,
+                                          height: 54,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, __, ___) => _buildDefaultAvatar(sitter['name'] ?? 'S'),
+                                        )
+                                      : _buildDefaultAvatar(sitter['name'] ?? 'S'),
+                                ),
+                              ),
+                              // Availability indicator
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: Container(
+                                  width: 18,
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: isAvail ? Colors.green : Colors.grey,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white, width: 2),
+                                  ),
+                                  child: Icon(
+                                    isAvail ? Icons.check : Icons.schedule,
+                                    color: Colors.white,
+                                    size: 10,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.star, color: Colors.orange, size: 18),
-                                SizedBox(width: 4),
-                                Text(ratingNum == null ? '—' : ratingNum.toStringAsFixed(1), style: TextStyle(fontFamily: 'Roboto')),
+                                // Name and status
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        sitter['name'] ?? 'Unnamed',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: isAvail ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: isAvail ? Colors.green : Colors.grey,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        isAvail ? 'Available' : 'Busy',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: isAvail ? Colors.green[700] : Colors.grey[700],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 8),
+                                // Rating
+                                if (ratingNum != null) ...[
+                                  Row(
+                                    children: [
+                                      ..._buildRatingStars(ratingNum.toDouble()),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        '(${ratingNum.toStringAsFixed(1)})',
+                                        style: TextStyle(
+                                          color: Colors.grey[600],
+                                          fontSize: 13,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ] else ...[
+                                  Text(
+                                    'No reviews yet',
+                                    style: TextStyle(
+                                      color: Colors.grey[500],
+                                      fontSize: 13,
+                                      fontStyle: FontStyle.italic,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                ],
+                                SizedBox(height: 8),
+                                // Rate
+                                if (rateVal != null) ...[
+                                  Container(
+                                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: coral.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.payments,
+                                          size: 16,
+                                          color: coral,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          '₱$rateVal/hour',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: deepRed,
+                                            fontSize: 13,
+                                            fontFamily: 'Roboto',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
-                            Text(
-                              'Status: ${isAvail ? 'Available Now' : 'Busy'}',
-                              style: TextStyle(color: isAvail ? Colors.green[700] : Colors.grey, fontFamily: 'Roboto'),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      // Address and experience chips
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _buildInfoChip(
+                            icon: Icons.location_on,
+                            label: sitter['address'] ?? 'Location not specified',
+                            color: Colors.blue,
+                          ),
+                          if (sitter['experience'] != null)
+                            _buildInfoChip(
+                              icon: Icons.star,
+                              label: '${sitter['experience']} yrs exp',
+                              color: Colors.orange,
                             ),
-                            Text(
-                              rateVal == null
-                                  ? 'Rate: —'
-                                  : 'Rate: ₱${(rateVal is num) ? rateVal.toStringAsFixed(2) : rateVal.toString()} / hour',
-                              style: TextStyle(fontFamily: 'Roboto'),
-                            ),
-                            if (sitter['experience'] != null)
-                              Text(
-                                'Experience: ${sitter['experience']} years',
-                                style: TextStyle(fontFamily: 'Roboto', color: Colors.grey[600]),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      // Action buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _showSitterReviewsModal(sitter),
+                              icon: Icon(Icons.rate_review, size: 18),
+                              label: Text('Reviews'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: coral,
+                                side: BorderSide(color: coral),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 12),
                               ),
-                            if (sitter['address'] != null && sitter['address'].toString().isNotEmpty)
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: pendingSitterIds.contains(sitter['id']) 
+                                ? null
+                                : () => _showHireModal(sitter),
+                              icon: Icon(
+                                pendingSitterIds.contains(sitter['id']) 
+                                  ? Icons.hourglass_top 
+                                  : Icons.pets,
+                                size: 18,
+                              ),
+                              label: Text(
+                                pendingSitterIds.contains(sitter['id']) 
+                                  ? 'Pending' 
+                                  : 'Hire',
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: pendingSitterIds.contains(sitter['id']) 
+                                  ? Colors.grey 
+                                  : deepRed,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                elevation: pendingSitterIds.contains(sitter['id']) ? 0 : 2,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: coral.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: IconButton(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ChatDetailScreen(
+                                      userId: widget.userId,
+                                      receiverId: sitter['id'],
+                                      userName: sitter['name'] ?? 'Sitter',
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: Icon(
+                                Icons.message,
+                                color: coral,
+                                size: 20,
+                              ),
+                              tooltip: 'Send Message',
+                            ),
+                          ),
+                        ],
+                      ),
+                      
+                      // Bio section
+                      if (sitter['bio'] != null && sitter['bio'].toString().isNotEmpty) ...[
+                        SizedBox(height: 16),
+                        Container(
+                          width: double.infinity,
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: lightBlush.withOpacity(0.5),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: coral.withOpacity(0.2)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
                               Row(
                                 children: [
-                                  Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
-                                  SizedBox(width: 4),
-                                  Expanded(
-                                    child: Text(
-                                      sitter['address'].toString(),
-                                      style: TextStyle(fontFamily: 'Roboto', color: Colors.grey[600]),
-                                      overflow: TextOverflow.ellipsis,
+                                  Icon(
+                                    Icons.person,
+                                    size: 16,
+                                    color: coral,
+                                  ),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'About',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: deepRed,
+                                      fontSize: 13,
+                                      fontFamily: 'Roboto',
                                     ),
                                   ),
                                 ],
                               ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  Column(
-                    children: [
-                      SizedBox(
-                        width: 180,
-                        child: ElevatedButton.icon(
-                          onPressed: () => _showSitterReviewsModal(sitter),
-                          icon: Icon(Icons.reviews),
-                          label: Text('View Reviews', style: TextStyle(fontFamily: 'Roboto')),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
-                      ),
-                      SizedBox(height: 8),
-                      SizedBox(
-                        width: 180,
-                        child: Builder(builder: (context) {
-                          final sitterId = sitter['id'] as String?;
-                          final isPending = sitterId != null && pendingSitterIds.contains(sitterId);
-                          final isDisabled = isPending || !isAvail;
-                          
-                          String buttonText;
-                          IconData buttonIcon;
-                          if (isPending) {
-                            buttonText = 'Pending';
-                            buttonIcon = Icons.hourglass_top;
-                          } else if (!isAvail) {
-                            buttonText = 'Busy';
-                            buttonIcon = Icons.schedule;
-                          } else {
-                            buttonText = 'Hire Sitter';
-                            buttonIcon = Icons.person_add;
-                          }
-                          
-                          return ElevatedButton.icon(
-                            onPressed: isDisabled ? null : () => _showHireModal(sitter),
-                            icon: Icon(buttonIcon),
-                            label: Text(buttonText, style: TextStyle(fontFamily: 'Roboto')),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: isDisabled ? Colors.grey : deepRed,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          );
-                        }),
-                      ),
-                      SizedBox(height: 8),
-                      SizedBox(
-                        width: 180,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => ChatDetailScreen(
-                                  userId: widget.userId,
-                                  receiverId: sitter['id'],
-                                  userName: sitter['name'] ?? 'Sitter',
+                              SizedBox(height: 6),
+                              Text(
+                                sitter['bio'].toString(),
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 13,
+                                  height: 1.4,
+                                  fontFamily: 'Roboto',
                                 ),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            );
-                          },
-                          icon: Icon(Icons.message),
-                          label: Text('Send a Message', style: TextStyle(fontFamily: 'Roboto')),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
+                            ],
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
-                  SizedBox(height: 12),
-                  
-                  // Bio section
-                  if (sitter['bio'] != null && sitter['bio'].toString().isNotEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[50],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey.shade300),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'About ${sitter['name'] ?? 'Sitter'}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: deepRed,
-                              fontFamily: 'Roboto',
-                            ),
-                          ),
-                          SizedBox(height: 6),
-                          Text(
-                            sitter['bio'].toString(),
-                            style: TextStyle(
-                              fontFamily: 'Roboto',
-                              color: Colors.grey[700],
-                              height: 1.3,
-                            ),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
+                ),
               ),
             ),
-            );
-          },
+          );
+        },
       ),
     );
   }
@@ -1705,6 +2453,152 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+  // Enhanced review card for modal display
+  Widget _buildEnhancedReviewCard(Map<String, dynamic> review) {
+    final ratingNum = (review['rating'] is num) ? (review['rating'] as num).toDouble() : 0.0;
+    final comment = (review['comment'] ?? '').toString();
+    final owner = (review['owner_name'] ?? 'Pet Owner').toString();
+    final createdAt = review['created_at']?.toString();
+    
+    String timeAgo = 'Recently';
+    if (createdAt != null) {
+      try {
+        final date = DateTime.parse(createdAt);
+        final now = DateTime.now();
+        final difference = now.difference(date);
+        if (difference.inDays > 0) {
+          timeAgo = '${difference.inDays} day${difference.inDays > 1 ? 's' : ''} ago';
+        } else if (difference.inHours > 0) {
+          timeAgo = '${difference.inHours} hour${difference.inHours > 1 ? 's' : ''} ago';
+        } else {
+          timeAgo = 'Recently';
+        }
+      } catch (_) {}
+    }
+
+    return Container(
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: coral.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: deepRed.withOpacity(0.08),
+            blurRadius: 8,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with rating and time
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(children: _buildRatingStars(ratingNum)),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: coral.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  timeAgo,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: coral,
+                    fontWeight: FontWeight.w500,
+                    fontFamily: 'Roboto',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 12),
+          
+          // Comment
+          if (comment.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: lightBlush.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: peach.withOpacity(0.3)),
+              ),
+              child: Text(
+                '"$comment"',
+                style: TextStyle(
+                  fontStyle: FontStyle.italic,
+                  fontSize: 14,
+                  color: Colors.grey[700],
+                  fontFamily: 'Roboto',
+                  height: 1.4,
+                ),
+              ),
+            ),
+            SizedBox(height: 12),
+          ],
+          
+          // Owner info
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [coral, peach],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Text(
+                    owner.isNotEmpty ? owner[0].toUpperCase() : 'O',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontFamily: 'Roboto',
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      owner,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: deepRed,
+                        fontFamily: 'Roboto',
+                      ),
+                    ),
+                    Text(
+                      'Pet Owner',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                        fontFamily: 'Roboto',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _buildRatingStars(double rating) {
     final full = rating.floor();
     final half = (rating - full) >= 0.5;
@@ -1795,16 +2689,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       await fetchSitterProfile();
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Profile updated successfully!')),
-        );
+        _showEnhancedSnackBar('Profile updated successfully!');
       }
     } catch (e) {
       print('❌ updateSitterProfile ERROR: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update profile: $e')),
-        );
+        _showEnhancedSnackBar('Failed to update profile: $e', isError: true);
       }
     } finally {
       if (mounted) setState(() => _isLoadingProfile = false);
@@ -1827,6 +2717,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     fetchAvailableSitters(); // Fetch all sitters without filter
   }
 
+  // Helper method for consistent SnackBar styling
+  void _showEnhancedSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        backgroundColor: isError ? deepRed : coral,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: EdgeInsets.all(16),
+        elevation: 8,
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
   // NEW: toggle and persist sitter availability
   Future<void> _setSitterAvailability(bool value) async {
     if (_isUpdatingAvailability) return;
@@ -1837,26 +2750,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       await supabase.from('sitters').update({'is_available': value}).eq('user_id', widget.userId);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(value ? 'You are now Available.' : 'You are now Busy.')),
-        );
+        _showEnhancedSnackBar(value ? 'You are now Available.' : 'You are now Busy.');
       }
     } catch (e) {
       // revert on failure
       setState(() => _isSitterAvailable = !value);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update availability: $e')));
+        _showEnhancedSnackBar('Failed to update availability: $e', isError: true);
       }
     } finally {
       if (mounted) setState(() => _isUpdatingAvailability = false);
     }
   }
 
-  // NEW: show edit profile modal
+  // Enhanced edit profile modal with modern design
   Future<void> _showEditProfileModal() async {
     if (_sitterProfile == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Profile data not loaded yet. Please try again.')),
+        SnackBar(
+          content: Text('Profile data not loaded yet. Please try again.'),
+          backgroundColor: deepRed,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
@@ -1874,159 +2789,521 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      backgroundColor: Colors.transparent,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-                left: 16,
-                right: 16,
-                top: 16,
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: BoxDecoration(
+                color: lightBlush,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        height: 6,
-                        width: 60,
-                        margin: EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
+              child: Column(
+                children: [
+                  // Enhanced header
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [deepRed, coral],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                     ),
-                    Text(
-                      'Edit Your Profile',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: deepRed, fontFamily: 'Roboto'),
-                    ),
-                    SizedBox(height: 8),
-                    Divider(),
-                    SizedBox(height: 16),
-                    
-                    // Bio field
-                    Text('Bio', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
-                    SizedBox(height: 8),
-                    TextField(
-                      controller: bioController,
-                      maxLines: 3,
-                      decoration: InputDecoration(
-                        hintText: 'Tell pet owners about yourself...',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        filled: true,
-                        fillColor: Colors.white,
-                      ),
-                      style: TextStyle(fontFamily: 'Roboto'),
-                    ),
-                    SizedBox(height: 16),
-                    
-                    // Experience field
-                    Text('Experience (years)', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
-                    SizedBox(height: 8),
-                    TextField(
-                      controller: experienceController,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        hintText: 'Years of pet care experience',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        filled: true,
-                        fillColor: Colors.white,
-                      ),
-                      style: TextStyle(fontFamily: 'Roboto'),
-                    ),
-                    SizedBox(height: 16),
-                    
-                    // Hourly rate field
-                    Text('Hourly Rate (₱)', style: TextStyle(fontWeight: FontWeight.w600, color: deepRed, fontFamily: 'Roboto')),
-                    SizedBox(height: 8),
-                    TextField(
-                      controller: rateController,
-                      keyboardType: TextInputType.numberWithOptions(decimal: true),
-                      decoration: InputDecoration(
-                        hintText: 'Your hourly rate in peso',
-                        prefixText: '₱ ',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        filled: true,
-                        fillColor: Colors.white,
-                      ),
-                      style: TextStyle(fontFamily: 'Roboto'),
-                    ),
-                    SizedBox(height: 24),
-                    
-                    // Buttons
-                    Row(
+                    child: Column(
                       children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            child: Text('Cancel', style: TextStyle(fontFamily: 'Roboto')),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: deepRed),
-                              foregroundColor: deepRed,
-                            ),
+                        // Handle bar
+                        Container(
+                          height: 4,
+                          width: 40,
+                          margin: EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(2),
                           ),
                         ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: _isLoadingProfile ? null : () async {
-                              // Validate inputs
-                              final bio = bioController.text.trim();
-                              final experienceText = experienceController.text.trim();
-                              final rateText = rateController.text.trim();
-                              
-                              int? experience;
-                              double? hourlyRate;
-                              
-                              if (experienceText.isNotEmpty) {
-                                experience = int.tryParse(experienceText);
-                                if (experience == null || experience < 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Please enter a valid experience in years')),
-                                  );
-                                  return;
-                                }
-                              }
-                              
-                              if (rateText.isNotEmpty) {
-                                hourlyRate = double.tryParse(rateText);
-                                if (hourlyRate == null || hourlyRate <= 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Please enter a valid hourly rate')),
-                                  );
-                                  return;
-                                }
-                              }
-                              
-                              Navigator.of(context).pop();
-                              await updateSitterProfile(
-                                bio: bio.isEmpty ? null : bio,
-                                experience: experience,
-                                hourlyRate: hourlyRate,
-                              );
-                            },
-                            child: _isLoadingProfile 
-                                ? SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                                  )
-                                : Text('Save Changes', style: TextStyle(fontFamily: 'Roboto')),
-                            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-                          ),
+                        // Header content
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                Icons.edit,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Edit Profile',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white70,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                  Text(
+                                    'Update your information',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                    SizedBox(height: 16),
-                  ],
-                ),
+                  ),
+                  // Content area
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Bio section
+                            Container(
+                              padding: EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.08),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.person,
+                                        color: coral,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'About You',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 12),
+                                  TextField(
+                                    controller: bioController,
+                                    maxLines: 4,
+                                    decoration: InputDecoration(
+                                      hintText: 'Tell pet owners about yourself, your experience, and what makes you special...',
+                                      hintStyle: TextStyle(color: Colors.grey[400]),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        borderSide: BorderSide(color: coral.withOpacity(0.3)),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        borderSide: BorderSide(color: coral, width: 2),
+                                      ),
+                                      filled: true,
+                                      fillColor: lightBlush.withOpacity(0.3),
+                                      contentPadding: EdgeInsets.all(16),
+                                    ),
+                                    style: TextStyle(fontFamily: 'Roboto'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: 20),
+                            
+                            // Experience and Rate row
+                            Row(
+                              children: [
+                                // Experience section
+                                Expanded(
+                                  child: Container(
+                                    padding: EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: coral.withOpacity(0.2)),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: deepRed.withOpacity(0.08),
+                                          blurRadius: 8,
+                                          offset: Offset(0, 3),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.star,
+                                              color: coral,
+                                              size: 20,
+                                            ),
+                                            SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Experience',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: deepRed,
+                                                  fontFamily: 'Roboto',
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 12),
+                                        TextField(
+                                          controller: experienceController,
+                                          keyboardType: TextInputType.number,
+                                          decoration: InputDecoration(
+                                            hintText: 'Years',
+                                            hintStyle: TextStyle(color: Colors.grey[400]),
+                                            border: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                              borderSide: BorderSide(color: coral.withOpacity(0.3)),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                              borderSide: BorderSide(color: coral, width: 2),
+                                            ),
+                                            filled: true,
+                                            fillColor: lightBlush.withOpacity(0.3),
+                                            contentPadding: EdgeInsets.all(12),
+                                            isDense: true,
+                                          ),
+                                          style: TextStyle(fontFamily: 'Roboto'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                // Rate section
+                                Expanded(
+                                  child: Container(
+                                    padding: EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: coral.withOpacity(0.2)),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: deepRed.withOpacity(0.08),
+                                          blurRadius: 8,
+                                          offset: Offset(0, 3),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              Icons.payments,
+                                              color: coral,
+                                              size: 20,
+                                            ),
+                                            SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Hourly Rate',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: deepRed,
+                                                  fontFamily: 'Roboto',
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 12),
+                                        TextField(
+                                          controller: rateController,
+                                          keyboardType: TextInputType.numberWithOptions(decimal: true),
+                                          decoration: InputDecoration(
+                                            hintText: '₱/hour',
+                                            hintStyle: TextStyle(color: Colors.grey[400]),
+                                            border: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                              borderSide: BorderSide(color: coral.withOpacity(0.3)),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                              borderSide: BorderSide(color: coral, width: 2),
+                                            ),
+                                            filled: true,
+                                            fillColor: lightBlush.withOpacity(0.3),
+                                            contentPadding: EdgeInsets.all(12),
+                                            isDense: true,
+                                          ),
+                                          style: TextStyle(fontFamily: 'Roboto'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 30),
+                            
+                            // Action buttons
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => Navigator.of(context).pop(),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: coral,
+                                      side: BorderSide(color: coral),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      padding: EdgeInsets.symmetric(vertical: 16),
+                                    ),
+                                    child: Text(
+                                      'Cancel',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'Roboto',
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: _isLoadingProfile ? null : () async {
+                                      // Validate inputs
+                                      final bio = bioController.text.trim();
+                                      final experienceText = experienceController.text.trim();
+                                      final rateText = rateController.text.trim();
+                                      
+                                      int? experience;
+                                      double? hourlyRate;
+                                      
+                                      if (experienceText.isNotEmpty) {
+                                        experience = int.tryParse(experienceText);
+                                        if (experience == null || experience < 0) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Please enter a valid experience in years'),
+                                              backgroundColor: deepRed,
+                                              behavior: SnackBarBehavior.floating,
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                      }
+                                      
+                                      if (rateText.isNotEmpty) {
+                                        hourlyRate = double.tryParse(rateText);
+                                        if (hourlyRate == null || hourlyRate <= 0) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Please enter a valid hourly rate'),
+                                              backgroundColor: deepRed,
+                                              behavior: SnackBarBehavior.floating,
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                      }
+                                      
+                                      Navigator.of(context).pop();
+                                      await updateSitterProfile(
+                                        bio: bio.isEmpty ? null : bio,
+                                        experience: experience,
+                                        hourlyRate: hourlyRate,
+                                      );
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: deepRed,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      padding: EdgeInsets.symmetric(vertical: 16),
+                                      elevation: 2,
+                                    ),
+                                    child: _isLoadingProfile 
+                                        ? SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              color: Colors.white,
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : Text(
+                                            'Save Changes',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontFamily: 'Roboto',
+                                            ),
+                                          ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
           },
         );
       },
+    );
+  }
+
+  // Helper methods for enhanced UI components
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Container(
+      padding: EdgeInsets.all(32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: coral.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              size: 40,
+              color: coral,
+            ),
+          ),
+          SizedBox(height: 16),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: deepRed,
+              fontFamily: 'Roboto',
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            subtitle,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey[600],
+              fontFamily: 'Roboto',
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDefaultAvatar(String name) {
+    return Container(
+      width: 54,
+      height: 54,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [coral, peach],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : 'S',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            fontFamily: 'Roboto',
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 14,
+            color: color,
+          ),
+          SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: color.withOpacity(0.8),
+                fontFamily: 'Roboto',
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

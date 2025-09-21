@@ -9,6 +9,12 @@ import 'package:realtime_client/realtime_client.dart' as r;
 import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+// Color palette
+const deepRed = Color(0xFFB82132);
+const coral = Color(0xFFD2665A);
+const peach = Color(0xFFF2B28C);
+const lightBlush = Color(0xFFF6DED8);
+
 class ChatDetailScreen extends StatefulWidget {
   final String userId;
   final String receiverId;
@@ -872,163 +878,503 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
 
     return Scaffold(
+      backgroundColor: lightBlush,
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        backgroundColor: deepRed,
+        elevation: 0,
+        leading: IconButton(
+          icon: Container(
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.arrow_back,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Row(
           children: [
-            Text(widget.userName),
-            if (otherUserTyping)
-              Text('Typing...', style: TextStyle(fontSize: 12, color: Colors.white70)),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                ),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: Center(
+                child: Text(
+                  widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.userName,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (otherUserTyping)
+                    Text(
+                      'Typing...',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white70,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
-        backgroundColor: Color(0xFFCB4154),
         actions: [
-          IconButton(
-            icon: Icon(Icons.call),
-            onPressed: () => _startZegoCall(false),
+          Container(
+            margin: EdgeInsets.only(right: 4),
+            child: IconButton(
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.call,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              onPressed: () => _startZegoCall(false),
+            ),
           ),
-          IconButton(
-            icon: Icon(Icons.videocam),
-            onPressed: () => _startZegoCall(true),
+          Container(
+            margin: EdgeInsets.only(right: 8),
+            child: IconButton(
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.videocam,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              onPressed: () => _startZegoCall(true),
+            ),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _refreshAll,
-              child: ListView.builder(
-                controller: _scrollController,
-                reverse: true,
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.only(top: 12),
-                itemCount: messages.length,
-                itemBuilder: (_, index) {
-                  final msg = messages[messages.length - 1 - index];
-                  final sentByMe = isSender(msg['sender_id']);
-                  final isLastSeen = lastSeenMessageId != null &&
-                      msg['id'].toString() == lastSeenMessageId;
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [lightBlush, Colors.white],
+          ),
+        ),
+        child: Column(
+          children: [
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _refreshAll,
+                color: deepRed,
+                backgroundColor: Colors.white,
+                child: messages.isEmpty
+                    ? _buildEmptyState()
+                    : _buildMessagesList(lastSeenMessageId),
+              ),
+            ),
+            _buildMessageInput(),
+          ],
+        ),
+      ),
+    );
+  }
 
-                  final sentAt = _parseMsgTime(msg['sent_at']);
-                  final tsLabel = sentAt != null ? _formatChatTimestamp(sentAt) : null;
-
-                  Widget content;
-                  if (msg['type'] == 'image' && msg['media_url'] != null) {
-                    content = FutureBuilder<String?>(
-                      future: _mediaUrl(msg),
-                      builder: (context, snap) {
-                        final url = snap.data;
-                        if (url == null) {
-                          return const SizedBox(
-                            width: 160,
-                            height: 120,
-                            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-                          );
-                        }
-                        final heroTag = 'chat_img_${msg['id'] ?? url}';
-                        return GestureDetector(
-                          onTap: () => _openImageViewer(url, tag: heroTag),
-                          child: Hero(
-                            tag: heroTag,
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.network(
-                                url,
-                                fit: BoxFit.cover,
-                                width: 200,
-                                height: 200,
-                                errorBuilder: (_, __, ___) => const Icon(Icons.broken_image),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  } else if (msg['type'] == 'voice' && msg['media_url'] != null) {
-                    final playing = _playingMessageId == msg['id']?.toString();
-                    content = Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
-                          onPressed: () => _togglePlay(msg),
-                          color: const Color(0xFFCB4154),
+  // Enhanced empty state
+  Widget _buildEmptyState() {
+    return ListView(
+      physics: AlwaysScrollableScrollPhysics(),
+      children: [
+        Container(
+          height: MediaQuery.of(context).size.height * 0.6,
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: deepRed.withOpacity(0.1),
+                          blurRadius: 20,
+                          offset: Offset(0, 5),
                         ),
-                        const Text('Voice message'),
                       ],
-                    );
-                  } else {
-                    content = Text(msg['content'] ?? '[empty]');
-                  }
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (tsLabel != null)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6.0),
-                          child: Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
-                              decoration: BoxDecoration(
-                                color: Colors.black12,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                tsLabel,
-                                style: const TextStyle(fontSize: 11, color: Colors.black54),
-                              ),
-                            ),
-                          ),
-                        ),
-                      Align(
-                        alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Column(
-                          crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: EdgeInsets.all(12),
-                              margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                              decoration: BoxDecoration(
-                                color: sentByMe ? Color(0xFFCB4154).withOpacity(0.2) : Colors.grey.shade200,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: content,
-                            ),
-                            if (sentByMe && isLastSeen)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 12.0),
-                                child: Text('Seen', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                },
+                    ),
+                    child: Icon(
+                      Icons.chat_bubble_outline,
+                      size: 48,
+                      color: coral,
+                    ),
+                  ),
+                  SizedBox(height: 20),
+                  Text(
+                    'Start the conversation!',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: deepRed,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Send a message to ${widget.userName}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey.shade600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
             ),
           ),
-          Divider(height: 1),
+        ),
+      ],
+    );
+  }
+
+  // Enhanced messages list
+  Widget _buildMessagesList(String? lastSeenMessageId) {
+    return ListView.builder(
+      controller: _scrollController,
+      reverse: true,
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.all(16),
+      itemCount: messages.length,
+      itemBuilder: (_, index) {
+        final msg = messages[messages.length - 1 - index];
+        final sentByMe = isSender(msg['sender_id']);
+        final isLastSeen = lastSeenMessageId != null &&
+            msg['id'].toString() == lastSeenMessageId;
+
+        final sentAt = _parseMsgTime(msg['sent_at']);
+        final tsLabel = sentAt != null ? _formatChatTimestamp(sentAt) : null;
+
+        return _buildMessageBubble(msg, sentByMe, isLastSeen, tsLabel);
+      },
+    );
+  }
+
+  // Enhanced message bubble
+  Widget _buildMessageBubble(Map msg, bool sentByMe, bool isLastSeen, String? tsLabel) {
+    Widget content = _buildMessageContent(msg);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (tsLabel != null)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: Row(
-              children: [
-                IconButton(icon: Icon(Icons.mic, color: Color(0xFFCB4154)), onPressed: _recordOrSendVoice),
-                IconButton(icon: Icon(Icons.image, color: Color(0xFFCB4154)), onPressed: _pickImage),
-                IconButton(icon: Icon(Icons.camera_alt, color: Color(0xFFCB4154)), onPressed: _captureImage),
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(hintText: 'Type a message...', border: InputBorder.none),
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.1),
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  tsLabel,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                IconButton(icon: Icon(Icons.send, color: Color(0xFFCB4154)), onPressed: _sendMessage),
-              ],
+              ),
             ),
           ),
+        Align(
+          alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
+          child: Column(
+            crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.75,
+                ),
+                padding: EdgeInsets.all(12),
+                margin: EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                decoration: BoxDecoration(
+                  gradient: sentByMe
+                      ? LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [deepRed, coral],
+                        )
+                      : null,
+                  color: sentByMe ? null : Colors.white,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                    bottomLeft: Radius.circular(sentByMe ? 16 : 4),
+                    bottomRight: Radius.circular(sentByMe ? 4 : 16),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: sentByMe 
+                        ? deepRed.withOpacity(0.2) 
+                        : Colors.grey.withOpacity(0.1),
+                      blurRadius: 8,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: DefaultTextStyle(
+                  style: TextStyle(
+                    color: sentByMe ? Colors.white : Colors.grey.shade800,
+                    fontSize: 15,
+                  ),
+                  child: content,
+                ),
+              ),
+              if (sentByMe && isLastSeen)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0, top: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.done_all,
+                        size: 12,
+                        color: coral,
+                      ),
+                      SizedBox(width: 2),
+                      Text(
+                        'Seen',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: coral,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Enhanced message content
+  Widget _buildMessageContent(Map msg) {
+    if (msg['type'] == 'image' && msg['media_url'] != null) {
+      return FutureBuilder<String?>(
+        future: _mediaUrl(msg),
+        builder: (context, snap) {
+          final url = snap.data;
+          if (url == null) {
+            return Container(
+              width: 160,
+              height: 120,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: coral,
+                ),
+              ),
+            );
+          }
+          final heroTag = 'chat_img_${msg['id'] ?? url}';
+          return GestureDetector(
+            onTap: () => _openImageViewer(url, tag: heroTag),
+            child: Hero(
+              tag: heroTag,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  width: 200,
+                  height: 200,
+                  errorBuilder: (_, __, ___) => Container(
+                    width: 200,
+                    height: 200,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.broken_image,
+                      color: Colors.grey.shade400,
+                      size: 32,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } else if (msg['type'] == 'voice' && msg['media_url'] != null) {
+      final playing = _playingMessageId == msg['id']?.toString();
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: playing ? Colors.white.withOpacity(0.2) : Colors.transparent,
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: Icon(
+                  playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
+                  size: 32,
+                ),
+                onPressed: () => _togglePlay(msg),
+                color: isSender(msg['sender_id']) ? Colors.white : coral,
+              ),
+            ),
+            SizedBox(width: 8),
+            Icon(
+              Icons.keyboard_voice,
+              size: 16,
+              color: isSender(msg['sender_id']) ? Colors.white70 : Colors.grey.shade600,
+            ),
+            SizedBox(width: 4),
+            Text(
+              'Voice message',
+              style: TextStyle(
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+                color: isSender(msg['sender_id']) ? Colors.white70 : Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      return Text(
+        msg['content'] ?? '[empty]',
+        style: TextStyle(fontSize: 15),
+      );
+    }
+  }
+
+  // Enhanced message input
+  Widget _buildMessageInput() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          top: BorderSide(color: Colors.grey.shade200),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 8,
+            offset: Offset(0, -2),
+          ),
         ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+      child: Row(
+        children: [
+          _buildInputButton(Icons.mic, isRecording ? coral : null, _recordOrSendVoice),
+          _buildInputButton(Icons.image, null, _pickImage),
+          _buildInputButton(Icons.camera_alt, null, _captureImage),
+          Expanded(
+            child: Container(
+              margin: EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: TextField(
+                controller: _messageController,
+                decoration: InputDecoration(
+                  hintText: 'Type a message...',
+                  hintStyle: TextStyle(color: Colors.grey.shade500),
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                ),
+                maxLines: null,
+                textCapitalization: TextCapitalization.sentences,
+              ),
+            ),
+          ),
+          _buildInputButton(Icons.send, deepRed, _sendMessage),
+        ],
+      ),
+    );
+  }
+
+  // Enhanced input button
+  Widget _buildInputButton(IconData icon, Color? activeColor, VoidCallback onPressed) {
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 2),
+      child: IconButton(
+        icon: Container(
+          padding: EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: activeColor ?? Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            color: activeColor != null ? Colors.white : coral,
+            size: 20,
+          ),
+        ),
+        onPressed: onPressed,
       ),
     );
   }
