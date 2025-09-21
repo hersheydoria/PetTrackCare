@@ -245,12 +245,23 @@ class _NotificationScreenState extends State<NotificationScreen> {
       final notificationId = map['notificationId']?.toString();
       final jobId = map['jobId']?.toString();
       final notificationType = map['type']?.toString();
+      final senderId = map['senderId']?.toString();
 
-      print('System notification tapped: postId=$postId, jobId=$jobId, notificationId=$notificationId, type=$notificationType');
+      print('System notification tapped: postId=$postId, jobId=$jobId, notificationId=$notificationId, type=$notificationType, senderId=$senderId');
 
       // Mark notification as read if we have an ID
       if (notificationId != null) {
         await _markAsRead(notificationId);
+      }
+
+      // Handle message notifications - navigate to chat
+      if (notificationType == 'message' && senderId != null) {
+        if (!mounted) return;
+        Navigator.of(context).pushNamed('/chat', arguments: {
+          'receiverId': senderId,
+          'userName': map['senderName']?.toString() ?? 'Chat',
+        });
+        return;
       }
 
       // Handle job notifications - navigate to home screen

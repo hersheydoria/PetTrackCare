@@ -15,10 +15,51 @@ Future<void> initializeSystemNotifications() async {
     iOS: null, // Disable iOS notifications
   );
   
-  await _localNotifications.initialize(
+  final initialized = await _localNotifications.initialize(
     initSettings,
     onDidReceiveNotificationResponse: _onNotificationTapped,
   );
+  
+  print('System notifications initialized: $initialized');
+  
+  // Check and request notification permissions (Android 13+)
+  if (initialized != null && initialized) {
+    final permissionGranted = await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+    print('Notification permission granted: $permissionGranted');
+    
+    // Test notification to verify setup
+    await _showTestNotification();
+  }
+}
+
+/// Show a test notification to verify setup
+Future<void> _showTestNotification() async {
+  try {
+    const androidDetails = AndroidNotificationDetails(
+      'test_channel',
+      'Test Notifications',
+      channelDescription: 'Test notification channel',
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+      enableVibration: true,
+      playSound: true,
+    );
+
+    const notificationDetails = NotificationDetails(android: androidDetails);
+    
+    await _localNotifications.show(
+      999,
+      'PetTrackCare Test',
+      'System notifications are working! 🎉',
+      notificationDetails,
+    );
+    print('Test notification sent successfully');
+  } catch (e) {
+    print('Failed to send test notification: $e');
+  }
 }
 
 /// Handle notification tap
@@ -375,7 +416,20 @@ Future<void> sendMessageNotification({
   required String senderName,
   required String messagePreview,
 }) async {
+  final supabase = Supabase.instance.client;
+  
   try {
+    // Store message notification in database
+    await supabase.from('notifications').insert({
+      'user_id': recipientId,
+      'actor_id': senderId,
+      'message': 'sent you a message: $messagePreview',
+      'type': 'message',
+      'is_read': false,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    
+    // Show system notification
     await _showSystemNotification(
       title: '💬 $senderName',
       body: messagePreview,
