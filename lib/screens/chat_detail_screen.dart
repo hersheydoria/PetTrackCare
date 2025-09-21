@@ -56,6 +56,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final Map<String, RealtimeChannel> _sigChans = {};
 
   final ScrollController _scrollController = ScrollController();
+  
+  // Receiver profile picture
+  String? _receiverProfilePicture;
 
   @override
   void initState() {
@@ -68,6 +71,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     subscribeToTyping();
     listenToTyping();
     _loadSelfName(); // load my display name for calls
+    _loadReceiverProfile(); // load receiver's profile picture
     _initCallSignals(); // NEW: subscribe to my signaling channel
   }
 
@@ -97,6 +101,68 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       }
     } catch (_) {
       // ignore
+    }
+  }
+
+  Future<void> _loadReceiverProfile() async {
+    try {
+      final row = await supabase
+          .from('users')
+          .select('profile_picture')
+          .eq('id', widget.receiverId)
+          .maybeSingle();
+      
+      print('Receiver profile data: $row'); // Debug log
+      
+      if (mounted) {
+        setState(() {
+          _receiverProfilePicture = row?['profile_picture']?.toString();
+        });
+        print('Set receiver profile picture: $_receiverProfilePicture'); // Debug log
+      }
+    } catch (e) {
+      print('Error loading receiver profile: $e'); // Debug log
+    }
+  }
+
+  // Get full URL for profile picture
+  String? _getProfilePictureUrl(String? profilePicture) {
+    if (profilePicture == null || profilePicture.isEmpty) {
+      print('Profile picture is null or empty'); // Debug log
+      return null;
+    }
+    
+    print('Processing profile picture: $profilePicture'); // Debug log
+    
+    // If it's already a full URL, return as is
+    if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
+      print('Profile picture is already a full URL'); // Debug log
+      return profilePicture;
+    }
+    
+    // If it's a storage path, try different bucket names
+    try {
+      // Try common bucket names for profile pictures
+      List<String> possibleBuckets = ['profile-pictures', 'avatars', 'users', 'images'];
+      
+      for (String bucket in possibleBuckets) {
+        try {
+          String url = supabase.storage.from(bucket).getPublicUrl(profilePicture);
+          print('Generated URL for bucket $bucket: $url'); // Debug log
+          return url;
+        } catch (e) {
+          print('Failed to get URL from bucket $bucket: $e'); // Debug log
+          continue;
+        }
+      }
+      
+      // If all buckets failed, try the default one
+      String url = supabase.storage.from('profile-pictures').getPublicUrl(profilePicture);
+      print('Using default bucket URL: $url'); // Debug log
+      return url;
+    } catch (e) {
+      print('Error generating profile picture URL: $e'); // Debug log
+      return null;
     }
   }
 
@@ -904,23 +970,54 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               height: 40,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
-                ),
+                gradient: _receiverProfilePicture == null
+                    ? LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                      )
+                    : null,
                 border: Border.all(color: Colors.white, width: 2),
               ),
-              child: Center(
-                child: Text(
-                  widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-              ),
+              child: _receiverProfilePicture != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.network(
+                        _getProfilePictureUrl(_receiverProfilePicture) ?? _receiverProfilePicture!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
             ),
             SizedBox(width: 12),
             Expanded(

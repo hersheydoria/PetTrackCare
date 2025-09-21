@@ -107,56 +107,134 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
-    // Check if user has enabled notifications
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user != null) {
-      // Check user preferences from metadata first
-      final metadata = user.userMetadata ?? {};
-      final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
-      final notificationsEnabled = notificationPrefs['enabled'] ?? true;
-      
-      // If notifications are disabled, don't show system notification
-      if (!notificationsEnabled) {
-        print('System notifications disabled for user');
-        return;
-      }
-    }
-    
+    // Use the centralized notification service to show system notifications
     final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
+    final type = n['type']?.toString();
+    final currentUserId = supabase.auth.currentUser?.id;
     
-    // Enhanced Android notification details for better system notification experience
-    const androidDetails = AndroidNotificationDetails(
-      'notifications_channel',
-      'Notifications',
-      channelDescription: 'App notifications',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
-      showWhen: true,
-      enableLights: true,
-      autoCancel: true, // Notification disappears when tapped
-      icon: '@mipmap/ic_launcher', // Use app icon
-    );
-    const details = NotificationDetails(android: androidDetails);
-
-    final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    // Compose a payload so tapping the local notification can navigate to the right place.
-    // We'll include the notification DB id, postId, jobId, and type so NotificationScreen can route.
+    // Prepare payload for navigation
     final payloadMap = <String, dynamic>{};
     if (n['id'] != null) payloadMap['notificationId'] = n['id'].toString();
     if (n['post_id'] != null) payloadMap['postId'] = n['post_id'].toString();
     if (n['job_id'] != null) payloadMap['jobId'] = n['job_id'].toString();
     if (n['type'] != null) payloadMap['type'] = n['type'].toString();
     final payload = json.encode(payloadMap);
-
+    
     try {
-      // Show system notification (appears in notification tray, works outside app)
-      await _localNotifications.show(id, title, body.isNotEmpty ? body : null, details, payload: payload);
-      print('System notification shown: $title');
+      // Use the centralized system notification service
+      await _showSystemNotification(
+        title: title,
+        body: body.isNotEmpty ? body : title,
+        type: type,
+        recipientId: currentUserId, // Current user should receive this notification
+        payload: payload,
+      );
+      print('System notification shown via centralized service: $title');
     } catch (e) {
-      print('Local notification error: $e');
+      print('Failed to show system notification: $e');
+    }
+  }
+
+  // Import the centralized system notification function
+  Future<void> _showSystemNotification({
+    required String title,
+    required String body,
+    String? payload,
+    String? type,
+    String? recipientId,
+  }) async {
+    // Only show notification if the current user is the intended recipient
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null) {
+      print('No current user - skipping system notification');
+      return;
+    }
+    
+    // If recipientId is specified, only show notification to that user
+    if (recipientId != null && currentUser.id != recipientId) {
+      print('System notification not for current user (${currentUser.id}) - intended for $recipientId');
+      return;
+    }
+
+    // Check if user has enabled notifications
+    final metadata = currentUser.userMetadata ?? {};
+    final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+    final notificationsEnabled = notificationPrefs['enabled'] ?? true;
+    
+    if (!notificationsEnabled) {
+      print('System notifications disabled by user');
+      return;
+    }
+
+    // Configure notification based on type
+    String channelId = 'general_notifications';
+    String channelName = 'General Notifications';
+    String channelDescription = 'General app notifications';
+    
+    switch (type) {
+      case 'job_request':
+      case 'job_accepted':
+      case 'job_declined':
+      case 'job_completed':
+        channelId = 'job_notifications';
+        channelName = 'Job Notifications';
+        channelDescription = 'Pet sitting job related notifications';
+        break;
+      case 'missing_pet':
+      case 'found_pet':
+        channelId = 'emergency_notifications';
+        channelName = 'Emergency Notifications';
+        channelDescription = 'Missing and found pet alerts';
+        break;
+      case 'message':
+        channelId = 'chat_notifications';
+        channelName = 'Chat Messages';
+        channelDescription = 'New message notifications';
+        break;
+      case 'like':
+      case 'comment':
+      case 'mention':
+        channelId = 'community_notifications';
+        channelName = 'Community Notifications';
+        channelDescription = 'Community interactions and mentions';
+        break;
+    }
+
+    final androidDetails = AndroidNotificationDetails(
+      channelId,
+      channelName,
+      channelDescription: channelDescription,
+      importance: type == 'missing_pet' || type == 'found_pet' ? Importance.max : Importance.high,
+      priority: type == 'missing_pet' || type == 'found_pet' ? Priority.max : Priority.high,
+      icon: '@mipmap/ic_launcher',
+      color: const Color(0xFFB82132),
+      enableVibration: true,
+      playSound: true,
+      showWhen: true,
+      enableLights: true,
+      autoCancel: true,
+      styleInformation: BigTextStyleInformation(body),
+    );
+
+    final notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: null, // iOS notifications disabled
+    );
+
+    final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
+    
+    try {
+      await _localNotifications.show(
+        id,
+        title,
+        body,
+        notificationDetails,
+        payload: payload,
+      );
+      print('Android system notification shown: $title');
+    } catch (e) {
+      print('Failed to show system notification: $e');
     }
   }
 
