@@ -4,6 +4,13 @@ import 'chat_detail_screen.dart';
 import 'notification_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
+import '../services/notification_service.dart';
+
+// Color palette
+const deepRed = Color(0xFFB82132);
+const coral = Color(0xFFD2665A);
+const peach = Color(0xFFF2B28C);
+const lightBlush = Color(0xFFF6DED8);
 
 class ChatListScreen extends StatefulWidget {
   @override
@@ -87,10 +94,54 @@ class _ChatListScreenState extends State<ChatListScreen> {
           callback: (payload, [ref]) async {
             fetchMessages(); // Refresh list on new message
 
-            // Handle call invite globally (even when not inside ChatDetailScreen)
+            // Handle new message notification
             final newRow = payload.newRecord;
-            if (newRow == null) return;
+            final currentUserId = supabase.auth.currentUser?.id;
+            final receiverId = newRow['receiver_id']?.toString();
+            final senderId = newRow['sender_id']?.toString();
+            final messageType = newRow['type']?.toString() ?? 'text';
+            final content = newRow['content']?.toString() ?? '';
 
+            // Show notification if this user is the receiver and it's not a system message
+            if (receiverId == currentUserId && senderId != currentUserId && senderId != null && receiverId != null && messageType != 'call_accept' && messageType != 'call_decline') {
+              // Get sender name for notification
+              try {
+                final senderResponse = await supabase
+                    .from('users')
+                    .select('name')
+                    .eq('id', senderId)
+                    .single();
+                
+                final senderName = senderResponse['name'] as String? ?? 'Someone';
+                
+                // Format message preview
+                String messagePreview = content;
+                if (content.startsWith('[call_')) {
+                  if (content.contains('accept')) messagePreview = '📞 Call accepted';
+                  else if (content.contains('decline')) messagePreview = '📞 Call declined';
+                  else messagePreview = '📞 Incoming call';
+                } else if (content.length > 50) {
+                  messagePreview = '${content.substring(0, 47)}...';
+                }
+                
+                await sendMessageNotification(
+                  recipientId: receiverId,
+                  senderId: senderId,
+                  senderName: senderName,
+                  messagePreview: messagePreview,
+                );
+              } catch (e) {
+                // Fallback notification without sender name
+                await sendMessageNotification(
+                  recipientId: receiverId,
+                  senderId: senderId,
+                  senderName: 'New Message',
+                  messagePreview: content,
+                );
+              }
+            }
+
+            // Handle call invite globally (even when not inside ChatDetailScreen)
             final me = supabase.auth.currentUser?.id;
             if (me == null) return;
 
@@ -203,78 +254,361 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: lightBlush,
       appBar: AppBar(
-        title: Text('Messages', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Color(0xFFCB4154),
+        backgroundColor: deepRed,
+        elevation: 0,
+        title: Row(
+          children: [
+            SizedBox(width: 8),
+            Text(
+              'Messages',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                fontSize: 20,
+              ),
+            ),
+          ],
+        ),
         actions: [
-          IconButton(
-            icon: Icon(Icons.notifications),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const NotificationScreen()),
-              );
-            },
+          Container(
+            margin: EdgeInsets.only(right: 8),
+            child: IconButton(
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.notifications_outlined,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const NotificationScreen()),
+                );
+              },
+            ),
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refreshAll,
-        child: ListView.builder(
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: messages.length,
-          itemBuilder: (context, index) {
-            final chat = messages[index];
-            final isSeen = chat['isSeen'] ?? true;
-            final isSender = chat['isSender'] ?? false;
-            final String? avatarUrl = chat['contactProfilePictureUrl'];
-            final String contactName = (chat['contactName'] as String?) ?? '';
-            final String initial = contactName.isNotEmpty ? contactName[0].toUpperCase() : '?';
-
-            return ListTile(
-              leading: CircleAvatar(
-                backgroundColor: Colors.grey.shade300,
-                backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-                child: avatarUrl == null || avatarUrl.isEmpty
-                    ? Text(
-                        initial,
-                        style: TextStyle(
-                          fontWeight: !isSeen && !isSender ? FontWeight.bold : FontWeight.normal,
-                          color: Colors.black87,
-                        ),
-                      )
-                    : null,
-              ),
-              title: Text(
-                chat['contactName'],
-                style: TextStyle(
-                  fontWeight: !isSeen && !isSender ? FontWeight.bold : FontWeight.normal,
-                ),
-              ),
-              subtitle: Text(
-                chat['lastMessage'],
-                style: TextStyle(
-                  color: !isSeen && !isSender ? Colors.black : Colors.grey,
-                ),
-              ),
-              tileColor: !isSeen && !isSender ? Color.fromARGB(255, 243, 216, 218) : null,
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChatDetailScreen(
-                      userId: supabase.auth.currentUser!.id,
-                      receiverId: chat['contactId'],
-                      userName: chat['contactName'],
-                    ),
-                  ),
-                );
-                fetchMessages();
-              },
-            );
-          },
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [lightBlush, Colors.white],
+          ),
+        ),
+        child: RefreshIndicator(
+          onRefresh: _refreshAll,
+          color: deepRed,
+          backgroundColor: Colors.white,
+          child: messages.isEmpty
+              ? _buildEmptyState()
+              : _buildChatList(),
         ),
       ),
     );
+  }
+
+  // Enhanced empty state
+  Widget _buildEmptyState() {
+    return ListView(
+      physics: AlwaysScrollableScrollPhysics(),
+      children: [
+        Container(
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(32),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: deepRed.withOpacity(0.1),
+                          blurRadius: 30,
+                          offset: Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.chat_bubble_outline,
+                      size: 64,
+                      color: coral,
+                    ),
+                  ),
+                  SizedBox(height: 24),
+                  Text(
+                    'No Messages Yet',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: deepRed,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 12),
+                  Text(
+                    'Start a conversation by exploring\nthe community and connecting with other pet owners',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.grey.shade600,
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Enhanced chat list
+  Widget _buildChatList() {
+    return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.all(16),
+      itemCount: messages.length,
+      itemBuilder: (context, index) {
+        final chat = messages[index];
+        return _buildChatCard(chat, index);
+      },
+    );
+  }
+
+  // Enhanced chat card
+  Widget _buildChatCard(Map<String, dynamic> chat, int index) {
+    final isSeen = chat['isSeen'] ?? true;
+    final isSender = chat['isSender'] ?? false;
+    final String? avatarUrl = chat['contactProfilePictureUrl'];
+    final String contactName = (chat['contactName'] as String?) ?? '';
+    final String lastMessage = (chat['lastMessage'] as String?) ?? '';
+    final String initial = contactName.isNotEmpty ? contactName[0].toUpperCase() : '?';
+    final bool hasUnread = !isSeen && !isSender;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChatDetailScreen(
+                  userId: supabase.auth.currentUser!.id,
+                  receiverId: chat['contactId'],
+                  userName: chat['contactName'],
+                ),
+              ),
+            );
+            fetchMessages();
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: AnimatedContainer(
+            duration: Duration(milliseconds: 300),
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: hasUnread ? Colors.white : Colors.white.withOpacity(0.8),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: hasUnread ? coral.withOpacity(0.5) : Colors.grey.shade200,
+                width: hasUnread ? 2 : 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: hasUnread 
+                    ? deepRed.withOpacity(0.15) 
+                    : Colors.grey.withOpacity(0.1),
+                  blurRadius: hasUnread ? 12 : 8,
+                  offset: Offset(0, hasUnread ? 4 : 2),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                // Enhanced avatar
+                Stack(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: hasUnread ? coral : Colors.grey.shade300,
+                          width: 2,
+                        ),
+                      ),
+                      child: ClipOval(
+                        child: avatarUrl != null && avatarUrl.isNotEmpty
+                            ? Image.network(
+                                avatarUrl,
+                                width: 52,
+                                height: 52,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => _buildDefaultAvatar(initial, hasUnread),
+                              )
+                            : _buildDefaultAvatar(initial, hasUnread),
+                      ),
+                    ),
+                    if (hasUnread)
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            color: deepRed,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                
+                SizedBox(width: 16),
+                
+                // Chat content
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              contactName,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: hasUnread ? FontWeight.bold : FontWeight.w600,
+                                color: hasUnread ? deepRed : Colors.grey.shade800,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (hasUnread)
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: deepRed,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                'NEW',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      SizedBox(height: 6),
+                      Row(
+                        children: [
+                          if (isSender) ...[
+                            Icon(
+                              Icons.reply,
+                              size: 14,
+                              color: Colors.grey.shade500,
+                            ),
+                            SizedBox(width: 4),
+                          ],
+                          Expanded(
+                            child: Text(
+                              _formatMessagePreview(lastMessage),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: hasUnread ? Colors.grey.shade800 : Colors.grey.shade600,
+                                fontWeight: hasUnread ? FontWeight.w500 : FontWeight.normal,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Arrow indicator
+                Icon(
+                  Icons.chevron_right,
+                  color: hasUnread ? coral : Colors.grey.shade400,
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Default avatar with gradient
+  Widget _buildDefaultAvatar(String initial, bool hasUnread) {
+    return Container(
+      width: 52,
+      height: 52,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: hasUnread
+              ? [coral.withOpacity(0.9), peach.withOpacity(0.9)]
+              : [Colors.grey.shade400, Colors.grey.shade500],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          initial,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Format message preview
+  String _formatMessagePreview(String message) {
+    if (message.isEmpty) return 'No message';
+    
+    // Handle special message types
+    if (message.startsWith('[call_')) {
+      if (message.contains('accept')) return '📞 Call accepted';
+      if (message.contains('decline')) return '📞 Call declined';
+      return '📞 Call';
+    }
+    
+    // Truncate long messages
+    if (message.length > 50) {
+      return '${message.substring(0, 47)}...';
+    }
+    
+    return message;
   }
 }
