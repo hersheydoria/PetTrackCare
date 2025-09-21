@@ -657,6 +657,100 @@ class _NotificationScreenState extends State<NotificationScreen> {
             ),
             SizedBox(width: 8),
           ],
+          // Debug notification buttons
+          PopupMenuButton<String>(
+            icon: Icon(Icons.bug_report, color: Colors.white),
+            onSelected: (value) async {
+              switch (value) {
+                case 'test_system':
+                  await showTestNotification();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test system notification sent'),
+                        backgroundColor: Colors.blue,
+                      ),
+                    );
+                  }
+                  break;
+                case 'test_realtime':
+                  await testRealtimeSubscription();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test realtime subscription - check console'),
+                        backgroundColor: Colors.purple,
+                      ),
+                    );
+                  }
+                  break;
+                case 'test_community':
+                  await testCommunityNotification();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test community notification sent'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                  break;
+                case 'test_message':
+                  await testMessageNotification();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test message notification sent'),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                  }
+                  break;
+              }
+            },
+            itemBuilder: (BuildContext context) => [
+              PopupMenuItem<String>(
+                value: 'test_system',
+                child: Row(
+                  children: [
+                    Icon(Icons.notification_important, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test System'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'test_realtime',
+                child: Row(
+                  children: [
+                    Icon(Icons.sync, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test Realtime'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'test_community',
+                child: Row(
+                  children: [
+                    Icon(Icons.favorite, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test Like'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'test_message',
+                child: Row(
+                  children: [
+                    Icon(Icons.message, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test Message'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: RefreshIndicator(

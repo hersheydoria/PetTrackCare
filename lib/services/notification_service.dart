@@ -220,9 +220,14 @@ Future<void> _setupGlobalNotificationSubscription() async {
       value: userId,
     ),
     callback: (payload) async {
-      print('🌐 Global realtime notification received!');
+      print('🌐 *** REALTIME EVENT RECEIVED ***');
+      print('   Event: ${payload.eventType}');
+      print('   Table: ${payload.table}');
+      print('   Schema: ${payload.schema}');
       print('   User ID filter: $userId');
-      print('   Payload: ${payload.newRecord}');
+      print('   Full payload: $payload');
+      print('   New record: ${payload.newRecord}');
+      print('   Old record: ${payload.oldRecord}');
       
       final newRow = payload.newRecord;
       
@@ -241,6 +246,7 @@ Future<void> _setupGlobalNotificationSubscription() async {
           break;
         case 'message':
           title = '💬 New Message';
+          print('🔔 Processing MESSAGE notification in global subscription');
           break;
         case 'job_request':
           title = '🐕 Job Request';
@@ -284,6 +290,18 @@ Future<void> _setupGlobalNotificationSubscription() async {
       final payloadJson = json.encode(payloadMap);
       
       print('🔔 Showing global system notification: $title');
+      print('   Type: $type');
+      print('   Body: ${body.isNotEmpty ? body : title}');
+      print('   Recipient: $userId');
+      print('   Payload: $payloadJson');
+      
+      if (type == 'message') {
+        print('🔔 *** ABOUT TO SHOW MESSAGE SYSTEM NOTIFICATION ***');
+        print('   Title: $title');
+        print('   Body: ${body.isNotEmpty ? body : title}');
+        print('   Type: $type');
+        print('   Recipient ID: $userId');
+      }
       
       // Show system notification directly
       await showSystemNotification(
@@ -293,12 +311,22 @@ Future<void> _setupGlobalNotificationSubscription() async {
         recipientId: userId, // Current user should receive this notification
         payload: payloadJson,
       );
+      
+      if (type == 'message') {
+        print('🔔 *** MESSAGE SYSTEM NOTIFICATION CALL COMPLETED ***');
+      }
     },
   );
   
   print('🔗 Subscribing to global notification channel...');
   final subscribeResult = await _globalNotificationChannel!.subscribe();
   print('📡 Global notification subscription result: $subscribeResult');
+  
+  if (subscribeResult == RealtimeSubscribeStatus.subscribed) {
+    print('✅ Successfully subscribed to global notifications for user: $userId');
+  } else {
+    print('❌ Failed to subscribe to global notifications. Status: $subscribeResult');
+  }
 }
 
 /// Reinitialize global notification subscription (call after user login)
@@ -333,6 +361,104 @@ Future<void> _showTestNotification() async {
   } catch (e) {
     print('Failed to send test notification: $e');
   }
+}
+
+/// PUBLIC: Show a test notification to verify setup
+Future<void> showTestNotification() async {
+  await _showTestNotification();
+}
+
+/// PUBLIC: Test if realtime subscription is working at all
+Future<void> testRealtimeSubscription() async {
+  final user = Supabase.instance.client.auth.currentUser;
+  if (user == null) {
+    print('❌ No user logged in for realtime test');
+    return;
+  }
+  
+  print('🧪 Testing realtime subscription with manual insert...');
+  
+  try {
+    // Insert a test notification directly to database
+    final testData = {
+      'user_id': user.id,
+      'actor_id': user.id,
+      'message': 'Realtime subscription test notification',
+      'type': 'test',
+      'is_read': false,
+      'created_at': DateTime.now().toIso8601String(),
+    };
+    
+    print('🧪 Inserting test notification: $testData');
+    
+    final result = await Supabase.instance.client
+        .from('notifications')
+        .insert(testData);
+    
+    print('✅ Test notification inserted: $result');
+    print('⏳ Check console for realtime subscription callback...');
+    
+  } catch (e) {
+    print('❌ Failed to insert test notification: $e');
+  }
+}
+Future<void> testCommunityNotification() async {
+  final user = Supabase.instance.client.auth.currentUser;
+  if (user == null) {
+    print('❌ No user logged in for test');
+    return;
+  }
+  
+  print('🧪 Testing community notification flow...');
+  await sendCommunityNotification(
+    recipientId: user.id, // Send to self for testing
+    actorId: user.id,
+    type: 'like',
+    message: 'Test User liked your post',
+    postId: 'test-post-123',
+    actorName: 'Test User',
+  );
+}
+
+/// PUBLIC: Test message notification flow
+Future<void> testMessageNotification() async {
+  final user = Supabase.instance.client.auth.currentUser;
+  if (user == null) {
+    print('❌ No user logged in for test');
+    return;
+  }
+  
+  print('🧪 Testing message notification flow...');
+  
+  // Test 1: Direct database insert to test realtime subscription
+  print('🧪 Step 1: Testing direct database insert...');
+  try {
+    final directInsertData = {
+      'user_id': user.id,
+      'actor_id': user.id,
+      'message': 'Test direct insert message notification',
+      'type': 'message',
+      'is_read': false,
+      'created_at': DateTime.now().toIso8601String(),
+    };
+    print('   Direct insert data: $directInsertData');
+    
+    final directResult = await Supabase.instance.client
+        .from('notifications')
+        .insert(directInsertData);
+    print('✅ Direct insert result: $directResult');
+  } catch (e) {
+    print('❌ Direct insert failed: $e');
+  }
+  
+  // Test 2: Using sendMessageNotification function
+  print('🧪 Step 2: Testing sendMessageNotification function...');
+  await sendMessageNotification(
+    recipientId: user.id, // Send to self for testing
+    senderId: user.id,
+    senderName: 'Test User',
+    messagePreview: 'This is a test message notification via function',
+  );
 }
 
 /// Handle notification tap
@@ -661,7 +787,21 @@ Future<void> sendCommunityNotification({
     print('   Data: $notificationData');
     
     final insertResult = await supabase.from('notifications').insert(notificationData);
-    print('✅ Notification inserted successfully: $insertResult');
+    print('✅ Community notification inserted - Response: $insertResult');
+    
+    // Verify the insert by querying the database
+    try {
+      final verifyQuery = await supabase
+        .from('notifications')
+        .select()
+        .eq('user_id', recipientId)
+        .eq('type', type)
+        .order('created_at', ascending: false)
+        .limit(1);
+      print('🔍 Verification query result: $verifyQuery');
+    } catch (e) {
+      print('⚠️ Failed to verify notification insert: $e');
+    }
     
     
     // Show system notification for community interactions
@@ -726,15 +866,32 @@ Future<void> sendMessageNotification({
   try {
     // Store message notification in database
     print('💾 Storing message notification in database...');
-    await supabase.from('notifications').insert({
+    final notificationData = {
       'user_id': recipientId,
       'actor_id': senderId,
       'message': 'sent you a message: $messagePreview',
       'type': 'message',
       'is_read': false,
       'created_at': DateTime.now().toIso8601String(),
-    });
-    print('✅ Message notification stored in database');
+    };
+    print('   Notification data: $notificationData');
+    
+    final insertResult = await supabase.from('notifications').insert(notificationData);
+    print('✅ Message notification inserted - Response: $insertResult');
+    
+    // Verify the insert by querying the database
+    try {
+      final verifyQuery = await supabase
+        .from('notifications')
+        .select()
+        .eq('user_id', recipientId)
+        .eq('type', 'message')
+        .order('created_at', ascending: false)
+        .limit(1);
+      print('🔍 Message notification verification query result: $verifyQuery');
+    } catch (e) {
+      print('⚠️ Failed to verify message notification insert: $e');
+    }
     
     // Show system notification
     print('🔔 Calling showSystemNotification...');

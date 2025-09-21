@@ -8,6 +8,7 @@ import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:realtime_client/realtime_client.dart' as r;
 import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../services/notification_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -709,6 +710,26 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       'type': 'text',
     });
 
+    // Send message notification
+    try {
+      final senderResponse = await supabase
+          .from('users')
+          .select('name')
+          .eq('id', widget.userId)
+          .single();
+      
+      final senderName = senderResponse['name'] as String? ?? 'Someone';
+      
+      await sendMessageNotification(
+        recipientId: widget.receiverId,
+        senderId: widget.userId,
+        senderName: senderName,
+        messagePreview: content,
+      );
+    } catch (e) {
+      print('Error sending message notification: $e');
+    }
+
     _messageController.clear();
     await supabase.from('typing_status').upsert({
       'user_id': widget.userId,
@@ -745,6 +766,26 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'type': 'voice',
         'media_url': 'voice/$fileName',
       });
+
+      // Send voice message notification
+      try {
+        final senderResponse = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', widget.userId)
+            .single();
+        
+        final senderName = senderResponse['name'] as String? ?? 'Someone';
+        
+        await sendMessageNotification(
+          recipientId: widget.receiverId,
+          senderId: widget.userId,
+          senderName: senderName,
+          messagePreview: '🎵 Voice message',
+        );
+      } catch (e) {
+        print('Error sending voice message notification: $e');
+      }
 
       fetchMessages();
     }
@@ -792,6 +833,26 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       'type': type,
       'media_url': 'images/$filename',
     });
+
+    // Send image message notification
+    try {
+      final senderResponse = await supabase
+          .from('users')
+          .select('name')
+          .eq('id', widget.userId)
+          .single();
+      
+      final senderName = senderResponse['name'] as String? ?? 'Someone';
+      
+      await sendMessageNotification(
+        recipientId: widget.receiverId,
+        senderId: widget.userId,
+        senderName: senderName,
+        messagePreview: '📷 Image',
+      );
+    } catch (e) {
+      print('Error sending image message notification: $e');
+    }
 
     fetchMessages();
   }
