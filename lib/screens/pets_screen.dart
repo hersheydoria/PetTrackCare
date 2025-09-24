@@ -58,7 +58,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // loading flag to know when we've finished fetching pets
   bool _loadingPets = true;
 
-  String backendUrl = "http://192.168.100.23:5000/analyze"; // set to your deployed backend
+  String backendUrl = "https://pettrackcare.onrender.com/analyze";
   List<double> _sleepTrend = []; // next 7 days predicted sleep hours
   Map<String, double> _moodProb = {};
   Map<String, double> _activityProb = {};
