@@ -3,7 +3,7 @@ pandas
 numpy
 scikit-learn
 tensorflow
-supabase-py
+supabase
 python-dotenv
 apscheduler
 joblib
