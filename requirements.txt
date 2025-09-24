@@ -1,0 +1,9 @@
+flask
+pandas
+numpy
+scikit-learn
+tensorflow
+supabase-py
+python-dotenv
+apscheduler
+joblib
