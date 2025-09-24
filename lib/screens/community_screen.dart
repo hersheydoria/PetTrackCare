@@ -2272,141 +2272,142 @@ void showEditPostModal(Map post) {
                     ),
                   ),
                 SizedBox(height: 12),
-                Wrap(
-                  spacing: 16,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.spaceAround,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          iconSize: 20,
-                          padding: EdgeInsets.all(4),
-                          constraints: BoxConstraints(minWidth: 32, minHeight: 32),
-                          icon: Icon(
-                            (likedPosts[postId] ?? false) ? Icons.favorite : Icons.favorite_border,
-                            color: (likedPosts[postId] ?? false) ? Colors.red : deepRed,
-                          ),
-                          onPressed: () async {
-                            // Any user can like/unlike any post
-                            final bool currentLikeState = likedPosts[postId] ?? false;
-                            final bool newLikeState = !currentLikeState;
-                            setState(() {
-                              likedPosts[postId] = newLikeState;
-                              if (newLikeState) {
-                                likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
-                              } else {
-                                likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
-                              }
-                            });
-                            try {
-                              if (newLikeState) {
-                                await Supabase.instance.client
-                                  .from('likes')
-                                  .insert({'post_id': postId, 'user_id': widget.userId});
-                                
-                                // Send like notification using new service
-                                if (post['user_id'] != widget.userId) {
-                                  // Get current user name
-                                  final currentUserResponse = await Supabase.instance.client
-                                      .from('users')
-                                      .select('name')
-                                      .eq('id', widget.userId)
-                                      .single();
-                                  final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
-                                  
-                                  await sendCommunityNotification(
-                                    recipientId: post['user_id'],
-                                    actorId: widget.userId,
-                                    type: 'like',
-                                    message: '$currentUserName liked your post',
-                                    postId: postId,
-                                    actorName: currentUserName,
-                                  );
-                                }
-                              } else {
-                                await Supabase.instance.client
-                                  .from('likes')
-                                  .delete()
-                                  .eq('post_id', postId)
-                                  .eq('user_id', widget.userId);
-                              }
-                              final updatedPost = await Supabase.instance.client
-                                .from('community_posts')
-                                .select('*, likes(user_id)')
-                                .eq('id', postId)
-                                .single();
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            iconSize: 20,
+                            padding: EdgeInsets.all(4),
+                            constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                            icon: Icon(
+                              (likedPosts[postId] ?? false) ? Icons.favorite : Icons.favorite_border,
+                              color: (likedPosts[postId] ?? false) ? Colors.red : deepRed,
+                            ),
+                            onPressed: () async {
+                              // Any user can like/unlike any post
+                              final bool currentLikeState = likedPosts[postId] ?? false;
+                              final bool newLikeState = !currentLikeState;
                               setState(() {
-                                final index = posts.indexWhere((p) => p['id'].toString() == postId);
-                                if (index != -1) {
-                                  posts[index]['likes'] = updatedPost['likes'];
-                                  likeCounts[postId] = updatedPost['likes']?.length ?? 0;
-                                }
-                              });
-                            } catch (e) {
-                              print('Error updating like: $e');
-                              setState(() {
-                                likedPosts[postId] = currentLikeState;
-                                if (currentLikeState) {
+                                likedPosts[postId] = newLikeState;
+                                if (newLikeState) {
                                   likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
                                 } else {
                                   likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
                                 }
                               });
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Failed to update like. Please try again.'),
-                                  duration: Duration(seconds: 2),
-                                )
-                              );
-                            }
-                          },
-                        ),
-                        if (likeCount > 0)
+                              try {
+                                if (newLikeState) {
+                                  await Supabase.instance.client
+                                    .from('likes')
+                                    .insert({'post_id': postId, 'user_id': widget.userId});
+                                  
+                                  // Send like notification using new service
+                                  if (post['user_id'] != widget.userId) {
+                                    // Get current user name
+                                    final currentUserResponse = await Supabase.instance.client
+                                        .from('users')
+                                        .select('name')
+                                        .eq('id', widget.userId)
+                                        .single();
+                                    final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+                                    
+                                    await sendCommunityNotification(
+                                      recipientId: post['user_id'],
+                                      actorId: widget.userId,
+                                      type: 'like',
+                                      message: '$currentUserName liked your post',
+                                      postId: postId,
+                                      actorName: currentUserName,
+                                    );
+                                  }
+                                } else {
+                                  await Supabase.instance.client
+                                    .from('likes')
+                                    .delete()
+                                    .eq('post_id', postId)
+                                    .eq('user_id', widget.userId);
+                                }
+                                final updatedPost = await Supabase.instance.client
+                                  .from('community_posts')
+                                  .select('*, likes(user_id)')
+                                  .eq('id', postId)
+                                  .single();
+                                setState(() {
+                                  final index = posts.indexWhere((p) => p['id'].toString() == postId);
+                                  if (index != -1) {
+                                    posts[index]['likes'] = updatedPost['likes'];
+                                    likeCounts[postId] = updatedPost['likes']?.length ?? 0;
+                                  }
+                                });
+                              } catch (e) {
+                                print('Error updating like: $e');
+                                setState(() {
+                                  likedPosts[postId] = currentLikeState;
+                                  if (currentLikeState) {
+                                    likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
+                                  } else {
+                                    likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
+                                  }
+                                });
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed to update like. Please try again.'),
+                                    duration: Duration(seconds: 2),
+                                  )
+                                );
+                              }
+                            },
+                          ),
+                          if (likeCount > 0)
+                            Text(
+                              '$likeCount', 
+                              style: TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            iconSize: 20,
+                            padding: EdgeInsets.all(4),
+                            constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                            icon: Icon(Icons.comment_outlined, color: deepRed),
+                            onPressed: () {
+                              // Any user can comment on any post
+                              setState(() {
+                                showCommentInput[postId] = !(showCommentInput[postId] ?? false);
+                              });
+                            },
+                          ),
                           Text(
-                            '$likeCount', 
+                            '${_getCommentCount(postId)} comments',
                             style: TextStyle(fontSize: 12),
                             overflow: TextOverflow.ellipsis,
                           ),
-                      ],
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          iconSize: 20,
-                          padding: EdgeInsets.all(4),
-                          constraints: BoxConstraints(minWidth: 32, minHeight: 32),
-                          icon: Icon(Icons.comment_outlined, color: deepRed),
-                          onPressed: () {
-                            // Any user can comment on any post
-                            setState(() {
-                              showCommentInput[postId] = !(showCommentInput[postId] ?? false);
-                            });
-                          },
-                        ),
-                        Text(
-                          '${_getCommentCount(postId)} comments',
-                          style: TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                    IconButton(
-                      iconSize: 20,
-                      padding: EdgeInsets.all(4),
-                      constraints: BoxConstraints(minWidth: 32, minHeight: 32),
-                      icon: Icon(
-                        bookmarkedPosts[postId] == true ? Icons.bookmark : Icons.bookmark_border,
-                        color: deepRed,
+                        ],
                       ),
-                      onPressed: () async {
-                        print('� Bookmark clicked for post: $postId');
-                        await toggleBookmark(postId);
-                      },
-                    ),
-                  ],
+                      IconButton(
+                        iconSize: 20,
+                        padding: EdgeInsets.all(4),
+                        constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                        icon: Icon(
+                          bookmarkedPosts[postId] == true ? Icons.bookmark : Icons.bookmark_border,
+                          color: deepRed,
+                        ),
+                        onPressed: () async {
+                          print('� Bookmark clicked for post: $postId');
+                          await toggleBookmark(postId);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
                 if (showCommentInput[postId] == true)
                   Padding(

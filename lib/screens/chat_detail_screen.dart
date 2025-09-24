@@ -2,12 +2,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
-import 'package:realtime_client/realtime_client.dart' as r;
 import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../services/notification_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -38,6 +40,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   bool otherUserTyping = false;
   FlutterSoundRecorder? _recorder;
   bool isRecording = false;
+  String? _recordedFilePath;
+  DateTime? _recordingStartTime;
+  Duration _recordingDuration = Duration.zero;
 
   // NEW: player state for voice playback
   FlutterSoundPlayer? _player;
@@ -56,6 +61,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final Map<String, RealtimeChannel> _sigChans = {};
 
   final ScrollController _scrollController = ScrollController();
+  
+  // Reply functionality
+  Map<String, dynamic>? _replyingToMessage;
+  
+  // Receiver profile picture
+  String? _receiverProfilePicture;
 
   @override
   void initState() {
@@ -68,6 +79,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     subscribeToTyping();
     listenToTyping();
     _loadSelfName(); // load my display name for calls
+    _loadReceiverProfile(); // load receiver's profile picture
     _initCallSignals(); // NEW: subscribe to my signaling channel
   }
 
@@ -97,6 +109,68 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       }
     } catch (_) {
       // ignore
+    }
+  }
+
+  Future<void> _loadReceiverProfile() async {
+    try {
+      final row = await supabase
+          .from('users')
+          .select('profile_picture')
+          .eq('id', widget.receiverId)
+          .maybeSingle();
+      
+      print('Receiver profile data: $row'); // Debug log
+      
+      if (mounted) {
+        setState(() {
+          _receiverProfilePicture = row?['profile_picture']?.toString();
+        });
+        print('Set receiver profile picture: $_receiverProfilePicture'); // Debug log
+      }
+    } catch (e) {
+      print('Error loading receiver profile: $e'); // Debug log
+    }
+  }
+
+  // Get full URL for profile picture
+  String? _getProfilePictureUrl(String? profilePicture) {
+    if (profilePicture == null || profilePicture.isEmpty) {
+      print('Profile picture is null or empty'); // Debug log
+      return null;
+    }
+    
+    print('Processing profile picture: $profilePicture'); // Debug log
+    
+    // If it's already a full URL, return as is
+    if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
+      print('Profile picture is already a full URL'); // Debug log
+      return profilePicture;
+    }
+    
+    // If it's a storage path, try different bucket names
+    try {
+      // Try common bucket names for profile pictures
+      List<String> possibleBuckets = ['profile-pictures', 'avatars', 'users', 'images'];
+      
+      for (String bucket in possibleBuckets) {
+        try {
+          String url = supabase.storage.from(bucket).getPublicUrl(profilePicture);
+          print('Generated URL for bucket $bucket: $url'); // Debug log
+          return url;
+        } catch (e) {
+          print('Failed to get URL from bucket $bucket: $e'); // Debug log
+          continue;
+        }
+      }
+      
+      // If all buckets failed, try the default one
+      String url = supabase.storage.from('profile-pictures').getPublicUrl(profilePicture);
+      print('Using default bucket URL: $url'); // Debug log
+      return url;
+    } catch (e) {
+      print('Error generating profile picture URL: $e'); // Debug log
+      return null;
     }
   }
 
@@ -635,15 +709,45 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final content = _messageController.text.trim();
     if (content.isEmpty) return;
 
-    await supabase.from('messages').insert({
+    final messageData = {
       'sender_id': widget.userId,
       'receiver_id': widget.receiverId,
       'content': content,
       'is_seen': false,
       'type': 'text',
-    });
+    };
+
+    // Add reply reference if replying to a message
+    if (_replyingToMessage != null) {
+      messageData['reply_to_message_id'] = _replyingToMessage!['id'];
+      messageData['reply_to_content'] = _getReplyPreview(_replyingToMessage!);
+      messageData['reply_to_sender_id'] = _replyingToMessage!['sender_id'];
+    }
+
+    await supabase.from('messages').insert(messageData);
+
+    // Send message notification
+    try {
+      final senderResponse = await supabase
+          .from('users')
+          .select('name')
+          .eq('id', widget.userId)
+          .single();
+      
+      final senderName = senderResponse['name'] as String? ?? 'Someone';
+      
+      await sendMessageNotification(
+        recipientId: widget.receiverId,
+        senderId: widget.userId,
+        senderName: senderName,
+        messagePreview: content,
+      );
+    } catch (e) {
+      print('Error sending message notification: $e');
+    }
 
     _messageController.clear();
+    _clearReply(); // Clear reply after sending
     await supabase.from('typing_status').upsert({
       'user_id': widget.userId,
       'chat_with_id': widget.receiverId,
@@ -654,14 +758,335 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   Future<void> _recordOrSendVoice() async {
-    if (!isRecording) {
-      await Permission.microphone.request();
-      await _recorder!.startRecorder(toFile: 'voice.aac');
-    } else {
-      String? path = await _recorder!.stopRecorder();
-      final fileBytes = await File(path!).readAsBytes();
+    if (!isRecording && _recordedFilePath == null) {
+      // Start recording
+      await _startRecording();
+    } else if (isRecording) {
+      // Stop recording and show preview
+      await _stopRecording();
+    }
+    // If there's a recorded file but not currently recording, 
+    // the button behavior is handled by the preview dialog
+  }
 
+  Future<void> _startRecording() async {
+    await Permission.microphone.request();
+    
+    try {
+      final tempDir = Directory.systemTemp;
       final fileName = 'voice_${DateTime.now().millisecondsSinceEpoch}.aac';
+      final filePath = '${tempDir.path}/$fileName';
+      
+      await _recorder!.startRecorder(toFile: filePath);
+      
+      setState(() {
+        isRecording = true;
+        _recordingStartTime = DateTime.now();
+        _recordedFilePath = filePath;
+        _recordingDuration = Duration.zero;
+      });
+      
+      // Start timer to update duration
+      _startRecordingTimer();
+      
+    } catch (e) {
+      print('Error starting recording: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to start recording. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _startRecordingTimer() {
+    // Update recording duration every 100ms
+    Future.doWhile(() async {
+      await Future.delayed(Duration(milliseconds: 100));
+      if (!isRecording || !mounted) return false;
+      
+      setState(() {
+        if (_recordingStartTime != null) {
+          _recordingDuration = DateTime.now().difference(_recordingStartTime!);
+        }
+      });
+      
+      return isRecording;
+    });
+  }
+
+  Future<void> _stopRecording() async {
+    try {
+      await _recorder!.stopRecorder();
+      
+      setState(() {
+        isRecording = false;
+      });
+      
+      if (_recordedFilePath != null) {
+        await _showVoicePreview();
+      }
+      
+    } catch (e) {
+      print('Error stopping recording: $e');
+      setState(() {
+        isRecording = false;
+        _recordedFilePath = null;
+        _recordingDuration = Duration.zero;
+      });
+    }
+  }
+
+  Future<void> _showVoicePreview() async {
+    if (_recordedFilePath == null) return;
+    
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.9,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: deepRed,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.keyboard_voice, color: Colors.white),
+                      SizedBox(width: 8),
+                      Text(
+                        'Voice Message',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Voice preview content
+                Container(
+                  padding: EdgeInsets.all(24),
+                  child: Column(
+                    children: [
+                      // Waveform visualization (simplified)
+                      Container(
+                        height: 80,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: lightBlush,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: coral.withOpacity(0.3)),
+                        ),
+                        child: Center(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.graphic_eq,
+                                size: 32,
+                                color: coral,
+                              ),
+                              SizedBox(width: 12),
+                              Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Voice Message',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: deepRed,
+                                    ),
+                                  ),
+                                  Text(
+                                    _formatDuration(_recordingDuration),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      
+                      SizedBox(height: 16),
+                      
+                      // Play button
+                      Container(
+                        decoration: BoxDecoration(
+                          color: coral.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: IconButton(
+                          onPressed: () => _playRecordedVoice(),
+                          icon: Icon(
+                            Icons.play_circle_fill,
+                            size: 48,
+                            color: coral,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Action buttons
+                Container(
+                  padding: EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Delete button
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pop('delete'),
+                          icon: Icon(Icons.delete, color: Colors.red.shade600),
+                          label: Text(
+                            'Delete',
+                            style: TextStyle(color: Colors.red.shade600),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            side: BorderSide(color: Colors.red.shade300),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      SizedBox(width: 12),
+                      
+                      // Re-record button
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pop('redo'),
+                          icon: Icon(Icons.refresh, color: coral),
+                          label: Text(
+                            'Redo',
+                            style: TextStyle(color: coral),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            side: BorderSide(color: coral),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      SizedBox(width: 12),
+                      
+                      // Send button
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.of(context).pop('send'),
+                          icon: Icon(Icons.send, color: Colors.white),
+                          label: Text(
+                            'Send',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: deepRed,
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    // Handle user choice
+    if (result == 'send') {
+      await _sendVoiceMessage();
+    } else if (result == 'delete') {
+      await _deleteRecording();
+    } else if (result == 'redo') {
+      await _redoRecording();
+    }
+  }
+
+  Future<void> _playRecordedVoice() async {
+    if (_recordedFilePath == null || _player == null) return;
+    
+    try {
+      await _player!.startPlayer(
+        fromURI: _recordedFilePath!,
+        codec: Codec.aacADTS,
+      );
+    } catch (e) {
+      print('Error playing recorded voice: $e');
+    }
+  }
+
+  Future<void> _sendVoiceMessage() async {
+    if (_recordedFilePath == null) return;
+    
+    try {
+      // Show loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text('Sending voice message...'),
+              ],
+            ),
+            backgroundColor: deepRed,
+            duration: Duration(seconds: 10),
+          ),
+        );
+      }
+
+      final fileBytes = await File(_recordedFilePath!).readAsBytes();
+      final fileName = 'voice_${DateTime.now().millisecondsSinceEpoch}.aac';
+      
       await supabase.storage.from('chat-media').uploadBinary(
         'voice/$fileName',
         fileBytes,
@@ -678,56 +1103,832 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'is_seen': false,
         'type': 'voice',
         'media_url': 'voice/$fileName',
+        // Add reply fields if replying
+        if (_replyingToMessage != null) ...{
+          'reply_to_message_id': _replyingToMessage!['id'],
+          'reply_to_content': _getReplyPreview(_replyingToMessage!),
+          'reply_to_sender_id': _replyingToMessage!['sender_id'],
+        },
       });
 
-      fetchMessages();
-    }
+      // Send voice message notification
+      try {
+        final senderResponse = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', widget.userId)
+            .single();
+        
+        final senderName = senderResponse['name'] as String? ?? 'Someone';
+        
+        await sendMessageNotification(
+          recipientId: widget.receiverId,
+          senderId: widget.userId,
+          senderName: senderName,
+          messagePreview: '🎵 Voice message',
+        );
+      } catch (e) {
+        print('Error sending voice message notification: $e');
+      }
 
+      // Clean up and refresh
+      await _deleteRecording();
+      _clearReply(); // Clear reply after sending
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Voice message sent!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+
+      fetchMessages();
+      
+    } catch (e) {
+      print('Error sending voice message: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send voice message. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteRecording() async {
+    if (_recordedFilePath != null) {
+      try {
+        await File(_recordedFilePath!).delete();
+      } catch (e) {
+        print('Error deleting recording file: $e');
+      }
+      
+      setState(() {
+        _recordedFilePath = null;
+        _recordingDuration = Duration.zero;
+        _recordingStartTime = null;
+      });
+    }
+  }
+
+  Future<void> _redoRecording() async {
+    await _deleteRecording();
+    await _startRecording();
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String minutes = twoDigits(duration.inMinutes);
+    String seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
+  }
+
+  // Preprocess large images before cropping to prevent memory crashes
+  Future<File> _preprocessImageForCropping(File originalFile) async {
+    try {
+      // Get file info
+      final fileSize = await originalFile.length();
+      final fileSizeMB = (fileSize / 1024 / 1024);
+      
+      print('Preprocessing image for cropper safety: ${fileSizeMB.toStringAsFixed(2)} MB');
+      
+      // Decode the image to check if it's valid and get dimensions
+      final img.Image? originalImage = img.decodeImage(await originalFile.readAsBytes());
+      
+      if (originalImage == null) {
+        throw Exception('Invalid or corrupted image file');
+      }
+      
+      print('Image dimensions: ${originalImage.width}x${originalImage.height}');
+      
+      // Determine if we need to resize based on size or dimensions
+      bool needsResize = false;
+      int targetWidth = originalImage.width;
+      int targetHeight = originalImage.height;
+      int quality = 80;
+      
+      // Check file size criteria
+      if (fileSizeMB > 5) {
+        needsResize = true;
+        quality = 60;
+        print('Large file detected, will resize');
+      }
+      
+      // Check dimension criteria - very large or problematic dimensions
+      if (originalImage.width > 3000 || originalImage.height > 3000) {
+        needsResize = true;
+        quality = 60;
+        print('Large dimensions detected, will resize');
+      }
+      
+      // Check for unusual aspect ratios that might cause issues
+      final aspectRatio = originalImage.width / originalImage.height;
+      if (aspectRatio > 10 || aspectRatio < 0.1) {
+        needsResize = true;
+        quality = 70;
+        print('Unusual aspect ratio detected: ${aspectRatio.toStringAsFixed(2)}');
+      }
+      
+      // For very small images, ensure minimum quality to prevent corruption
+      if (fileSizeMB < 0.1) {
+        quality = 90; // High quality for small images
+        print('Very small file detected, using high quality');
+      }
+      
+      // If we need to resize, calculate new dimensions
+      if (needsResize) {
+        // Calculate new dimensions maintaining aspect ratio
+        if (originalImage.width > originalImage.height) {
+          targetWidth = originalImage.width > 2000 ? 2000 : originalImage.width;
+          targetHeight = (targetWidth * originalImage.height / originalImage.width).round();
+        } else {
+          targetHeight = originalImage.height > 2000 ? 2000 : originalImage.height;
+          targetWidth = (targetHeight * originalImage.width / originalImage.height).round();
+        }
+        
+        print('Resizing to: ${targetWidth}x${targetHeight}');
+      }
+      
+      // Always re-encode to ensure compatible JPEG format
+      img.Image processedImage = originalImage;
+      
+      // Resize if needed
+      if (needsResize && (targetWidth != originalImage.width || targetHeight != originalImage.height)) {
+        processedImage = img.copyResize(
+          originalImage,
+          width: targetWidth,
+          height: targetHeight,
+          interpolation: img.Interpolation.cubic,
+        );
+      }
+      
+      // Create temporary file with processed image
+      final tempDir = Directory.systemTemp;
+      final tempFile = File('${tempDir.path}/processed_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      
+      // Encode as JPEG with appropriate quality
+      final encodedImage = img.encodeJpg(processedImage, quality: quality);
+      await tempFile.writeAsBytes(encodedImage);
+      
+      final newSize = await tempFile.length();
+      final newSizeMB = (newSize / 1024 / 1024);
+      print('Preprocessing complete. New size: ${newSizeMB.toStringAsFixed(2)} MB');
+      
+      return tempFile;
+      
+    } catch (e) {
+      print('Error preprocessing image: $e');
+      
+      // If preprocessing fails, try a basic JPEG conversion
+      try {
+        final bytes = await originalFile.readAsBytes();
+        final img.Image? image = img.decodeImage(bytes);
+        
+        if (image != null) {
+          final tempDir = Directory.systemTemp;
+          final tempFile = File('${tempDir.path}/fallback_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
+          
+          // Basic JPEG encoding with safe quality
+          final encodedImage = img.encodeJpg(image, quality: 80);
+          await tempFile.writeAsBytes(encodedImage);
+          
+          print('Used fallback preprocessing');
+          return tempFile;
+        }
+      } catch (fallbackError) {
+        print('Fallback preprocessing also failed: $fallbackError');
+      }
+      
+      // If all else fails, return original file and hope for the best
+      print('Using original file without preprocessing');
+      return originalFile;
+    }
+  }
+
+  // Helper method to validate image file format by checking file headers
+  bool _isValidImageFile(List<int> bytes) {
+    if (bytes.length < 4) return false;
+    
+    // Check for common image file signatures
+    // JPEG: FF D8 FF
+    if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+      return true;
+    }
+    
+    // PNG: 89 50 4E 47
+    if (bytes.length >= 8 && 
+        bytes[0] == 0x89 && bytes[1] == 0x50 && 
+        bytes[2] == 0x4E && bytes[3] == 0x47) {
+      return true;
+    }
+    
+    // GIF: 47 49 46 38
+    if (bytes.length >= 6 &&
+        bytes[0] == 0x47 && bytes[1] == 0x49 && 
+        bytes[2] == 0x46 && bytes[3] == 0x38) {
+      return true;
+    }
+    
+    // WebP: 52 49 46 46 (RIFF) ... 57 45 42 50 (WEBP)
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 && bytes[1] == 0x49 && 
+        bytes[2] == 0x46 && bytes[3] == 0x46 &&
+        bytes[8] == 0x57 && bytes[9] == 0x45 && 
+        bytes[10] == 0x42 && bytes[11] == 0x50) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  // Helper method to normalize image extensions for better compatibility
+  String _normalizeImageExtension(String ext) {
+    switch (ext.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+        return 'jpg';
+      case 'png':
+        return 'png';
+      case 'gif':
+        return 'gif';
+      case 'webp':
+        return 'webp';
+      default:
+        // Default to jpg for unknown extensions
+        return 'jpg';
+    }
+  }
+
+  // Helper method to build image with fallback handling for decompression errors
+  Widget _buildImageWithFallback({
+    required String url,
+    required double width,
+    required double height,
+  }) {
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      width: width,
+      height: height,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Center(
+            child: CircularProgressIndicator(
+              value: loadingProgress.expectedTotalBytes != null
+                  ? loadingProgress.cumulativeBytesLoaded / 
+                    loadingProgress.expectedTotalBytes!
+                  : null,
+              color: coral,
+              strokeWidth: 2,
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        print('Error loading image: $error');
+        print('Image URL: $url');
+        
+        // Check if it's a decompression error specifically
+        final isDecompressionError = error.toString().contains('Could not decompress image') ||
+                                   error.toString().contains('decompression') ||
+                                   error.toString().contains('decode');
+        
+        return Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                isDecompressionError ? Icons.image_not_supported : Icons.broken_image,
+                color: Colors.grey.shade400,
+                size: 32,
+              ),
+              SizedBox(height: 4),
+              Text(
+                isDecompressionError ? 'Image format not supported' : 'Image failed to load',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.grey.shade500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              if (isDecompressionError) ...[
+                SizedBox(height: 4),
+                Text(
+                  'Try sending a different image format',
+                  style: TextStyle(
+                    fontSize: 8,
+                    color: Colors.grey.shade400,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+      // Add headers to help with caching and compatibility
+      headers: {
+        'Accept': 'image/jpeg,image/png,image/gif,image/webp,image/*,*/*;q=0.8',
+        'Cache-Control': 'max-age=3600',
+      },
+    );
+  }
+
+  // Reply functionality
+  void _setReplyMessage(Map message) {
     setState(() {
-      isRecording = !isRecording;
+      _replyingToMessage = Map<String, dynamic>.from(message);
     });
+  }
+
+  void _clearReply() {
+    setState(() {
+      _replyingToMessage = null;
+    });
+  }
+
+  String _getReplyPreview(Map<String, dynamic> message) {
+    final type = message['type']?.toString() ?? 'text';
+    final content = message['content']?.toString() ?? '';
+    
+    switch (type) {
+      case 'image':
+        return '📷 Image';
+      case 'voice':
+        return '🎵 Voice message';
+      case 'call':
+        return '📞 Call';
+      default:
+        // Limit text preview to 50 characters
+        return content.length > 50 ? '${content.substring(0, 50)}...' : content;
+    }
   }
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) await _uploadMedia(File(pickedFile.path), 'image');
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 2048,
+      maxHeight: 2048,
+      imageQuality: 85, // Slightly compress to ensure compatibility
+    );
+    if (pickedFile != null) {
+      await _showImageEditOptions(File(pickedFile.path));
+    }
   }
 
   Future<void> _captureImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.camera);
-    if (pickedFile != null) await _uploadMedia(File(pickedFile.path), 'image');
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.camera,
+      maxWidth: 2048,
+      maxHeight: 2048,
+      imageQuality: 85, // Slightly compress to ensure compatibility
+    );
+    if (pickedFile != null) {
+      await _showImageEditOptions(File(pickedFile.path));
+    }
+  }
+
+  Future<void> _showImageEditOptions(File imageFile) async {
+    // Get image size for display
+    final fileSize = await imageFile.length();
+    final fileSizeMB = (fileSize / 1024 / 1024);
+    
+    // Show image preview with edit options
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.8,
+              maxWidth: MediaQuery.of(context).size.width * 0.9,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header with size info
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: deepRed,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.image, color: Colors.white),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Image Preview',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${fileSizeMB.toStringAsFixed(1)}MB',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Image preview
+                Flexible(
+                  child: Container(
+                    padding: EdgeInsets.all(16),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(
+                        imageFile,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            height: 200,
+                            width: double.infinity,
+                            color: Colors.grey.shade200,
+                            child: Icon(
+                              Icons.broken_image,
+                              size: 48,
+                              color: Colors.grey.shade400,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+                
+                // Action buttons
+                Container(
+                  padding: EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Cancel button
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pop('cancel'),
+                          icon: Icon(Icons.close, color: Colors.grey.shade600),
+                          label: Text(
+                            'Cancel',
+                            style: TextStyle(color: Colors.grey.shade600),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            side: BorderSide(color: Colors.grey.shade300),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      SizedBox(width: 12),
+                      
+                      // Edit/Crop button
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).pop('edit'),
+                          icon: Icon(Icons.crop, color: coral),
+                          label: Text(
+                            'Edit',
+                            style: TextStyle(color: coral),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            side: BorderSide(color: coral),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      
+                      SizedBox(width: 12),
+                      
+                      // Send button
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.of(context).pop('send'),
+                          icon: Icon(Icons.send, color: Colors.white),
+                          label: Text(
+                            'Send',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: deepRed,
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    // Handle user choice
+    if (result == 'send') {
+      await _uploadMedia(imageFile, 'image');
+    } else if (result == 'edit') {
+      await _cropImage(imageFile);
+    }
+    // If 'cancel' or null, do nothing
+  }
+
+  Future<void> _cropImage(File imageFile) async {
+    try {
+      // Check file size and get image info
+      final fileSize = await imageFile.length();
+      final fileSizeMB = (fileSize / 1024 / 1024);
+      
+      print('Original image size for cropping: ${fileSizeMB.toStringAsFixed(2)} MB');
+      
+      // Always preprocess images to ensure compatibility with the cropper
+      // This handles format issues, corruption, and memory problems
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Preparing image for editing...'),
+            backgroundColor: coral,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      
+      // Preprocess ALL images to ensure they're in a compatible format
+      final processedFile = await _preprocessImageForCropping(imageFile);
+      
+      final newSize = await processedFile.length();
+      final newSizeMB = (newSize / 1024 / 1024);
+      print('Preprocessed image size: ${newSizeMB.toStringAsFixed(2)} MB');
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Opening image editor...'),
+            backgroundColor: coral,
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+      
+      // Use safe settings for the cropper
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: processedFile.path,
+        compressFormat: ImageCompressFormat.jpg,
+        compressQuality: 80, // Good quality but safe
+        maxWidth: 1920, // Safe max dimensions
+        maxHeight: 1920,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Image',
+            toolbarColor: deepRed,
+            toolbarWidgetColor: Colors.white,
+            activeControlsWidgetColor: deepRed,
+            backgroundColor: Colors.white,
+            cropGridColor: deepRed,
+            cropFrameColor: deepRed,
+            statusBarColor: deepRed,
+            lockAspectRatio: false,
+            hideBottomControls: false,
+            initAspectRatio: CropAspectRatioPreset.original,
+          ),
+          IOSUiSettings(
+            title: 'Crop Image',
+            doneButtonTitle: 'Done',
+            cancelButtonTitle: 'Cancel',
+            rotateButtonsHidden: false,
+            aspectRatioPickerButtonHidden: false,
+            resetButtonHidden: false,
+          ),
+        ],
+      );
+
+      if (croppedFile != null) {
+        // Check the size of the cropped image
+        final croppedSize = await File(croppedFile.path).length();
+        final croppedSizeMB = (croppedSize / 1024 / 1024);
+        print('Cropped image size: ${croppedSizeMB.toStringAsFixed(2)} MB');
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Image edited successfully! Size: ${croppedSizeMB.toStringAsFixed(1)}MB'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        
+        // Show edit options again with the cropped image
+        await _showImageEditOptions(File(croppedFile.path));
+      } else {
+        // User cancelled cropping
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        }
+      }
+    } catch (e) {
+      print('Error cropping image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error editing image. Try with a smaller image or send original.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Send Original',
+              textColor: Colors.white,
+              onPressed: () => _uploadMedia(imageFile, 'image'),
+            ),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _uploadMedia(File file, String type) async {
-    final bytes = await file.readAsBytes();
-    final ext = file.path.split('.').last.toLowerCase();
-    final filename = '${DateTime.now().millisecondsSinceEpoch}.$ext';
-    final contentType = switch (ext) {
-      'jpg' || 'jpeg' => 'image/jpeg',
-      'png' => 'image/png',
-      'gif' => 'image/gif',
-      'webp' => 'image/webp',
-      _ => 'application/octet-stream',
-    };
+    // Show loading indicator
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+              SizedBox(width: 12),
+              Text('Sending image...'),
+            ],
+          ),
+          backgroundColor: deepRed,
+          duration: Duration(seconds: 10),
+        ),
+      );
+    }
 
-    await supabase.storage.from('chat-media').uploadBinary(
-      'images/$filename',
-      bytes,
-      fileOptions: FileOptions(contentType: contentType, upsert: true),
-    );
+    try {
+      // File validation and size check
+      final fileSize = await file.length();
+      if (fileSize == 0) {
+        throw Exception('File is empty');
+      }
 
-    await supabase.from('messages').insert({
-      'sender_id': widget.userId,
-      'receiver_id': widget.receiverId,
-      'content': '[image]',
-      'is_seen': false,
-      'type': type,
-      'media_url': 'images/$filename',
-    });
+      print('Uploading image: ${file.path}, size: ${(fileSize / 1024).toStringAsFixed(1)}KB');
 
-    fetchMessages();
+      // Read and validate file bytes
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
+        throw Exception('Failed to read image data');
+      }
+
+      // Validate that it's actually an image by checking file header
+      if (!_isValidImageFile(bytes)) {
+        throw Exception('Invalid image file format');
+      }
+      
+      // Get file extension and normalize it
+      final ext = file.path.split('.').last.toLowerCase();
+      final normalizedExt = _normalizeImageExtension(ext);
+      final filename = '${DateTime.now().millisecondsSinceEpoch}.$normalizedExt';
+      
+      // Always use JPEG content type for better compatibility
+      // Most image viewers can handle JPEG reliably
+      final contentType = 'image/jpeg';
+
+      print('Normalized extension: $normalizedExt, Content-Type: $contentType');
+
+      // Upload with proper headers for image handling
+      await supabase.storage.from('chat-media').uploadBinary(
+        'images/$filename',
+        bytes,
+        fileOptions: FileOptions(
+          contentType: contentType,
+          upsert: true,
+          // Add cache control headers for better performance
+          cacheControl: '31536000', // 1 year cache
+        ),
+      );
+
+      await supabase.from('messages').insert({
+        'sender_id': widget.userId,
+        'receiver_id': widget.receiverId,
+        'content': '[image]',
+        'is_seen': false,
+        'type': type,
+        'media_url': 'images/$filename',
+        // Add reply fields if replying
+        if (_replyingToMessage != null) ...{
+          'reply_to_message_id': _replyingToMessage!['id'],
+          'reply_to_content': _getReplyPreview(_replyingToMessage!),
+          'reply_to_sender_id': _replyingToMessage!['sender_id'],
+        },
+      });
+
+      // Send image message notification
+      try {
+        final senderResponse = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', widget.userId)
+            .single();
+        
+        final senderName = senderResponse['name'] as String? ?? 'Someone';
+        
+        await sendMessageNotification(
+          recipientId: widget.receiverId,
+          senderId: widget.userId,
+          senderName: senderName,
+          messagePreview: '📷 Image',
+        );
+      } catch (e) {
+        print('Error sending image message notification: $e');
+      }
+
+      // Hide loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Image sent successfully!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+
+      _clearReply(); // Clear reply after sending
+      fetchMessages();
+    } catch (e) {
+      print('Error uploading image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send image: ${e.toString().contains('413') ? 'File too large' : 'Upload error'}'),
+            backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _uploadMedia(file, type),
+            ),
+          ),
+        );
+      }
+    }
   }
 
   String _sanitizeId(String s) {
@@ -792,8 +1993,143 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     minScale: 0.5,
                     maxScale: 4.0,
                     child: tag != null
-                        ? Hero(tag: tag, child: Image.network(url))
-                        : Image.network(url),
+                        ? Hero(
+                            tag: tag, 
+                            child: Image.network(
+                              url,
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) return child;
+                                return Container(
+                                  width: MediaQuery.of(context).size.width,
+                                  height: MediaQuery.of(context).size.height * 0.5,
+                                  color: Colors.black,
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        CircularProgressIndicator(
+                                          value: loadingProgress.expectedTotalBytes != null
+                                              ? loadingProgress.cumulativeBytesLoaded / 
+                                                loadingProgress.expectedTotalBytes!
+                                              : null,
+                                          color: Colors.white,
+                                        ),
+                                        SizedBox(height: 16),
+                                        Text(
+                                          'Loading image...',
+                                          style: TextStyle(color: Colors.white),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                              errorBuilder: (context, error, stackTrace) {
+                                print('Error loading full-size image: $error');
+                                return Container(
+                                  width: MediaQuery.of(context).size.width,
+                                  height: MediaQuery.of(context).size.height * 0.5,
+                                  color: Colors.black,
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.broken_image,
+                                          color: Colors.white,
+                                          size: 64,
+                                        ),
+                                        SizedBox(height: 16),
+                                        Text(
+                                          'Failed to load image',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                        SizedBox(height: 8),
+                                        Text(
+                                          'The image may be corrupted or unavailable',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12,
+                                          ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          )
+                        : Image.network(
+                            url,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return Container(
+                                width: MediaQuery.of(context).size.width,
+                                height: MediaQuery.of(context).size.height * 0.5,
+                                color: Colors.black,
+                                child: Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      CircularProgressIndicator(
+                                        value: loadingProgress.expectedTotalBytes != null
+                                            ? loadingProgress.cumulativeBytesLoaded / 
+                                              loadingProgress.expectedTotalBytes!
+                                            : null,
+                                        color: Colors.white,
+                                      ),
+                                      SizedBox(height: 16),
+                                      Text(
+                                        'Loading image...',
+                                        style: TextStyle(color: Colors.white),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stackTrace) {
+                              print('Error loading full-size image: $error');
+                              return Container(
+                                width: MediaQuery.of(context).size.width,
+                                height: MediaQuery.of(context).size.height * 0.5,
+                                color: Colors.black,
+                                child: Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.broken_image,
+                                        color: Colors.white,
+                                        size: 64,
+                                      ),
+                                      SizedBox(height: 16),
+                                      Text(
+                                        'Failed to load image',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      SizedBox(height: 8),
+                                      Text(
+                                        'The image may be corrupted or unavailable',
+                                        style: TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
                   ),
                 ),
                 Positioned(
@@ -904,23 +2240,54 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               height: 40,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
-                ),
+                gradient: _receiverProfilePicture == null
+                    ? LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                      )
+                    : null,
                 border: Border.all(color: Colors.white, width: 2),
               ),
-              child: Center(
-                child: Text(
-                  widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-              ),
+              child: _receiverProfilePicture != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.network(
+                        _getProfilePictureUrl(_receiverProfilePicture) ?? _receiverProfilePicture!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
             ),
             SizedBox(width: 12),
             Expanded(
@@ -1098,7 +2465,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     );
   }
 
-  // Enhanced message bubble
+  // Enhanced message bubble with swipe-to-reply
   Widget _buildMessageBubble(Map msg, bool sentByMe, bool isLastSeen, String? tsLabel) {
     Widget content = _buildMessageContent(msg);
 
@@ -1133,77 +2500,139 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               ),
             ),
           ),
-        Align(
-          alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
-          child: Column(
-            crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              Container(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.75,
+        _buildSwipeableMessage(msg, sentByMe, isLastSeen, content),
+      ],
+    );
+  }
+
+  // Swipeable message wrapper with controlled swipe distance
+  Widget _buildSwipeableMessage(Map msg, bool sentByMe, bool isLastSeen, Widget content) {
+    return _SwipeToReplyWidget(
+      onReply: () => _setReplyMessage(msg),
+      swipeDirection: sentByMe ? SwipeDirection.rightToLeft : SwipeDirection.leftToRight,
+      child: Align(
+        alignment: sentByMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: sentByMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            // Show reply context if this message is a reply
+            if (msg['reply_to_message_id'] != null)
+              _buildReplyContext(msg),
+            Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.75,
+              ),
+              padding: EdgeInsets.all(12),
+              margin: EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+              decoration: BoxDecoration(
+                gradient: sentByMe
+                    ? LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [deepRed, coral],
+                      )
+                    : null,
+                color: sentByMe ? null : Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(sentByMe ? 16 : 4),
+                  bottomRight: Radius.circular(sentByMe ? 4 : 16),
                 ),
-                padding: EdgeInsets.all(12),
-                margin: EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-                decoration: BoxDecoration(
-                  gradient: sentByMe
-                      ? LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [deepRed, coral],
-                        )
-                      : null,
-                  color: sentByMe ? null : Colors.white,
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                    bottomLeft: Radius.circular(sentByMe ? 16 : 4),
-                    bottomRight: Radius.circular(sentByMe ? 4 : 16),
+                boxShadow: [
+                  BoxShadow(
+                    color: sentByMe 
+                      ? deepRed.withOpacity(0.2) 
+                      : Colors.grey.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: sentByMe 
-                        ? deepRed.withOpacity(0.2) 
-                        : Colors.grey.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
+                ],
+              ),
+              child: DefaultTextStyle(
+                style: TextStyle(
+                  color: sentByMe ? Colors.white : Colors.grey.shade800,
+                  fontSize: 15,
+                ),
+                child: content,
+              ),
+            ),
+            if (sentByMe && isLastSeen)
+              Padding(
+                padding: const EdgeInsets.only(right: 8.0, top: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.done_all,
+                      size: 12,
+                      color: coral,
+                    ),
+                    SizedBox(width: 2),
+                    Text(
+                      'Seen',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: coral,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ],
                 ),
-                child: DefaultTextStyle(
-                  style: TextStyle(
-                    color: sentByMe ? Colors.white : Colors.grey.shade800,
-                    fontSize: 15,
-                  ),
-                  child: content,
-                ),
               ),
-              if (sentByMe && isLastSeen)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8.0, top: 2),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.done_all,
-                        size: 12,
-                        color: coral,
-                      ),
-                      SizedBox(width: 2),
-                      Text(
-                        'Seen',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: coral,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Reply context widget
+  Widget _buildReplyContext(Map msg) {
+    final sentByMe = isSender(msg['sender_id']);
+    final replyContent = msg['reply_to_content']?.toString() ?? '';
+    final replySenderId = msg['reply_to_sender_id']?.toString() ?? '';
+    final isReplyFromMe = replySenderId == widget.userId;
+    
+    return Container(
+      margin: EdgeInsets.only(
+        left: sentByMe ? 40 : 8,
+        right: sentByMe ? 8 : 40,
+        bottom: 4,
+      ),
+      padding: EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(
+            color: isReplyFromMe ? deepRed : coral,
+            width: 3,
           ),
         ),
-      ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            isReplyFromMe ? 'You' : widget.userName,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: isReplyFromMe ? deepRed : coral,
+            ),
+          ),
+          SizedBox(height: 2),
+          Text(
+            replyContent,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey.shade600,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
     );
   }
 
@@ -1237,24 +2666,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               tag: heroTag,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  url,
-                  fit: BoxFit.cover,
+                child: _buildImageWithFallback(
+                  url: url,
                   width: 200,
                   height: 200,
-                  errorBuilder: (_, __, ___) => Container(
-                    width: 200,
-                    height: 200,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade200,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.broken_image,
-                      color: Colors.grey.shade400,
-                      size: 32,
-                    ),
-                  ),
                 ),
               ),
             ),
@@ -1308,7 +2723,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
-  // Enhanced message input
+  // Enhanced message input with reply preview
   Widget _buildMessageInput() {
     return Container(
       decoration: BoxDecoration(
@@ -1324,40 +2739,158 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           ),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-      child: Row(
+      child: Column(
         children: [
-          _buildInputButton(Icons.mic, isRecording ? coral : null, _recordOrSendVoice),
-          _buildInputButton(Icons.image, null, _pickImage),
-          _buildInputButton(Icons.camera_alt, null, _captureImage),
-          Expanded(
-            child: Container(
-              margin: EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: TextField(
-                controller: _messageController,
-                decoration: InputDecoration(
-                  hintText: 'Type a message...',
-                  hintStyle: TextStyle(color: Colors.grey.shade500),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          // Reply preview
+          if (_replyingToMessage != null)
+            _buildReplyPreview(),
+          // Input row
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+            child: Row(
+              children: [
+                _buildVoiceButton(),
+                _buildInputButton(Icons.image, null, _pickImage),
+                _buildInputButton(Icons.camera_alt, null, _captureImage),
+                Expanded(
+                  child: Container(
+                    margin: EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: TextField(
+                      controller: _messageController,
+                      decoration: InputDecoration(
+                        hintText: _replyingToMessage != null 
+                          ? 'Reply to ${isSender(_replyingToMessage!['sender_id']) ? 'yourself' : widget.userName}...'
+                          : 'Type a message...',
+                        hintStyle: TextStyle(color: Colors.grey.shade500),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      ),
+                      maxLines: null,
+                      textCapitalization: TextCapitalization.sentences,
+                    ),
+                  ),
                 ),
-                maxLines: null,
-                textCapitalization: TextCapitalization.sentences,
-              ),
+                _buildInputButton(Icons.send, deepRed, _sendMessage),
+              ],
             ),
           ),
-          _buildInputButton(Icons.send, deepRed, _sendMessage),
+        ],
+      ),
+    );
+  }
+
+  // Reply preview widget
+  Widget _buildReplyPreview() {
+    if (_replyingToMessage == null) return SizedBox.shrink();
+    
+    final isReplyToMe = isSender(_replyingToMessage!['sender_id']);
+    final replyContent = _getReplyPreview(_replyingToMessage!);
+    
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200),
+          left: BorderSide(
+            color: isReplyToMe ? deepRed : coral,
+            width: 4,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Replying to ${isReplyToMe ? 'yourself' : widget.userName}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isReplyToMe ? deepRed : coral,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  replyContent,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey.shade600,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(
+              Icons.close,
+              size: 20,
+              color: Colors.grey.shade500,
+            ),
+            onPressed: _clearReply,
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints(
+              minWidth: 32,
+              minHeight: 32,
+            ),
+          ),
         ],
       ),
     );
   }
 
   // Enhanced input button
+  Widget _buildVoiceButton() {
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 2),
+      child: GestureDetector(
+        onTap: _recordOrSendVoice,
+        child: Container(
+          padding: EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: isRecording ? Colors.red : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: isRecording 
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.stop,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  SizedBox(width: 4),
+                  Text(
+                    _formatDuration(_recordingDuration),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              )
+            : Icon(
+                Icons.mic,
+                color: coral,
+                size: 20,
+              ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInputButton(IconData icon, Color? activeColor, VoidCallback onPressed) {
     return Container(
       margin: EdgeInsets.symmetric(horizontal: 2),
@@ -1383,5 +2916,144 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Future<void> _refreshAll() async {
     await fetchMessages();
     await markMessagesAsSeen();
+  }
+}
+
+// Enum for swipe direction
+enum SwipeDirection {
+  leftToRight,
+  rightToLeft,
+}
+
+// Custom swipe-to-reply widget with limited swipe distance
+class _SwipeToReplyWidget extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onReply;
+  final SwipeDirection swipeDirection;
+
+  const _SwipeToReplyWidget({
+    required this.child,
+    required this.onReply,
+    required this.swipeDirection,
+  });
+
+  @override
+  _SwipeToReplyWidgetState createState() => _SwipeToReplyWidgetState();
+}
+
+class _SwipeToReplyWidgetState extends State<_SwipeToReplyWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  
+  double _dragDistance = 0;
+  final double _maxSwipeDistance = 80; // Maximum swipe distance
+  final double _replyThreshold = 50; // Threshold to trigger reply
+  bool _hasTriggered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: Duration(milliseconds: 200),
+      vsync: this,
+    );
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    final delta = details.delta.dx;
+    
+    // Check if swipe is in the correct direction
+    bool isValidDirection = false;
+    if (widget.swipeDirection == SwipeDirection.rightToLeft && delta < 0) {
+      isValidDirection = true;
+    } else if (widget.swipeDirection == SwipeDirection.leftToRight && delta > 0) {
+      isValidDirection = true;
+    }
+    
+    if (!isValidDirection) return;
+    
+    setState(() {
+      _dragDistance = (_dragDistance + delta.abs()).clamp(0, _maxSwipeDistance);
+    });
+
+    // Trigger haptic feedback when threshold is reached
+    if (_dragDistance >= _replyThreshold && !_hasTriggered) {
+      _hasTriggered = true;
+      // Light haptic feedback to indicate reply will be triggered
+      // HapticFeedback.lightImpact(); // Uncomment if you want haptic feedback
+    }
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    if (_dragDistance >= _replyThreshold) {
+      widget.onReply();
+      // Add a small animation to indicate reply was triggered
+      _animationController.forward().then((_) {
+        _animationController.reverse();
+      });
+    }
+    
+    // Reset state
+    setState(() {
+      _dragDistance = 0;
+      _hasTriggered = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isLeftToRight = widget.swipeDirection == SwipeDirection.leftToRight;
+    final replyIconOpacity = (_dragDistance / _replyThreshold).clamp(0.0, 1.0);
+    
+    return GestureDetector(
+      onPanUpdate: _onPanUpdate,
+      onPanEnd: _onPanEnd,
+      child: Stack(
+        children: [
+          // Reply icon background
+          if (_dragDistance > 0)
+            Positioned(
+              left: isLeftToRight ? 16 : null,
+              right: !isLeftToRight ? 16 : null,
+              top: 0,
+              bottom: 0,
+              child: AnimatedOpacity(
+                opacity: replyIconOpacity,
+                duration: Duration(milliseconds: 100),
+                child: Center(
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: _hasTriggered ? coral : Colors.grey.shade300,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.reply,
+                      color: _hasTriggered ? Colors.white : Colors.grey.shade600,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          
+          // Message content with transform
+          Transform.translate(
+            offset: Offset(
+              isLeftToRight ? _dragDistance : -_dragDistance,
+              0,
+            ),
+            child: widget.child,
+          ),
+        ],
+      ),
+    );
   }
 }

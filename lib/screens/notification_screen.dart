@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
+import '../services/notification_service.dart';
+import 'chat_detail_screen.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
-const coral = Color(0xFFD2665A);
+const coral = Color(0xFFF2B28C);
 const peach = Color(0xFFF2B28C);
 const lightBlush = Color(0xFFF6DED8);
 
@@ -65,6 +67,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
       return;
     }
     final userId = user.id;
+    
+    print('🔧 Initializing notifications for user: $userId');
 
     try {
       final res = await supabase
@@ -76,12 +80,17 @@ class _NotificationScreenState extends State<NotificationScreen> {
         notifications = List<Map<String, dynamic>>.from(res);
         isLoading = false;
       });
+      print('📋 Loaded ${notifications.length} existing notifications');
       _prefetchCaptionsFor(notifications);
     } catch (e) {
+      print('❌ Error loading notifications: $e');
       setState(() => isLoading = false);
     }
 
     _realtimeChannel = supabase.channel('notifications_user_$userId');
+    
+    print('📡 Setting up realtime subscription for user: $userId');
+    print('   Channel: notifications_user_$userId');
 
     _realtimeChannel!.onPostgresChanges(
       event: PostgresChangeEvent.insert,
@@ -93,70 +102,84 @@ class _NotificationScreenState extends State<NotificationScreen> {
         value: userId,
       ),
       callback: (payload) {
+        print('🔔 Realtime notification received in notification_screen');
+        print('   User ID filter: $userId');
+        print('   Payload: ${payload.newRecord}');
+        
         final newRow = payload.newRecord;
         final row = Map<String, dynamic>.from(newRow);
+        
+        print('   Processed row: $row');
+        
         setState(() {
           notifications = [row, ...notifications];
         });
+        
+        print('📱 Calling _showLocalNotification for system notification...');
         // Show system notification (appears outside the app)
         _showLocalNotification(row);
       },
     );
 
-    _realtimeChannel!.subscribe();
+    print('🔗 Subscribing to realtime channel...');
+    final subscribeResult = await _realtimeChannel!.subscribe();
+    print('📡 Realtime subscription result: $subscribeResult');
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
-    // Check if user has enabled notifications
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user != null) {
-      // Check user preferences from metadata first
-      final metadata = user.userMetadata ?? {};
-      final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
-      final notificationsEnabled = notificationPrefs['enabled'] ?? true;
-      
-      // If notifications are disabled, don't show system notification
-      if (!notificationsEnabled) {
-        print('System notifications disabled for user');
-        return;
-      }
-    }
+    print('📱 _showLocalNotification called in notification_screen');
+    print('   Notification data: $n');
     
+    // Use the centralized notification service to show system notifications
     final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
+    final type = n['type']?.toString();
+    final currentUserId = supabase.auth.currentUser?.id;
     
-    // Enhanced Android notification details for better system notification experience
-    const androidDetails = AndroidNotificationDetails(
-      'notifications_channel',
-      'Notifications',
-      channelDescription: 'App notifications',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
-      showWhen: true,
-      enableLights: true,
-      autoCancel: true, // Notification disappears when tapped
-      icon: '@mipmap/ic_launcher', // Use app icon
-    );
-    const details = NotificationDetails(android: androidDetails);
-
-    final id = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    // Compose a payload so tapping the local notification can navigate to the right place.
-    // We'll include the notification DB id, postId, jobId, and type so NotificationScreen can route.
+    print('   Title: $title');
+    print('   Body: $body');
+    print('   Type: $type');
+    print('   Current User ID: $currentUserId');
+    
+    // Prepare payload for navigation
     final payloadMap = <String, dynamic>{};
     if (n['id'] != null) payloadMap['notificationId'] = n['id'].toString();
     if (n['post_id'] != null) payloadMap['postId'] = n['post_id'].toString();
     if (n['job_id'] != null) payloadMap['jobId'] = n['job_id'].toString();
     if (n['type'] != null) payloadMap['type'] = n['type'].toString();
+    if (n['actor_id'] != null) {
+      payloadMap['senderId'] = n['actor_id'].toString();
+      // Get actor name for message notifications
+      if (type == 'message') {
+        try {
+          final actorResponse = await supabase
+              .from('users')
+              .select('name')
+              .eq('id', n['actor_id'])
+              .single();
+          payloadMap['senderName'] = actorResponse['name'] ?? 'Someone';
+        } catch (e) {
+          payloadMap['senderName'] = 'Someone';
+        }
+      }
+    }
     final payload = json.encode(payloadMap);
-
+    
+    print('   Payload: $payload');
+    
     try {
-      // Show system notification (appears in notification tray, works outside app)
-      await _localNotifications.show(id, title, body.isNotEmpty ? body : null, details, payload: payload);
-      print('System notification shown: $title');
+      // Use the centralized system notification service from notification_service.dart
+      print('🔔 Calling centralized showSystemNotification...');
+      await showSystemNotification(
+        title: title,
+        body: body.isNotEmpty ? body : title,
+        type: type,
+        recipientId: currentUserId, // Current user should receive this notification
+        payload: payload,
+      );
+      print('✅ System notification completed via centralized service: $title');
     } catch (e) {
-      print('Local notification error: $e');
+      print('❌ Failed to show system notification: $e');
     }
   }
 
@@ -167,19 +190,30 @@ class _NotificationScreenState extends State<NotificationScreen> {
       final notificationId = map['notificationId']?.toString();
       final jobId = map['jobId']?.toString();
       final notificationType = map['type']?.toString();
+      final senderId = map['senderId']?.toString();
 
-      print('System notification tapped: postId=$postId, jobId=$jobId, notificationId=$notificationId, type=$notificationType');
+      print('System notification tapped: postId=$postId, jobId=$jobId, notificationId=$notificationId, type=$notificationType, senderId=$senderId');
 
       // Mark notification as read if we have an ID
       if (notificationId != null) {
         await _markAsRead(notificationId);
       }
 
+      // Handle message notifications - navigate to chat
+      if (notificationType == 'message' && senderId != null) {
+        if (!mounted) return;
+        Navigator.of(context).pushNamed('/chat', arguments: {
+          'receiverId': senderId,
+          'userName': map['senderName']?.toString() ?? 'Chat',
+        });
+        return;
+      }
+
       // Handle job notifications - navigate to home screen
       if (notificationType != null && notificationType.startsWith('job_')) {
         if (!mounted) return;
         Navigator.of(context).pushNamedAndRemoveUntil(
-          '/main',
+          '/home',
           (route) => false,
           arguments: {'initialTab': 0}, // Home tab
         );
@@ -469,12 +503,46 @@ class _NotificationScreenState extends State<NotificationScreen> {
     await _markAsRead(n['id'].toString());
     
     final type = n['type']?.toString() ?? '';
+    final actorId = n['actor_id']?.toString();
+    
+    print('In-app notification tapped: type=$type, actorId=$actorId');
+    
+    // Handle message notifications - navigate to chat
+    if (type == 'message' && actorId != null) {
+      // Get sender name for navigation
+      String senderName = 'Chat';
+      try {
+        final userResponse = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', actorId)
+            .single();
+        senderName = userResponse['name'] as String? ?? 'Chat';
+      } catch (e) {
+        print('Error getting sender name: $e');
+      }
+      
+      print('Navigating to chat with senderId=$actorId, senderName=$senderName');
+      final currentUser = supabase.auth.currentUser;
+      if (currentUser != null) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChatDetailScreen(
+              userId: currentUser.id,
+              receiverId: actorId,
+              userName: senderName,
+            ),
+          ),
+        );
+      }
+      return;
+    }
     
     // Handle job notifications differently - navigate to home screen jobs section
     if (type.startsWith('job_')) {
       // Navigate to home screen which shows job management
       Navigator.of(context).pushNamedAndRemoveUntil(
-        '/main', // Assuming main screen route
+        '/home', // Correct route for main navigation
         (route) => false,
         arguments: {'initialTab': 0}, // Home tab
       );
@@ -483,7 +551,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     
     // Handle regular post-related notifications
     final postId = await _extractPostIdAsync(n);
-    print('Notification tapped: postId=$postId');
+    print('Post-related notification tapped: postId=$postId');
     if (postId != null && postId.isNotEmpty) {
       Navigator.of(context).pushNamed(
         '/postDetail',
@@ -624,6 +692,100 @@ class _NotificationScreenState extends State<NotificationScreen> {
             ),
             SizedBox(width: 8),
           ],
+          // Debug notification buttons
+          PopupMenuButton<String>(
+            icon: Icon(Icons.bug_report, color: Colors.white),
+            onSelected: (value) async {
+              switch (value) {
+                case 'test_system':
+                  await showTestNotification();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test system notification sent'),
+                        backgroundColor: Colors.blue,
+                      ),
+                    );
+                  }
+                  break;
+                case 'test_realtime':
+                  await testRealtimeSubscription();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test realtime subscription - check console'),
+                        backgroundColor: Colors.purple,
+                      ),
+                    );
+                  }
+                  break;
+                case 'test_community':
+                  await testCommunityNotification();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test community notification sent'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                  break;
+                case 'test_message':
+                  await testMessageNotification();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Test message notification sent'),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                  }
+                  break;
+              }
+            },
+            itemBuilder: (BuildContext context) => [
+              PopupMenuItem<String>(
+                value: 'test_system',
+                child: Row(
+                  children: [
+                    Icon(Icons.notification_important, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test System'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'test_realtime',
+                child: Row(
+                  children: [
+                    Icon(Icons.sync, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test Realtime'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'test_community',
+                child: Row(
+                  children: [
+                    Icon(Icons.favorite, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test Like'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'test_message',
+                child: Row(
+                  children: [
+                    Icon(Icons.message, color: deepRed),
+                    SizedBox(width: 8),
+                    Text('Test Message'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: RefreshIndicator(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'main_navigation.dart';
+import '../services/notification_service.dart';
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -146,6 +147,9 @@ class _LoginScreenState extends State<LoginScreen>
           print('Error checking user status: $e');
           // If we can't check status, allow login but log the error
         }
+
+        // Reinitialize notification subscription for the logged-in user
+        await reinitializeNotificationSubscription();
 
         Navigator.pushReplacement(
           context,
