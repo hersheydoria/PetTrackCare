@@ -839,6 +839,10 @@ def public_pet_page(pet_id):
 def public_pet_page_alias(pet_id):
     return public_pet_page(pet_id)
 
+@app.route("/", methods=["GET", "HEAD"])
+def root():
+    return "PetTrackCare API is running.", 200
+
 # ------------------- Daily Scheduler -------------------
 
 def daily_analysis_job():
@@ -890,11 +894,22 @@ def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.j
     return "high" if pred == 1 else "low"
 
 def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    """Train/refresh a simple dense model and produce a next-N-day sleep forecast."""
     arr = np.array(sleep_series).astype(float)
     if len(arr) < 3:
-        last = float(arr[-1]) if len(arr) > 0 else 8.0
-        return [last for _ in range(days_ahead)]
+        # Use linear regression with variation and weekly pattern
+        lr = LinearRegression()
+        idx = np.arange(len(arr)).reshape(-1, 1)
+        lr.fit(idx, arr)
+        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+        base_predictions = lr.predict(next_idx).clip(0, 24)
+        np.random.seed(42)
+        variation = np.random.normal(0, 0.3, days_ahead)
+        weekly_pattern = []
+        for i in range(days_ahead):
+            day_of_week = (len(arr) + i) % 7
+            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
+        enhanced_predictions = base_predictions + variation + weekly_pattern
+        return enhanced_predictions.clip(0, 24).tolist()
 
     window = 7
     X, y = [], []
@@ -903,35 +918,20 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
         y.append(arr[i + window])
 
     if len(X) < 2:
-        # Enhanced fallback logic for better predictions
+        # Always use linear regression fallback with variation and weekly pattern
         lr = LinearRegression()
         idx = np.arange(len(arr)).reshape(-1, 1)
         lr.fit(idx, arr)
         next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
         base_predictions = lr.predict(next_idx).clip(0, 24)
-        
-        # Add realistic variation if data is too flat
-        std_dev = np.std(arr)
-        mean_val = np.mean(arr)
-        
-        if std_dev < 0.5:  # Very little variation in historical data
-            # Add small natural variation around the mean
-            np.random.seed(42)  # For reproducible results
-            variation = np.random.normal(0, 0.3, days_ahead)  # Small random variation
-            
-            # Create slight weekly pattern (slightly less sleep on weekends)
-            weekly_pattern = []
-            for i in range(days_ahead):
-                day_of_week = (len(arr) + i) % 7
-                if day_of_week in [5, 6]:  # Weekend (Sat, Sun)
-                    weekly_pattern.append(0.2)  # Slightly more sleep
-                else:
-                    weekly_pattern.append(-0.1)  # Slightly less sleep on weekdays
-            
-            enhanced_predictions = base_predictions + variation + weekly_pattern
-            return enhanced_predictions.clip(0, 24).tolist()
-        
-        return base_predictions.tolist()
+        np.random.seed(42)
+        variation = np.random.normal(0, 0.3, days_ahead)
+        weekly_pattern = []
+        for i in range(days_ahead):
+            day_of_week = (len(arr) + i) % 7
+            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
+        enhanced_predictions = base_predictions + variation + weekly_pattern
+        return enhanced_predictions.clip(0, 24).tolist()
 
     X, y = np.array(X), np.array(y)
 
@@ -941,7 +941,7 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
         model = tf.keras.Sequential([
             tf.keras.layers.Input(shape=(X.shape[1],)),
             tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dropout(0.2),  # Add dropout for better generalization
+            tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(16, activation='relu'),
             tf.keras.layers.Dense(1)
         ])
@@ -956,13 +956,18 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
         p = max(0.0, min(24.0, p))
         preds.append(p)
         last_window = np.concatenate([last_window[1:], [p]])
-    
-    # Add small realistic variation to neural network predictions if they're too flat
-    if len(set([round(p, 1) for p in preds])) == 1:  # All predictions are essentially the same
+
+    # Add small realistic variation and weekly pattern if output is flat
+    rounded_preds = [round(p, 1) for p in preds]
+    if len(set(rounded_preds)) == 1:
         np.random.seed(42)
-        variation = np.random.normal(0, 0.2, days_ahead)
-        preds = [max(0.0, min(24.0, p + v)) for p, v in zip(preds, variation)]
-    
+        variation = np.random.normal(0, 0.3, days_ahead)
+        weekly_pattern = []
+        for i in range(days_ahead):
+            day_of_week = (len(arr) + i) % 7
+            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
+        preds = [max(0.0, min(24.0, p + v + w)) for p, v, w in zip(preds, variation, weekly_pattern)]
+
     return preds
 
 # Force-train endpoint (useful in dev)
@@ -1047,3 +1052,12 @@ def debug_sleep_forecast():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def add_behavior_log_and_retrain(pet_id, log_data):
+    # Insert log
+    supabase.table("behavior_logs").insert(log_data).execute()
+    # Retrain models for this pet
+    df = fetch_logs_df(pet_id, limit=10000)
+    if not df.empty:
+        train_illness_model(df)
+        forecast_sleep_with_tf(df["sleep_hours"].tolist())
