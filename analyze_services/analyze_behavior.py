@@ -1056,8 +1056,20 @@ def debug_sleep_forecast():
 def add_behavior_log_and_retrain(pet_id, log_data):
     # Insert log
     supabase.table("behavior_logs").insert(log_data).execute()
+    # Determine log_date from log_data (default to today if missing)
+    log_date = log_data.get("log_date")
+    if log_date:
+        # Normalize to ISO date string
+        try:
+            log_date = pd.to_datetime(log_date).date().isoformat()
+        except Exception:
+            log_date = str(log_date)
+    else:
+        log_date = datetime.utcnow().date().isoformat()
     # Retrain models for this pet
     df = fetch_logs_df(pet_id, limit=10000)
     if not df.empty:
         train_illness_model(df)
         forecast_sleep_with_tf(df["sleep_hours"].tolist())
+        # Insert prediction for the log's date after retraining
+        analyze_pet_df(pet_id, df, prediction_date=log_date, store=True)
