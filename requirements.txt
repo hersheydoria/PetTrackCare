@@ -1,4 +1,13 @@
+pandas
+numpy
+scikit-learn
+tensorflow
+supabase
+gunicorn
 flask
+python-dotenv
+apscheduler
+joblib
 pandas
 numpy
 scikit-learn
