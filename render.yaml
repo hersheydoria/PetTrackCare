@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: pettrackcare
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python analyze_services/analyze_behavior.py
+    pythonVersion: 3.11.8
