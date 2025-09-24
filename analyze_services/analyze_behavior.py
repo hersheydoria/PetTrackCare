@@ -1053,23 +1053,22 @@ def debug_sleep_forecast():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def add_behavior_log_and_retrain(pet_id, log_data):
+def add_behavior_log_and_retrain(pet_id, log_data, future_days=7):
     # Insert log
     supabase.table("behavior_logs").insert(log_data).execute()
-    # Determine log_date from log_data (default to today if missing)
-    log_date = log_data.get("log_date")
-    if log_date:
-        # Normalize to ISO date string
-        try:
-            log_date = pd.to_datetime(log_date).date().isoformat()
-        except Exception:
-            log_date = str(log_date)
-    else:
-        log_date = datetime.utcnow().date().isoformat()
-    # Retrain models for this pet
+    # Fetch all logs for the pet
     df = fetch_logs_df(pet_id, limit=10000)
     if not df.empty:
         train_illness_model(df)
         forecast_sleep_with_tf(df["sleep_hours"].tolist())
-        # Insert prediction for the log's date after retraining
-        analyze_pet_df(pet_id, df, prediction_date=log_date, store=True)
+        # Predict and store health and sleep for every date in the logs (refresh all predictions)
+        all_dates = sorted(df['log_date'].unique())
+        for d in all_dates:
+            # analyze_pet_df computes both health and sleep forecast for each date
+            analyze_pet_df(pet_id, df[df['log_date'] <= d], prediction_date=pd.to_datetime(d).date().isoformat(), store=True)
+        # --- Predict for future dates using learned pattern ---
+        last_date = max(all_dates)
+        for i in range(1, future_days + 1):
+            future_date = last_date + timedelta(days=i)
+            # Use all data up to last_date for prediction of future_date
+            analyze_pet_df(pet_id, df, prediction_date=future_date.isoformat(), store=True)
