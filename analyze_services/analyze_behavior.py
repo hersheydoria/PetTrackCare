@@ -1298,41 +1298,9 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
     except Exception as e:
         print(f"Unexpected error during legacy sleep_forecast migration: {e}")
 
-if __name__ == "__main__":
-    # Run a one-time migration at startup (safe and idempotent)
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", type=str, default=None,
-                        help="Optional task to run directly: daily_analysis | migrate")
-    args = parser.parse_args()
-
-    # If invoked with --task, run that task directly (useful for subprocess workers)
-    if args.task:
-        task = args.task.lower()
-        if task == "daily_analysis":
-            daily_analysis_job()
-        elif task in ("migrate", "migrate_behavior_logs_to_predictions"):
-            migrate_behavior_logs_to_predictions()
-        elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
-            backfill_future_sleep_forecasts()
-        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
-            migrate_legacy_sleep_forecasts()
-        else:
-            print(f"Unknown task: {args.task}")
-        sys.exit(0)
-
-    # Otherwise run startup migration once and start the webserver with scheduler
-    try:
-        migrate_behavior_logs_to_predictions()
-    except Exception as e:
-        print(f"Startup migration error: {e}")
-
-    # Start the lightweight scheduler that enqueues heavy jobs as subprocesses
-    try:
-        start_scheduler()
-    except Exception as e:
-        print(f"Failed to start scheduler: {e}")
-
-    app.run(host="0.0.0.0", port=BACKEND_PORT)
+# The module's CLI dispatch / startup runner is placed at the end of the file
+# to ensure all functions are defined before any task is invoked. See the
+# `if __name__ == '__main__'` block appended to the end of this file.
 
 def store_prediction(pet_id, prediction, risk_level, recommendation):
     # kept for backward compatibility
@@ -1620,3 +1588,40 @@ def add_behavior_log_and_retrain(pet_id, log_data, future_days=7):
         for i in range(1, future_days + 1):
             future_date = last_date + timedelta(days=i)
             analyze_pet_df(pet_id, train_df_for_future, prediction_date=future_date.isoformat(), store=True)
+
+
+if __name__ == "__main__":
+    # Run a one-time migration at startup (safe and idempotent)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", type=str, default=None,
+                        help="Optional task to run directly: daily_analysis | migrate | backfill_sleep | migrate_legacy_sleep_forecasts")
+    args = parser.parse_args()
+
+    # If invoked with --task, run that task directly (useful for subprocess workers)
+    if args.task:
+        task = args.task.lower()
+        if task == "daily_analysis":
+            daily_analysis_job()
+        elif task in ("migrate", "migrate_behavior_logs_to_predictions"):
+            migrate_behavior_logs_to_predictions()
+        elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
+            backfill_future_sleep_forecasts()
+        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
+            migrate_legacy_sleep_forecasts()
+        else:
+            print(f"Unknown task: {args.task}")
+        sys.exit(0)
+
+    # Otherwise run startup migration once and start the webserver with scheduler
+    try:
+        migrate_behavior_logs_to_predictions()
+    except Exception as e:
+        print(f"Startup migration error: {e}")
+
+    # Start the lightweight scheduler that enqueues heavy jobs as subprocesses
+    try:
+        start_scheduler()
+    except Exception as e:
+        print(f"Failed to start scheduler: {e}")
+
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
