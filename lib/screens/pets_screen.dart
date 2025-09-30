@@ -37,8 +37,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String _getUserRole() {
     final metadata = user?.userMetadata ?? {};
     final role = metadata['role']?.toString() ?? 'Pet Owner';
-    print('DEBUG: User metadata: $metadata');
-    print('DEBUG: User role: $role');
+  // debug prints removed
     return role;
   }
 
@@ -226,16 +225,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       return;
     }
 
-    setState(() => _loadingPets = true);
-    print('DEBUG: Starting _fetchPets for userId: $userId');
-    print('DEBUG: User role: ${_getUserRole()}');
+  setState(() => _loadingPets = true);
     try {
       List<Map<String, dynamic>> list = [];
       
       if (_getUserRole() == 'Pet Sitter') {
-        // For Pet Sitters: fetch pets they are assigned to through sitting_jobs
-        print('DEBUG: Fetching pets for Pet Sitter with userId: $userId');
-        
         // First, get the sitting_jobs with status 'Active' for this sitter
         final sittingJobsResponse = await Supabase.instance.client
             .from('sitting_jobs')
@@ -243,20 +237,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             .eq('sitter_id', userId)
             .eq('status', 'Active');
             
-        print('DEBUG: Sitting jobs response: $sittingJobsResponse');
         final sittingJobsData = sittingJobsResponse as List?;
         
         if (sittingJobsData != null && sittingJobsData.isNotEmpty) {
-          print('DEBUG: Found ${sittingJobsData.length} active sitting jobs');
-          
-          // Extract pet IDs
           final petIds = sittingJobsData
               .map((job) => job['pet_id'])
               .where((id) => id != null)
               .toList();
-          
-          print('DEBUG: Pet IDs from sitting jobs: $petIds');
-          
+
           if (petIds.isNotEmpty) {
             // Now fetch the actual pets using these IDs
             final petsResponse = await Supabase.instance.client
@@ -265,20 +253,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                 .inFilter('id', petIds)
                 .order('id', ascending: false);
                 
-            print('DEBUG: Pets response: $petsResponse');
             final petsData = petsResponse as List?;
             if (petsData != null && petsData.isNotEmpty) {
               list = List<Map<String, dynamic>>.from(petsData);
-              print('DEBUG: Found ${list.length} pets for Pet Sitter');
-            } else {
-              print('DEBUG: No pets found for Pet Sitter');
-            }
-          } else {
-            print('DEBUG: No valid pet IDs found in sitting jobs');
-          }
-        } else {
-          print('DEBUG: No active sitting jobs found for Pet Sitter');
-        }
+            } 
+          } 
+        } 
       } else {
         // For Pet Owners: fetch pets they own
         final response = await Supabase.instance.client
@@ -411,7 +391,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         });
       }
     } catch (e) {
-      print('Error fetching latest mood: $e');
+      // Error fetching latest mood
       setState(() {
         _latestMood = null;
       });
@@ -745,7 +725,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         return name?.isNotEmpty == true ? name! : 'Owner';
       }
     } catch (e) {
-      print('Error fetching owner name: $e');
+      // Error fetching owner name
     }
     
     return 'Owner';
@@ -1026,7 +1006,7 @@ Future<void> _connectToDeviceByMac(String macAddress) async {
     // fetch latest location after associating the device
     await _fetchLatestLocationForPet();
 
-    debugPrint('Device MAC registered/updated! ID: $macAddress');
+  // debugPrint removed
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('GPS device connected successfully! MAC: $macAddress'),
@@ -1034,7 +1014,7 @@ Future<void> _connectToDeviceByMac(String macAddress) async {
       ),
     );
   } catch (e) {
-    debugPrint('Failed to register device MAC: $e');
+  // debugPrint removed
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Failed to connect device: $e'),
@@ -2775,13 +2755,10 @@ void _disconnectDevice() async {
 
                                   // Clear any active missing pet alerts for this pet
                                   try {
-                                    print('🧪 DEBUG: Attempting to call clearLastMissingPostData...');
                                     final alertService = MissingPetAlertService();
-                                    print('🧪 DEBUG: Alert service instance created: ${alertService.runtimeType}');
                                     alertService.clearLastMissingPostData();
-                                    print('🧪 DEBUG: clearLastMissingPostData called successfully');
                                   } catch (e) {
-                                    print('🧪 DEBUG: Error calling clearLastMissingPostData: $e');
+                                    // Error calling clearLastMissingPostData
                                   }
 
                                   if (mounted) {
@@ -3979,22 +3956,7 @@ void _disconnectDevice() async {
                           },
                         ),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: Icon(Icons.share, size: 18),
-                          label: Text('Share'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: deepRed,
-                            side: BorderSide(color: deepRed, width: 2),
-                            padding: EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () => _showShareDialog(),
-                        ),
-                      ),
+                      // Share action removed per request
                     ],
                   ),
                   
@@ -4035,22 +3997,7 @@ void _disconnectDevice() async {
                           },
                         ),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: Icon(Icons.download, size: 18),
-                          label: Text('Save'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.grey.shade700,
-                            side: BorderSide(color: Colors.grey.shade400, width: 1),
-                            padding: EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () => _showSaveQRDialog(),
-                        ),
-                      ),
+                      // Save action removed per request
                     ],
                   ),
                 ],
@@ -5312,9 +5259,9 @@ void _disconnectDevice() async {
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: peach.withOpacity(0.1),
+                color: deepRed.withOpacity(0.06),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: peach.withOpacity(0.3)),
+                border: Border.all(color: deepRed.withOpacity(0.18)),
               ),
               child: Row(
                 children: [
@@ -5468,25 +5415,25 @@ void _disconnectDevice() async {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  Colors.blue.shade50,
-                  Colors.indigo.shade50,
+                  deepRed.withOpacity(0.06),
+                  coral.withOpacity(0.04),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.blue.shade200),
+              border: Border.all(color: deepRed.withOpacity(0.18)),
             ),
             child: Row(
               children: [
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade600,
+                    color: deepRed,
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.blue.withOpacity(0.3),
+                        color: deepRed.withOpacity(0.3),
                         blurRadius: 8,
                         offset: Offset(0, 4),
                       ),
@@ -5504,7 +5451,7 @@ void _disconnectDevice() async {
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 20,
-                          color: Colors.blue.shade800,
+                          color: deepRed,
                         ),
                       ),
                       SizedBox(height: 4),
@@ -5514,7 +5461,7 @@ void _disconnectDevice() async {
                           : "Need more data for accurate predictions",
                         style: TextStyle(
                           fontSize: 14,
-                          color: Colors.blue.shade600,
+                          color: coral,
                         ),
                       ),
                     ],
@@ -5554,7 +5501,7 @@ void _disconnectDevice() async {
                       SizedBox(width: 8),
                     ],
                     IconButton(
-                      icon: Icon(Icons.info_outline, color: Colors.blue.shade600),
+                      icon: Icon(Icons.info_outline, color: coral),
                       onPressed: () => _showSleepDebugDialog(),
                       tooltip: 'How is this predicted?',
                       style: IconButton.styleFrom(
@@ -5876,23 +5823,23 @@ void _disconnectDevice() async {
     return Container(
       padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
+        color: coral.withOpacity(0.06),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.blue.shade200),
+        border: Border.all(color: coral.withOpacity(0.18)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.analytics, color: Colors.blue.shade700, size: 20),
+              Icon(Icons.analytics, color: deepRed, size: 20),
               SizedBox(width: 8),
               Text(
                 'Sleep Insights',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
-                  color: Colors.blue.shade800,
+                  color: deepRed,
                 ),
               ),
             ],
@@ -5935,20 +5882,20 @@ void _disconnectDevice() async {
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withOpacity(0.9),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blue.shade300),
+                border: Border.all(color: deepRed.withOpacity(0.18)),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.lightbulb, color: Colors.amber.shade700, size: 20),
+                  Icon(Icons.lightbulb, color: peach, size: 20),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _getSleepRecommendation(),
                       style: TextStyle(
                         fontSize: 13,
-                        color: Colors.blue.shade800,
+                        color: deepRed,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -5964,25 +5911,50 @@ void _disconnectDevice() async {
 
   // Helper widget for insight cards
   Widget _buildInsightCard(String title, String value, IconData icon, Color color) {
+    final bool isTrend = title.toLowerCase() == 'trend';
     return Container(
-      padding: EdgeInsets.all(12),
+      padding: isTrend ? EdgeInsets.symmetric(vertical: 8, horizontal: 8) : EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 18),
-          SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: color,
+          Icon(icon, color: color, size: isTrend ? 16 : 18),
+          SizedBox(height: isTrend ? 2 : 4),
+          // For the compact 'Trend' card constrain the height and use FittedBox
+          // so single-word values like "Stable"/"Increasing"/"Decreasing"
+          // always fit neatly inside the smaller box.
+          if (isTrend)
+            SizedBox(
+              height: 22,
+              child: Center(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
             ),
-          ),
           Text(
             title,
             style: TextStyle(
@@ -6121,7 +6093,7 @@ void _disconnectDevice() async {
           height: MediaQuery.of(context).size.height * 0.8,
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [Colors.blue.shade50, Colors.indigo.shade50],
+              colors: [deepRed.withOpacity(0.06), coral.withOpacity(0.04)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -6134,7 +6106,7 @@ void _disconnectDevice() async {
                 padding: EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Colors.blue.shade600, Colors.indigo.shade600],
+                    colors: [deepRed, coral],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
@@ -6209,54 +6181,6 @@ void _disconnectDevice() async {
                                 '${debugData['historical_data']['statistics']['variation_level']}',
                                 _getVariationStatusColor(debugData['historical_data']['statistics']['variation_level']),
                                 Icons.trending_up,
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 16),
-                      ],
-
-                      if (debugData['predictions'] != null) ...[
-                        _buildDebugSection(
-                          title: 'Prediction Method',
-                          icon: Icons.model_training,
-                          iconColor: Colors.blue,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                padding: EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.blue.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.auto_graph, color: Colors.blue.shade600, size: 16),
-                                        SizedBox(width: 8),
-                                        Text(
-                                          'Method: ${debugData['predictions']['prediction_method']}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.blue.shade800,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    SizedBox(height: 8),
-                                    Text(
-                                      debugData['predictions']['explanation'] ?? 'Predictions based on historical patterns',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.blue.shade700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
                               ),
                             ],
                           ),
@@ -6342,7 +6266,7 @@ void _disconnectDevice() async {
           width: MediaQuery.of(context).size.width * 0.9,
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [Colors.blue.shade50, Colors.indigo.shade50],
+              colors: [deepRed.withOpacity(0.06), coral.withOpacity(0.04)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -6356,7 +6280,7 @@ void _disconnectDevice() async {
                 padding: EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Colors.blue.shade600, Colors.indigo.shade600],
+                    colors: [deepRed, coral],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
