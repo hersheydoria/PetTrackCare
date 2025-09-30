@@ -455,10 +455,23 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
     try:
         sleep_series = df['sleep_hours'].tolist() if not df.empty else []
         sleep_forecast = predict_future_sleep(sleep_series, days_ahead=7)
+
+        # Ensure we always persist a 7-element numeric list. If the predictor
+        # returns a shorter list (or a non-list), pad with a reasonable default
+        # (last observed sleep or 8.0 hours).
+        default_val = float(sleep_series[-1]) if sleep_series else 8.0
+        if not isinstance(sleep_forecast, list):
+            sleep_forecast = [default_val for _ in range(7)]
+        if len(sleep_forecast) < 7:
+            pad = [default_val for _ in range(7 - len(sleep_forecast))]
+            sleep_forecast = list(sleep_forecast) + pad
+
         # store as JSON string to be safe for different DB column types
         payload["sleep_forecast"] = json.dumps([float(x) for x in sleep_forecast])
-    except Exception:
-        payload["sleep_forecast"] = json.dumps([])
+    except Exception as e:
+        # Log the error and persist a conservative default 7-day forecast
+        print(f"[WARN] predict_future_sleep failed for pet {pet_id}: {e}")
+        payload["sleep_forecast"] = json.dumps([8.0 for _ in range(7)])
 
     if store:
         try:
@@ -1177,93 +1190,111 @@ def backfill_future_sleep_forecasts(days_ahead: int = 7):
         print(f"Backfill error: {e}")
 
 
-def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 1000):
-    """Migrate legacy prediction rows that have missing or single-element
-    `sleep_forecast` values to a full `days_ahead`-length numeric forecast.
+def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, dry_run: bool = False):
+    """Paginated migration to update prediction rows with a full `days_ahead`-day
+    numeric `sleep_forecast` stored as a JSON string.
 
-    The migration is idempotent: rows already containing a list of length >=
-    `days_ahead` are skipped. For each candidate prediction we compute the
-    forecast using historical behavior_logs up to the prediction_date to avoid
-    data leakage, then update the prediction row's `sleep_forecast` field.
+    - Scans `predictions` in batches (by id) and updates rows where
+      `sleep_forecast` is missing, empty, or shorter than `days_ahead`.
+    - For each candidate row, computes forecasts using behavior_logs up to
+      the prediction_date to avoid leakage.
+    - dry_run=True will only print what would be updated.
     """
-    print(f"Starting migration of legacy sleep_forecast to {days_ahead}-day series...")
+    print(f"Starting migration of legacy sleep_forecast to {days_ahead}-day series (batch={batch_limit}, dry_run={dry_run})...")
     try:
-        resp = supabase.table("predictions").select("id, pet_id, prediction_date, sleep_forecast").limit(batch_limit).execute()
-        rows = resp.data or []
-        if not rows:
-            print("No prediction rows found to inspect.")
-            return
+        offset = 0
+        total_checked = 0
+        total_updated = 0
+        while True:
+            resp = supabase.table("predictions").select("id, pet_id, prediction_date, sleep_forecast").order("id", asc=True).range(offset, offset + batch_limit - 1).execute()
+            rows = resp.data or []
+            if not rows:
+                break
 
-        updated = 0
-        checked = 0
-        for row in rows:
-            checked += 1
-            try:
-                pred_id = row.get("id")
-                pet_id = row.get("pet_id")
-                pred_date_raw = row.get("prediction_date")
-                sf = row.get("sleep_forecast")
-
-                # Normalize prediction_date
-                if not pred_date_raw:
-                    # skip rows without a clear prediction date
-                    continue
+            for row in rows:
+                total_checked += 1
                 try:
-                    pred_date = pd.to_datetime(pred_date_raw).date()
-                except Exception:
-                    continue
+                    pred_id = row.get("id")
+                    pet_id = row.get("pet_id")
+                    pred_date_raw = row.get("prediction_date")
+                    sf = row.get("sleep_forecast")
 
-                # Parse existing sleep_forecast
-                parsed = None
-                if sf is None:
-                    parsed = []
-                else:
-                    # It's commonly stored as a JSON string
-                    if isinstance(sf, str):
-                        try:
-                            parsed = json.loads(sf)
-                        except Exception:
-                            # maybe a numeric string
+                    # Normalize prediction_date
+                    if not pred_date_raw:
+                        # skip rows without a clear prediction date
+                        continue
+                    try:
+                        pred_date = pd.to_datetime(pred_date_raw).date()
+                    except Exception:
+                        continue
+
+                    # Parse existing sleep_forecast
+                    parsed = None
+                    if sf is None:
+                        parsed = []
+                    else:
+                        # It's commonly stored as a JSON string
+                        if isinstance(sf, str):
+                            try:
+                                parsed = json.loads(sf)
+                            except Exception:
+                                # maybe a numeric string
+                                try:
+                                    parsed = [float(sf)]
+                                except Exception:
+                                    parsed = []
+                        elif isinstance(sf, (list, tuple)):
+                            parsed = list(sf)
+                        else:
+                            # numeric or unknown
                             try:
                                 parsed = [float(sf)]
                             except Exception:
                                 parsed = []
-                    elif isinstance(sf, (list, tuple)):
-                        parsed = list(sf)
+
+                    # If already full-length, skip
+                    if isinstance(parsed, list) and len(parsed) >= int(days_ahead):
+                        continue
+
+                    # Build historical logs up to prediction_date to avoid leakage
+                    logs_resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).lte("log_date", pred_date.isoformat()).order("log_date", desc=False).limit(10000).execute()
+                    logs = logs_resp.data or []
+                    df_logs = pd.DataFrame(logs) if logs else pd.DataFrame()
+                    if not df_logs.empty:
+                        df_logs['log_date'] = pd.to_datetime(df_logs['log_date']).dt.date
+                        df_logs['sleep_hours'] = pd.to_numeric(df_logs.get('sleep_hours', 0), errors='coerce').fillna(0.0)
+                        sleep_series = df_logs['sleep_hours'].tolist()
                     else:
-                        # numeric or unknown
-                        try:
-                            parsed = [float(sf)]
-                        except Exception:
-                            parsed = []
+                        sleep_series = []
 
-                # If already full-length, skip
-                if isinstance(parsed, list) and len(parsed) >= int(days_ahead):
-                    continue
+                    # Compute forecast and update prediction row
+                    try:
+                        forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
+                        # ensure list and pad if necessary
+                        if not isinstance(forecasts, list):
+                            forecasts = [float(sleep_series[-1]) if sleep_series else 8.0 for _ in range(days_ahead)]
+                        if len(forecasts) < days_ahead:
+                            last = float(sleep_series[-1]) if sleep_series else 8.0
+                            forecasts = list(forecasts) + [last for _ in range(days_ahead - len(forecasts))]
+                        forecasts_json = json.dumps([float(x) for x in forecasts])
+                    except Exception as e:
+                        print(f"[WARN] Failed to compute forecast for prediction id={pred_id} pet={pet_id} date={pred_date}: {e}")
+                        forecasts_json = json.dumps([8.0 for _ in range(days_ahead)])
 
-                # Build historical logs up to prediction_date to avoid leakage
-                logs_resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).lte("log_date", pred_date.isoformat()).order("log_date", desc=False).limit(10000).execute()
-                logs = logs_resp.data or []
-                df_logs = pd.DataFrame(logs) if logs else pd.DataFrame()
-                if not df_logs.empty:
-                    df_logs['log_date'] = pd.to_datetime(df_logs['log_date']).dt.date
-                    df_logs['sleep_hours'] = pd.to_numeric(df_logs.get('sleep_hours', 0), errors='coerce').fillna(0.0)
-                    sleep_series = df_logs['sleep_hours'].tolist()
-                else:
-                    sleep_series = []
+                    if dry_run:
+                        print(f"[DRY] Would update prediction id={pred_id} pet={pet_id} with sleep_forecast={forecasts_json}")
+                    else:
+                        update_resp = supabase.table("predictions").update({"sleep_forecast": forecasts_json}).eq("id", pred_id).execute()
+                        if getattr(update_resp, "error", None):
+                            print(f"Failed to update prediction id={pred_id} pet={pet_id}: {getattr(update_resp, 'error', '')}")
+                        else:
+                            total_updated += 1
+                except Exception as e:
+                    print(f"Error processing prediction row {row.get('id')}: {e}")
 
-                # Compute forecast and update prediction row
-                forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
-                forecasts_json = json.dumps([float(x) for x in forecasts])
-                update_resp = supabase.table("predictions").update({"sleep_forecast": forecasts_json}).eq("id", pred_id).execute()
-                if getattr(update_resp, "error", None):
-                    print(f"Failed to update prediction id={pred_id} pet={pet_id}: {getattr(update_resp, 'error', '')}")
-                else:
-                    updated += 1
-            except Exception as e:
-                print(f"Error processing prediction row {row.get('id')}: {e}")
+            offset += batch_limit
 
-        print(f"Migration complete. Checked {checked} rows, updated {updated} rows.")
+        print(f"Migration complete. Checked {total_checked} rows, updated {total_updated} rows.")
     except Exception as e:
         print(f"Unexpected error during legacy sleep_forecast migration: {e}")
 
