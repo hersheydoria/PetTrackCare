@@ -3696,13 +3696,385 @@ class _AddPetFormState extends State<_AddPetForm> {
     }
   }
 
+  // Enhanced pet image picker with camera/gallery options
   Future<void> _pickPetImage() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        _petImage = File(pickedFile.path);
-      });
+    await _showImageSourceDialog();
+  }
+
+  // Show dialog to choose camera or gallery
+  Future<void> _showImageSourceDialog() async {
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.add_a_photo,
+                        color: coral,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Add Pet Photo',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          Text(
+                            'Choose how to add your pet\'s photo',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Options
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
+                    // Camera option
+                    _buildImageSourceOption(
+                      icon: Icons.camera_alt,
+                      title: 'Take Photo',
+                      subtitle: 'Capture a new photo with camera',
+                      color: Colors.blue,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _selectImageSource(ImageSource.camera);
+                      },
+                    ),
+                    SizedBox(height: 12),
+                    // Gallery option
+                    _buildImageSourceOption(
+                      icon: Icons.photo_library,
+                      title: 'Choose from Gallery',
+                      subtitle: 'Select from your photo library',
+                      color: Colors.purple,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _selectImageSource(ImageSource.gallery);
+                      },
+                    ),
+                    // Remove photo option (if photo exists)
+                    if (_petImage != null || (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)) ...[
+                      SizedBox(height: 12),
+                      _buildImageSourceOption(
+                        icon: Icons.delete_outline,
+                        title: 'Remove Photo',
+                        subtitle: 'Remove current pet photo',
+                        color: Colors.red,
+                        onTap: () {
+                          Navigator.pop(context);
+                          _removeImage();
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Build image source option widget
+  Widget _buildImageSourceOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                icon,
+                color: color,
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: deepRed,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 16,
+              color: Colors.grey.shade400,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Select image from camera or gallery
+  Future<void> _selectImageSource(ImageSource source) async {
+    try {
+      final pickedFile = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      
+      if (pickedFile != null) {
+        await _showImageConfirmationDialog(File(pickedFile.path));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to pick image: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
+  }
+
+  // Show confirmation dialog with preview
+  Future<void> _showImageConfirmationDialog(File imageFile) async {
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding: EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [deepRed, coral],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.pets, color: Colors.white, size: 24),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Pet Photo Preview',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Image preview
+                Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 200,
+                        height: 200,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: coral.withOpacity(0.3), width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 10,
+                              offset: Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: Image.file(
+                            imageFile,
+                            fit: BoxFit.cover,
+                            width: 200,
+                            height: 200,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      Text(
+                        'Use this photo for your pet?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: deepRed,
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: coral),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: Text(
+                                'Cancel',
+                                style: TextStyle(color: coral, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                setState(() {
+                                  _petImage = imageFile;
+                                });
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Pet photo updated!'),
+                                    backgroundColor: Colors.green,
+                                    behavior: SnackBarBehavior.floating,
+                                  ),
+                                );
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: deepRed,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: Text(
+                                'Use Photo',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Remove current image
+  void _removeImage() {
+    setState(() {
+      _petImage = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Pet photo removed'),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<String?> _uploadPetImage(String userId) async {
@@ -3735,17 +4107,17 @@ class _AddPetFormState extends State<_AddPetForm> {
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return;
 
-  // enforce 3-pet limit server-side check
+  // enforce 5-pet limit server-side check
   final existing = await Supabase.instance.client
       .from('pets')
       .select('id')
       .eq('owner_id', userId);
   final currentCount = (existing as List?)?.length ?? 0;
-  // if creating and already 3, block (if editing allow)
+  // if creating and already 5, block (if editing allow)
   final isEditing = widget.initialPet != null;
-  if (!isEditing && currentCount >= 3) {
+  if (!isEditing && currentCount >= 5) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Pet limit reached (3). Cannot add more.')),
+      SnackBar(content: Text('Pet limit reached (5). Cannot add more.')),
     );
     return;
   }
@@ -3931,68 +4303,149 @@ class _AddPetFormState extends State<_AddPetForm> {
                           ],
                         ),
                         SizedBox(height: 16),
+                        // Enhanced Pet Photo Section
                         Center(
-                          child: Stack(
-                            alignment: Alignment.bottomRight,
+                          child: Column(
                             children: [
-                              Container(
-                                width: 100,
-                                height: 100,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: coral.withOpacity(0.3), width: 3),
-                                  gradient: _petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null)
-                                      ? LinearGradient(
-                                          colors: [lightBlush.withOpacity(0.3), peach.withOpacity(0.1)],
-                                        )
-                                      : null,
-                                ),
-                                child: ClipOval(
-                                  child: _petImage != null 
-                                      ? Image.file(_petImage!, fit: BoxFit.cover, width: 100, height: 100)
-                                      : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
-                                          ? Image.network(widget.initialPet!['profile_picture'], fit: BoxFit.cover, width: 100, height: 100)
-                                          : Icon(Icons.pets, size: 40, color: coral),
+                              Text(
+                                'Pet Photo',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: deepRed,
                                 ),
                               ),
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: GestureDetector(
-                                  onTap: _pickPetImage,
-                                  child: Container(
-                                    padding: EdgeInsets.all(8),
+                              SizedBox(height: 12),
+                              Stack(
+                                alignment: Alignment.bottomRight,
+                                children: [
+                                  // Main photo container
+                                  Container(
+                                    width: 120,
+                                    height: 120,
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      gradient: LinearGradient(colors: [deepRed, coral]),
+                                      border: Border.all(
+                                        color: _petImage != null || (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
+                                            ? coral
+                                            : coral.withOpacity(0.3),
+                                        width: 3,
+                                      ),
+                                      gradient: _petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null)
+                                          ? LinearGradient(
+                                              colors: [lightBlush.withOpacity(0.3), peach.withOpacity(0.1)],
+                                              begin: Alignment.topLeft,
+                                              end: Alignment.bottomRight,
+                                            )
+                                          : null,
                                       boxShadow: [
                                         BoxShadow(
-                                          color: deepRed.withOpacity(0.3),
-                                          blurRadius: 8,
-                                          offset: Offset(0, 2),
+                                          color: deepRed.withOpacity(0.1),
+                                          blurRadius: 10,
+                                          offset: Offset(0, 5),
                                         ),
                                       ],
                                     ),
-                                    child: Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                                    child: ClipOval(
+                                      child: _petImage != null 
+                                          ? Image.file(
+                                              _petImage!, 
+                                              fit: BoxFit.cover, 
+                                              width: 120, 
+                                              height: 120,
+                                            )
+                                          : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
+                                              ? Image.network(
+                                                  widget.initialPet!['profile_picture'], 
+                                                  fit: BoxFit.cover, 
+                                                  width: 120, 
+                                                  height: 120,
+                                                  loadingBuilder: (context, child, loadingProgress) {
+                                                    if (loadingProgress == null) return child;
+                                                    return Container(
+                                                      width: 120,
+                                                      height: 120,
+                                                      child: Center(
+                                                        child: CircularProgressIndicator(
+                                                          valueColor: AlwaysStoppedAnimation<Color>(coral),
+                                                          strokeWidth: 2,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  errorBuilder: (context, error, stackTrace) {
+                                                    return Container(
+                                                      width: 120,
+                                                      height: 120,
+                                                      child: Icon(Icons.pets, size: 50, color: coral),
+                                                    );
+                                                  },
+                                                )
+                                              : Container(
+                                                  width: 120,
+                                                  height: 120,
+                                                  child: Column(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: [
+                                                      Icon(Icons.pets, size: 40, color: coral),
+                                                      SizedBox(height: 8),
+                                                      Text(
+                                                        'Add Photo',
+                                                        style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: coral,
+                                                          fontWeight: FontWeight.w500,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                    ),
                                   ),
+                                  // Enhanced add/edit button
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: GestureDetector(
+                                      onTap: _pickPetImage,
+                                      child: Container(
+                                        padding: EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: LinearGradient(
+                                            colors: [deepRed, coral],
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: deepRed.withOpacity(0.4),
+                                              blurRadius: 8,
+                                              offset: Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Tap the camera icon to add a photo',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        SizedBox(height: 12),
-                        Text(
-                          'Tap the camera icon to add a photo',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
                       ],
                     ),
                   ),
-
-          _buildTextField(
+                  _buildTextField(
             label: "Name", 
             initialValue: name,
             onSaved: (val) => name = val ?? '',
@@ -4077,13 +4530,13 @@ class _AddPetFormState extends State<_AddPetForm> {
             ),
           ),
           SizedBox(height: 16),
-        ],
-      ),
-    )
-          ),
-        ]
-      ),
-    );
+        ], // children of inner Column
+      ), // inner Column child of SingleChildScrollView
+    ), // SingleChildScrollView child of Flexible
+  ), // Flexible
+], // children of outer Column
+), // outer Column child of Form
+); // Form
   }
 
   Widget _buildTextField({
