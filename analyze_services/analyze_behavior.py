@@ -6,12 +6,16 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import cross_val_score, StratifiedKFold
 import tensorflow as tf
 from supabase import create_client
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import json
 import joblib
+import subprocess
+import sys
+import argparse
 
 # Load environment variables
 load_dotenv()
@@ -41,7 +45,7 @@ def fetch_logs_df(pet_id, limit=200):
     df['activity_level'] = df['activity_level'].fillna('Unknown').astype(str)
     return df
 
-def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.pkl"), min_auc_threshold: float = 0.6):
     if df.shape[0] < 5:
         return None, None
     le_mood = LabelEncoder()
@@ -56,16 +60,72 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
     # Guard: need both classes to train a classifier
     if len(np.unique(y)) < 2:
         return None, None
-
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
+    # Use class balancing to mitigate imbalance
+    clf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
     clf.fit(X, y)
-    joblib.dump({'model': clf, 'le_mood': le_mood, 'le_activity': le_activity}, model_path)
+
+    # Try to evaluate model (cross-validated AUC) when we have enough samples
+    auc_score = None
+    try:
+        if len(y) >= 10:
+            cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+            scores = cross_val_score(clf, X, y, cv=cv, scoring='roc_auc')
+            auc_score = float(np.mean(scores))
+    except Exception:
+        auc_score = None
+
+    # If we have a CV AUC and it's below the minimum threshold, do NOT save the model.
+    if auc_score is not None and auc_score < float(min_auc_threshold):
+        print(f"[WARN] Trained model AUC={auc_score:.3f} below threshold {min_auc_threshold}; not saving model.")
+        # Return None to indicate model was not persisted/accepted
+        return None, None
+
+    # Build mapping dictionaries to handle unseen labels at prediction time
+    mood_map = {v: i for i, v in enumerate(getattr(le_mood, 'classes_', []))}
+    act_map = {v: i for i, v in enumerate(getattr(le_activity, 'classes_', []))}
+
+    # Determine most common classes seen during training for safe fallback
+    mood_most_common = None
+    act_most_common = None
+    try:
+        mood_most_common = df['mood'].mode().iloc[0] if not df['mood'].mode().empty else None
+    except Exception:
+        mood_most_common = None
+    try:
+        act_most_common = df['activity_level'].mode().iloc[0] if not df['activity_level'].mode().empty else None
+    except Exception:
+        act_most_common = None
+
+    metadata = {
+        'trained_at': datetime.utcnow().isoformat(),
+        'n_samples': int(len(y)),
+        'pos_rate': float(np.mean(y)),
+        'auc': auc_score,
+        'mood_most_common': (mood_most_common or '').lower() if mood_most_common else None,
+        'act_most_common': (act_most_common or '').lower() if act_most_common else None,
+    }
+
+    joblib.dump({
+        'model': clf,
+        'le_mood': le_mood,
+        'le_activity': le_activity,
+        'mood_map': mood_map,
+        'act_map': act_map,
+        'metadata': metadata,
+    }, model_path)
+
     return clf, (le_mood, le_activity)
 
 def load_illness_model(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     if os.path.exists(model_path):
         data = joblib.load(model_path)
-        return data['model'], (data['le_mood'], data['le_activity'])
+        model = data.get('model')
+        le_mood = data.get('le_mood')
+        le_activity = data.get('le_activity')
+        mood_map = data.get('mood_map')
+        act_map = data.get('act_map')
+        metadata = data.get('metadata')
+        return model, (le_mood, le_activity), mood_map, act_map, metadata
     return None, None
 
 def is_illness_model_trained(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
@@ -390,6 +450,28 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
         "suggestions": recommendation,
         "activity_prob": activity_prob.get("high", 0)
     }
+
+    # Include numeric sleep forecast (7-day) in stored payload so consumers can show it
+    try:
+        sleep_series = df['sleep_hours'].tolist() if not df.empty else []
+        sleep_forecast = predict_future_sleep(sleep_series, days_ahead=7)
+
+        # Ensure we always persist a 7-element numeric list. If the predictor
+        # returns a shorter list (or a non-list), pad with a reasonable default
+        # (last observed sleep or 8.0 hours).
+        default_val = float(sleep_series[-1]) if sleep_series else 8.0
+        if not isinstance(sleep_forecast, list):
+            sleep_forecast = [default_val for _ in range(7)]
+        if len(sleep_forecast) < 7:
+            pad = [default_val for _ in range(7 - len(sleep_forecast))]
+            sleep_forecast = list(sleep_forecast) + pad
+
+        # store as JSON string to be safe for different DB column types
+        payload["sleep_forecast"] = json.dumps([float(x) for x in sleep_forecast])
+    except Exception as e:
+        # Log the error and persist a conservative default 7-day forecast
+        print(f"[WARN] predict_future_sleep failed for pet {pet_id}: {e}")
+        payload["sleep_forecast"] = json.dumps([8.0 for _ in range(7)])
 
     if store:
         try:
@@ -744,93 +826,153 @@ def public_pet_page(pet_id):
         actions_html = "".join(f"<li>{a}</li>" for a in (care_tips.get("actions") or [])[:6]) or "<li>Ensure fresh water and rest today.</li>"
         expectations_html = "".join(f"<li>{e}</li>" for e in (care_tips.get("expectations") or [])[:6]) or "<li>Expect normal behavior with routine care.</li>"
 
-        # Simple HTML with modal dialog - auto-open on load
-        html = f"""
-        <!doctype html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Pet Info - {pet_name}</title>
-          <style>
-            body {{ font-family: Arial, sans-serif; background:#f6f6f6; padding:16px; }}
-            .card {{ max-width: 520px; margin:24px auto; background:#fff; border-radius:8px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }}
-            .label {{ color:#666; font-size:13px; }}
-            .value {{ color:#222; font-weight:600; font-size:18px; }}
-            .badge {{ display:inline-block;padding:6px 10px;border-radius:12px;font-weight:600;color:#fff;font-size:13px; }}
-            /* modal */
-            .modal-backdrop{{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}}
-            .modal{{background:#fff;border-radius:10px;padding:18px;max-width:420px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,0.2);}}
-            .close-btn{{background:#B82132;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;}}
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <h2>Pet Quick Info</h2>
-            <p class="label">Name</p><p class="value">{pet_name}</p>
-            <p class="label">Breed</p><p class="value">{pet_breed}</p>
-            <p class="label">Age</p><p class="value">{pet_age}</p>
-            <p class="label">Weight</p><p class="value">{pet_weight}</p>
-            <p class="label">Gender</p><p class="value">{pet_gender}</p>
-            <p class="label">Health</p><p class="value">{pet_health}</p>
-            <p class="label">Owner</p><p class="value">{owner_name}</p>
-            <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;">
-              <div>
-                <span class="label">Health Status</span><br/>
-                <span class="badge" style="background:{risk_color};">{status_text}</span>
-                <p style="margin-top:6px;color:#666;font-size:12px;">Model: {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
-                <p style="margin-top:8px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
-              </div>
-              <div style="text-align:right;">
-                <button onclick="openModal()" style="background:#eee;border-radius:6px;padding:8px 12px;border:none;cursor:pointer;">More</button>
-              </div>
-            </div>
-          </div>
+        # --- Fetch future predictions (next 7 days) for API consumers ---
+        future_predictions = []
+        today = datetime.utcnow().date()
+        for i in range(1, 8):
+            future_date = today + timedelta(days=i)
+            presp = supabase.table("predictions").select(
+                "prediction_date, prediction_text, risk_level, suggestions"
+            ).eq("pet_id", pet_id).eq("prediction_date", future_date.isoformat()).limit(1).execute()
+            prows = presp.data or []
+            if prows:
+                p0 = prows[0]
+                future_predictions.append({
+                    "date": p0.get("prediction_date"),
+                    "text": p0.get("prediction_text") or "",
+                    "risk": p0.get("risk_level") or "",
+                    "suggestions": p0.get("suggestions") or ""
+                })
 
-          <div id="modal" style="display:none;" class="modal-backdrop" onclick="closeModal()">
-            <div class="modal" onclick="event.stopPropagation()">
-              <h3>Detailed Pet Info</h3>
-              <p><strong>Name:</strong> {pet_name}</p>
-              <p><strong>Breed:</strong> {pet_breed}</p>
-              <p><strong>Age:</strong> {pet_age}</p>
-              <p><strong>Weight:</strong> {pet_weight}</p>
-              <p><strong>Gender:</strong> {pet_gender}</p>
-              <p><strong>Health:</strong> {pet_health}</p>
-              <p><strong>Owner:</strong> {owner_name}</p>
-              <hr/>
-              <h4>Latest Analysis</h4>
-              <p><strong>Status:</strong> {status_text}</p>
-              <p><strong>Risk:</strong> {(latest_risk or 'None')}</p>
-              <p><strong>Model:</strong> {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
-              <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
-              <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
-              <!-- Care Tips -->
-              <h4>Care Tips</h4>
-              <p><strong>What to do</strong></p>
-              <ul>{actions_html}</ul>
-              <p><strong>What to expect</strong></p>
-              <ul>{expectations_html}</ul>
-              <div style="margin-top:12px;text-align:right;">
-                <button class="close-btn" onclick="closeModal()">Close</button>
-              </div>
-            </div>
-          </div>
+        # If request is from browser, render HTML as before
+        # Build small HTML block for future predictions to embed in modal
+        if future_predictions:
+            future_items = []
+            for fp in future_predictions:
+                fd = fp.get('date') or ''
+                fr = fp.get('risk') or ''
+                ft = fp.get('text') or ''
+                future_items.append(f"<li><strong>{fd}</strong> — {fr}: {ft}</li>")
+            future_html = f"<h4>Upcoming Predictions</h4><ul>{''.join(future_items)}</ul>"
+        else:
+            future_html = ""
 
-          <script>
-            function openModal() {{
-              document.getElementById('modal').style.display = 'flex';
-            }}
-            function closeModal() {{
-              document.getElementById('modal').style.display = 'none';
-            }}
-            // auto-open modal on page load so scanned users see pop-up immediately
-            window.addEventListener('load', function() {{
-              setTimeout(openModal, 400);
-            }});
-          </script>
-        </body>
-        </html>
-        """
-        return make_response(html, 200, {"Content-Type": "text/html"})
+        if "text/html" in request.headers.get("Accept", ""):
+            # Simple HTML with modal dialog - auto-open on load
+            html = f"""
+            <!doctype html>
+            <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Pet Info - {pet_name}</title>
+              <style>
+                body {{ font-family: Arial, sans-serif; background:#f6f6f6; padding:16px; }}
+                .card {{ max-width: 520px; margin:24px auto; background:#fff; border-radius:8px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }}
+                .label {{ color:#666; font-size:13px; }}
+                .value {{ color:#222; font-weight:600; font-size:18px; }}
+                .badge {{ display:inline-block;padding:6px 10px;border-radius:12px;font-weight:600;color:#fff;font-size:13px; }}
+                /* modal */
+                .modal-backdrop{{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}}
+                .modal{{background:#fff;border-radius:10px;padding:18px;max-width:420px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,0.2);}}
+                .close-btn{{background:#B82132;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;}}
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <h2>Pet Quick Info</h2>
+                <p class="label">Name</p><p class="value">{pet_name}</p>
+                <p class="label">Breed</p><p class="value">{pet_breed}</p>
+                <p class="label">Age</p><p class="value">{pet_age}</p>
+                <p class="label">Weight</p><p class="value">{pet_weight}</p>
+                <p class="label">Gender</p><p class="value">{pet_gender}</p>
+                <p class="label">Health</p><p class="value">{pet_health}</p>
+                <p class="label">Owner</p><p class="value">{owner_name}</p>
+                <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;">
+                  <div>
+                    <span class="label">Health Status</span><br/>
+                    <span class="badge" style="background:{risk_color};">{status_text}</span>
+                    <p style="margin-top:6px;color:#666;font-size:12px;">Model: {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
+                    <p style="margin-top:8px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
+                  </div>
+                  <div style="text-align:right;">
+                    <button onclick="openModal()" style="background:#eee;border-radius:6px;padding:8px 12px;border:none;cursor:pointer;">More</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="modal" style="display:none;" class="modal-backdrop" onclick="closeModal()">
+                <div class="modal" onclick="event.stopPropagation()">
+                  <h3>Detailed Pet Info</h3>
+                  <p><strong>Name:</strong> {pet_name}</p>
+                  <p><strong>Breed:</strong> {pet_breed}</p>
+                  <p><strong>Age:</strong> {pet_age}</p>
+                  <p><strong>Weight:</strong> {pet_weight}</p>
+                  <p><strong>Gender:</strong> {pet_gender}</p>
+                  <p><strong>Health:</strong> {pet_health}</p>
+                  <p><strong>Owner:</strong> {owner_name}</p>
+                  <hr/>
+                  <h4>Latest Analysis</h4>
+                  <p><strong>Status:</strong> {status_text}</p>
+                  <p><strong>Risk:</strong> {(latest_risk or 'None')}</p>
+                  <p><strong>Model:</strong> {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
+                  <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
+                  <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
+                  <!-- Care Tips -->
+                  <h4>Care Tips</h4>
+                  <p><strong>What to do</strong></p>
+                  <ul>{actions_html}</ul>
+                  <p><strong>What to expect</strong></p>
+                  <ul>{expectations_html}</ul>
+                  {future_html}
+                  <div style="margin-top:12px;text-align:right;">
+                    <button class="close-btn" onclick="closeModal()">Close</button>
+                  </div>
+                </div>
+              </div>
+
+              <script>
+                function openModal() {{
+                  document.getElementById('modal').style.display = 'flex';
+                }}
+                function closeModal() {{
+                  document.getElementById('modal').style.display = 'none';
+                }}
+                // auto-open modal on page load so scanned users see pop-up immediately
+                window.addEventListener('load', function() {{
+                  setTimeout(openModal, 400);
+                }});
+              </script>
+            </body>
+            </html>
+            """
+            return make_response(html, 200, {"Content-Type": "text/html"})
+
+        # Otherwise, return JSON including future predictions
+        return jsonify({
+            "pet": {
+                "id": pet.get("id"),
+                "name": pet_name,
+                "breed": pet_breed,
+                "age": pet_age,
+                "weight": pet_weight,
+                "gender": pet_gender,
+                "health": pet_health,
+                "owner_name": owner_name,
+                "owner_email": owner_email,
+                "owner_role": owner_role,
+            },
+            "latest_prediction": {
+                "text": latest_prediction_text,
+                "risk": latest_risk,
+                "suggestions": latest_suggestions,
+                "status": status_text,
+                "model_trained": illness_model_trained,
+            },
+            "future_predictions": future_predictions,
+            "care_tips": care_tips,
+            "health_status": status_text,
+            "risk_color": risk_color,
+        })
     except Exception as e:
         return make_response(f"<h3>Error: {str(e)}</h3>", 500)
 
@@ -838,6 +980,118 @@ def public_pet_page(pet_id):
 @app.route("/analyze/pet/<pet_id>", methods=["GET"])
 def public_pet_page_alias(pet_id):
     return public_pet_page(pet_id)
+
+
+@app.route("/pet/<pet_id>/7day-health", methods=["GET"])
+def seven_day_health_endpoint(pet_id):
+    """Return a compact 7-day health forecast for a pet.
+
+    Response: { pet_id, seven_day_forecast: [ { date, risk_level, prediction_text, suggestions, sleep_forecast } ] }
+    Prefers stored prediction rows; if missing for a date, computes a safe on-the-fly prediction
+    using logs up to the latest available log_date (avoids data leakage).
+    """
+    try:
+        today = datetime.utcnow().date()
+        # fetch recent logs once
+        df = fetch_logs_df(pet_id, limit=10000)
+        if not df.empty:
+            # normalize
+            df['log_date'] = pd.to_datetime(df['log_date'])
+            last_date = max(df['log_date']).date()
+        else:
+            last_date = None
+
+        forecast_list = []
+        for i in range(1, 8):
+            target_date = today + timedelta(days=i)
+            # Try DB first
+            try:
+                presp = supabase.table("predictions").select(
+                    "prediction_date, prediction_text, risk_level, suggestions, sleep_forecast"
+                ).eq("pet_id", pet_id).eq("prediction_date", target_date.isoformat()).limit(1).execute()
+                prows = presp.data or []
+            except Exception:
+                prows = []
+
+            if prows:
+                row = prows[0]
+                pred_text = row.get("prediction_text") or ""
+                risk = row.get("risk_level") or None
+                suggestions = row.get("suggestions") or ""
+                sf = row.get("sleep_forecast")
+                # normalize sleep_forecast to list of floats
+                sleep_list = []
+                if sf is not None:
+                    if isinstance(sf, str):
+                        try:
+                            sleep_list = json.loads(sf)
+                        except Exception:
+                            try:
+                                sleep_list = [float(sf)]
+                            except Exception:
+                                sleep_list = []
+                    elif isinstance(sf, (list, tuple)):
+                        sleep_list = list(sf)
+                    else:
+                        try:
+                            sleep_list = [float(sf)]
+                        except Exception:
+                            sleep_list = []
+                forecast_list.append({
+                    "date": target_date.isoformat(),
+                    "risk_level": (str(risk).lower() if risk else None),
+                    "prediction_text": pred_text,
+                    "suggestions": suggestions,
+                    "sleep_forecast": [float(x) for x in sleep_list] if sleep_list else []
+                })
+                continue
+
+            # If no DB row, compute safely using logs up to last_date
+            if last_date is None:
+                # no logs -> defaults
+                trend = "No data available."
+                suggestions = ""
+                risk_level = "low"
+                sleep_forecast = predict_future_sleep([], days_ahead=7)
+            else:
+                train_df = df[df['log_date'] <= pd.to_datetime(last_date)].copy()
+                # analyze_pet_df returns summary but by default stores — use store=False
+                try:
+                    res = analyze_pet_df(pet_id, train_df, prediction_date=target_date.isoformat(), store=False)
+                    trend = res.get("trend") or ""
+                    suggestions = res.get("recommendation") or ""
+                except Exception:
+                    trend = ""
+                    suggestions = ""
+
+                # contextual risk + ML risk blended
+                try:
+                    contextual = compute_contextual_risk(train_df)
+                except Exception:
+                    contextual = "low"
+                try:
+                    # ML risk from latest log in train_df
+                    if not train_df.empty:
+                        latest = train_df.sort_values("log_date", ascending=False).iloc[0]
+                        ml_risk = predict_illness_risk(latest.get("mood", ""), latest.get("sleep_hours", 0), latest.get("activity_level", ""))
+                    else:
+                        ml_risk = None
+                except Exception:
+                    ml_risk = None
+                risk_level = blend_illness_risk(ml_risk, contextual)
+                sleep_forecast = predict_future_sleep(train_df['sleep_hours'].tolist() if not train_df.empty else [], days_ahead=7)
+
+            forecast_list.append({
+                "date": target_date.isoformat(),
+                "risk_level": (str(risk_level).lower() if risk_level else None),
+                "prediction_text": trend,
+                "suggestions": suggestions,
+                "sleep_forecast": [float(x) for x in (sleep_forecast or [])]
+            })
+
+        return jsonify({"pet_id": pet_id, "seven_day_forecast": forecast_list})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/", methods=["GET", "HEAD"])
 def root():
@@ -856,17 +1110,228 @@ def daily_analysis_job():
         result = analyze_pet(pet["id"])
         print(f"📊 Pet {pet['id']} analysis stored:", result)
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(daily_analysis_job, 'interval', days=1)  # runs every 24h
-scheduler.add_job(migrate_behavior_logs_to_predictions, 'interval', days=1)  # ensure daily migration/analysis
-scheduler.start()
+
+def enqueue_task(task_name: str):
+    """Spawn a separate Python process to run a named task.
+
+    Keeps heavy CPU / I/O work out of the Flask worker process.
+    The subprocess will invoke this same module with --task=<name>.
+    """
+    try:
+        script = os.path.abspath(__file__)
+        cmd = [sys.executable, script, f"--task={task_name}"]
+        # Start detached subprocess; silence output by default
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"[INFO] Enqueued task '{task_name}' as subprocess: {cmd}")
+    except Exception as e:
+        print(f"[ERROR] Failed to enqueue task {task_name}: {e}")
+
+
+def start_scheduler():
+    """Schedule light-weight triggers that enqueue heavy work as subprocesses."""
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(lambda: enqueue_task("daily_analysis"), 'interval', days=1)
+    scheduler.add_job(lambda: enqueue_task("migrate"), 'interval', days=1)
+    scheduler.start()
+
+
+def backfill_future_sleep_forecasts(days_ahead: int = 7):
+    """Backfill per-pet future sleep forecasts into the predictions table.
+
+    For each pet, use logs up to the latest available date and compute a
+    numeric forecast for the next `days_ahead` days. Insert a prediction row
+    for each future date when no prediction exists.
+    """
+    print(f"Starting backfill of future sleep forecasts (next {days_ahead} days)...")
+    try:
+        pets_resp = supabase.table("pets").select("id").execute()
+        for pet in pets_resp.data or []:
+            pet_id = pet.get("id")
+            if not pet_id:
+                continue
+            df = fetch_logs_df(pet_id, limit=10000)
+            if df.empty:
+                continue
+            # ensure proper datetime
+            df['log_date'] = pd.to_datetime(df['log_date'])
+            last_date = max(df['log_date']).date()
+            train_df = df[df['log_date'] <= pd.to_datetime(last_date)]
+            sleep_series = train_df['sleep_hours'].tolist() if not train_df.empty else []
+            forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
+
+            # Serialize full 7-day forecast once and attach to each future-date row.
+            # Consumers can read the full series from any of the future prediction rows.
+            forecasts_json = json.dumps([float(x) for x in forecasts])
+            for i, val in enumerate(forecasts, start=1):
+                future_date = (last_date + timedelta(days=i)).isoformat()
+                # idempotent insert: skip if a prediction already exists for that date
+                existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", future_date).limit(1).execute()
+                if existing.data:
+                    continue
+                payload = {
+                    "pet_id": pet_id,
+                    "prediction_date": future_date,
+                    # Keep a human-friendly single-day summary, but store the full series in sleep_forecast
+                    "prediction_text": f"Forecasted sleep: {round(float(val), 1)} hours",
+                    "risk_level": "low",
+                    "suggestions": "",
+                    "activity_prob": 0,
+                    # store full 7-day forecast as JSON string for backward-compatible storage
+                    "sleep_forecast": forecasts_json
+                }
+                try:
+                    supabase.table("predictions").insert(payload).execute()
+                except Exception:
+                    # don't fail the whole backfill for one insert
+                    continue
+
+        print("Backfill completed.")
+    except Exception as e:
+        print(f"Backfill error: {e}")
+
+
+def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, dry_run: bool = False):
+    """Paginated migration to update prediction rows with a full `days_ahead`-day
+    numeric `sleep_forecast` stored as a JSON string.
+
+    - Scans `predictions` in batches (by id) and updates rows where
+      `sleep_forecast` is missing, empty, or shorter than `days_ahead`.
+    - For each candidate row, computes forecasts using behavior_logs up to
+      the prediction_date to avoid leakage.
+    - dry_run=True will only print what would be updated.
+    """
+    print(f"Starting migration of legacy sleep_forecast to {days_ahead}-day series (batch={batch_limit}, dry_run={dry_run})...")
+    try:
+        offset = 0
+        total_checked = 0
+        total_updated = 0
+        while True:
+            resp = supabase.table("predictions").select("id, pet_id, prediction_date, sleep_forecast").order("id", asc=True).range(offset, offset + batch_limit - 1).execute()
+            rows = resp.data or []
+            if not rows:
+                break
+
+            for row in rows:
+                total_checked += 1
+                try:
+                    pred_id = row.get("id")
+                    pet_id = row.get("pet_id")
+                    pred_date_raw = row.get("prediction_date")
+                    sf = row.get("sleep_forecast")
+
+                    # Normalize prediction_date
+                    if not pred_date_raw:
+                        # skip rows without a clear prediction date
+                        continue
+                    try:
+                        pred_date = pd.to_datetime(pred_date_raw).date()
+                    except Exception:
+                        continue
+
+                    # Parse existing sleep_forecast
+                    parsed = None
+                    if sf is None:
+                        parsed = []
+                    else:
+                        # It's commonly stored as a JSON string
+                        if isinstance(sf, str):
+                            try:
+                                parsed = json.loads(sf)
+                            except Exception:
+                                # maybe a numeric string
+                                try:
+                                    parsed = [float(sf)]
+                                except Exception:
+                                    parsed = []
+                        elif isinstance(sf, (list, tuple)):
+                            parsed = list(sf)
+                        else:
+                            # numeric or unknown
+                            try:
+                                parsed = [float(sf)]
+                            except Exception:
+                                parsed = []
+
+                    # If already full-length, skip
+                    if isinstance(parsed, list) and len(parsed) >= int(days_ahead):
+                        continue
+
+                    # Build historical logs up to prediction_date to avoid leakage
+                    logs_resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).lte("log_date", pred_date.isoformat()).order("log_date", desc=False).limit(10000).execute()
+                    logs = logs_resp.data or []
+                    df_logs = pd.DataFrame(logs) if logs else pd.DataFrame()
+                    if not df_logs.empty:
+                        df_logs['log_date'] = pd.to_datetime(df_logs['log_date']).dt.date
+                        df_logs['sleep_hours'] = pd.to_numeric(df_logs.get('sleep_hours', 0), errors='coerce').fillna(0.0)
+                        sleep_series = df_logs['sleep_hours'].tolist()
+                    else:
+                        sleep_series = []
+
+                    # Compute forecast and update prediction row
+                    try:
+                        forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
+                        # ensure list and pad if necessary
+                        if not isinstance(forecasts, list):
+                            forecasts = [float(sleep_series[-1]) if sleep_series else 8.0 for _ in range(days_ahead)]
+                        if len(forecasts) < days_ahead:
+                            last = float(sleep_series[-1]) if sleep_series else 8.0
+                            forecasts = list(forecasts) + [last for _ in range(days_ahead - len(forecasts))]
+                        forecasts_json = json.dumps([float(x) for x in forecasts])
+                    except Exception as e:
+                        print(f"[WARN] Failed to compute forecast for prediction id={pred_id} pet={pet_id} date={pred_date}: {e}")
+                        forecasts_json = json.dumps([8.0 for _ in range(days_ahead)])
+
+                    if dry_run:
+                        print(f"[DRY] Would update prediction id={pred_id} pet={pet_id} with sleep_forecast={forecasts_json}")
+                    else:
+                        update_resp = supabase.table("predictions").update({"sleep_forecast": forecasts_json}).eq("id", pred_id).execute()
+                        if getattr(update_resp, "error", None):
+                            print(f"Failed to update prediction id={pred_id} pet={pet_id}: {getattr(update_resp, 'error', '')}")
+                        else:
+                            total_updated += 1
+                except Exception as e:
+                    print(f"Error processing prediction row {row.get('id')}: {e}")
+
+            offset += batch_limit
+
+        print(f"Migration complete. Checked {total_checked} rows, updated {total_updated} rows.")
+    except Exception as e:
+        print(f"Unexpected error during legacy sleep_forecast migration: {e}")
 
 if __name__ == "__main__":
     # Run a one-time migration at startup (safe and idempotent)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", type=str, default=None,
+                        help="Optional task to run directly: daily_analysis | migrate")
+    args = parser.parse_args()
+
+    # If invoked with --task, run that task directly (useful for subprocess workers)
+    if args.task:
+        task = args.task.lower()
+        if task == "daily_analysis":
+            daily_analysis_job()
+        elif task in ("migrate", "migrate_behavior_logs_to_predictions"):
+            migrate_behavior_logs_to_predictions()
+        elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
+            backfill_future_sleep_forecasts()
+        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
+            migrate_legacy_sleep_forecasts()
+        else:
+            print(f"Unknown task: {args.task}")
+        sys.exit(0)
+
+    # Otherwise run startup migration once and start the webserver with scheduler
     try:
         migrate_behavior_logs_to_predictions()
     except Exception as e:
         print(f"Startup migration error: {e}")
+
+    # Start the lightweight scheduler that enqueues heavy jobs as subprocesses
+    try:
+        start_scheduler()
+    except Exception as e:
+        print(f"Failed to start scheduler: {e}")
+
     app.run(host="0.0.0.0", port=BACKEND_PORT)
 
 def store_prediction(pet_id, prediction, risk_level, recommendation):
@@ -880,95 +1345,177 @@ def store_prediction(pet_id, prediction, risk_level, recommendation):
     }).execute()
 
 def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
-    model, encoders = load_illness_model(model_path)
-    # Rule-based fallback if model not trained
-    rule_flag = (str(mood).lower() in ["lethargic","aggressive"]) or (float(sleep_hours) < 5) or (str(activity_level).lower() == "low")
-    if model is None or encoders is None:
+    """
+    Predict illness risk using a trained model if available. Returns 'low'/'medium'/'high'.
+    - Uses predict_proba when possible and thresholds for medium/high.
+    - Falls back to conservative rule-based logic when model or encoders are missing or when inputs are unseen.
+    """
+    # normalize inputs
+    mood_in = str(mood or '').strip().lower()
+    activity_in = str(activity_level or '').strip().lower()
+    try:
+        sleep_f = float(sleep_hours)
+    except Exception:
+        sleep_f = 0.0
+
+    # conservative rule-based fallback
+    rule_flag = (mood_in in ["lethargic", "aggressive"]) or (sleep_f < 5) or (activity_in == "low")
+
+    loaded = load_illness_model(model_path)
+    # load_illness_model returns (model, (le_mood, le_activity), mood_map, act_map, metadata) or (None, None)
+    if not loaded or loaded[0] is None:
         return "high" if rule_flag else "low"
 
-    le_mood, le_activity = encoders
-    mood_enc = le_mood.transform([mood])[0] if mood in getattr(le_mood, "classes_", []) else 0
-    act_enc = le_activity.transform([activity_level])[0] if activity_level in getattr(le_activity, "classes_", []) else 0
-    X = np.array([[mood_enc, float(sleep_hours), act_enc]])
-    pred = model.predict(X)[0]
-    return "high" if pred == 1 else "low"
+    try:
+        model, encoders, mood_map, act_map, metadata = loaded
+    except Exception:
+        # unexpected shape, fallback
+        return "high" if rule_flag else "low"
+
+    le_mood, le_activity = encoders if encoders else (None, None)
+
+    # Map or fallback for mood/activity encodings
+    mood_enc = None
+    act_enc = None
+    try:
+        if mood_map and mood_in in mood_map:
+            mood_enc = int(mood_map[mood_in])
+        elif le_mood is not None and mood_in in getattr(le_mood, 'classes_', []):
+            mood_enc = int(np.where(getattr(le_mood, 'classes_', []) == mood_in)[0][0])
+        else:
+            # use most common seen during training if available
+            mc = (metadata.get('mood_most_common') if metadata else None)
+            if mc and mc in (mood_map or {}):
+                mood_enc = int((mood_map or {})[mc])
+    except Exception:
+        mood_enc = None
+
+    try:
+        if act_map and activity_in in act_map:
+            act_enc = int(act_map[activity_in])
+        elif le_activity is not None and activity_in in getattr(le_activity, 'classes_', []):
+            act_enc = int(np.where(getattr(le_activity, 'classes_', []) == activity_in)[0][0])
+        else:
+            ac = (metadata.get('act_most_common') if metadata else None)
+            if ac and ac in (act_map or {}):
+                act_enc = int((act_map or {})[ac])
+    except Exception:
+        act_enc = None
+
+    # If encodings are missing, fallback to rule-based conservative decision
+    if mood_enc is None or act_enc is None:
+        return "high" if rule_flag else "low"
+
+    X = np.array([[mood_enc, float(sleep_f), act_enc]])
+
+    try:
+        if hasattr(model, 'predict_proba'):
+            proba = model.predict_proba(X)[0]
+            # assume binary prob where index 1 is positive class
+            p_pos = float(proba[1]) if len(proba) > 1 else float(proba[0])
+        else:
+            # fallback to raw prediction
+            p_pos = float(model.predict(X)[0])
+    except Exception:
+        return "high" if rule_flag else "low"
+
+    # Thresholds to convert probability into low/medium/high
+    if p_pos >= 0.75:
+        return "high"
+    elif p_pos >= 0.40:
+        return "medium"
+    else:
+        return "low"
 
 def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    arr = np.array(sleep_series).astype(float)
-    if len(arr) < 3:
-        # Use linear regression with variation and weekly pattern
-        lr = LinearRegression()
-        idx = np.arange(len(arr)).reshape(-1, 1)
-        lr.fit(idx, arr)
-        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
-        base_predictions = lr.predict(next_idx).clip(0, 24)
-        np.random.seed(42)
-        variation = np.random.normal(0, 0.3, days_ahead)
-        weekly_pattern = []
-        for i in range(days_ahead):
-            day_of_week = (len(arr) + i) % 7
-            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
-        enhanced_predictions = base_predictions + variation + weekly_pattern
-        return enhanced_predictions.clip(0, 24).tolist()
+    # Robustified predictor that avoids returning flat/linear forecasts when data is sparse
+    arr = np.array(sleep_series).astype(float) if (sleep_series is not None and len(sleep_series) > 0) else np.array([])
+    days_ahead = int(days_ahead or 7)
 
+    # Empty input -> sensible default
+    if arr.size == 0:
+        return [8.0 for _ in range(days_ahead)]
+
+    # Useful statistics
+    recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 8.0
+    recent_std = float(np.std(arr[-7:])) if arr.size >= 2 else 0.5
+    last_delta = float(arr[-1] - arr[-2]) if arr.size >= 2 else 0.0
+
+    rng = np.random.default_rng(42)
+
+    # Heuristic fallback generator (momentum + weekly pattern + jitter)
+    def heuristic_preds(base_mean, delta, start_index, n):
+        out = []
+        for i in range(n):
+            base = base_mean + delta * (i + 1) * 0.15
+            day_of_week = (start_index + i) % 7
+            weekly = 0.3 if day_of_week in (5, 6) else -0.1
+            noise = float(rng.normal(0, max(0.15, recent_std * 0.2)))
+            p = base + weekly + noise
+            out.append(max(0.0, min(24.0, round(p, 1))))
+        return out
+
+    # Very small history: use heuristic only (no model fitting)
+    if arr.size < 3:
+        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+
+    # Build sliding-window training data (window=7)
     window = 7
     X, y = [], []
-    for i in range(len(arr) - window):
+    for i in range(max(0, len(arr) - window)):
         X.append(arr[i:i + window])
         y.append(arr[i + window])
 
+    # If insufficient windowed samples, fall back to heuristic
     if len(X) < 2:
-        # Always use linear regression fallback with variation and weekly pattern
-        lr = LinearRegression()
-        idx = np.arange(len(arr)).reshape(-1, 1)
-        lr.fit(idx, arr)
-        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
-        base_predictions = lr.predict(next_idx).clip(0, 24)
-        np.random.seed(42)
-        variation = np.random.normal(0, 0.3, days_ahead)
-        weekly_pattern = []
-        for i in range(days_ahead):
-            day_of_week = (len(arr) + i) % 7
-            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
-        enhanced_predictions = base_predictions + variation + weekly_pattern
-        return enhanced_predictions.clip(0, 24).tolist()
+        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
 
     X, y = np.array(X), np.array(y)
 
-    if os.path.exists(model_path):
-        model = tf.keras.models.load_model(model_path)
-    else:
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(X.shape[1],)),
-            tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(16, activation='relu'),
-            tf.keras.layers.Dense(1)
-        ])
-        model.compile(optimizer='adam', loss='mse')
+    # Train or load a small Keras model for sequence prediction
+    try:
+        if os.path.exists(model_path):
+            model = tf.keras.models.load_model(model_path)
+        else:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Input(shape=(X.shape[1],)),
+                tf.keras.layers.Dense(32, activation='relu'),
+                tf.keras.layers.Dropout(0.15),
+                tf.keras.layers.Dense(16, activation='relu'),
+                tf.keras.layers.Dense(1)
+            ])
+            model.compile(optimizer='adam', loss='mse')
 
-    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
-    model.save(model_path)
+        # Train briefly (keeps runtime bounded) and persist
+        model.fit(X, y, epochs=30, batch_size=8, verbose=0)
+        try:
+            model.save(model_path)
+        except Exception:
+            # non-fatal if save fails in restricted environments
+            pass
 
-    preds, last_window = [], arr[-window:].copy()
-    for _ in range(days_ahead):
-        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
-        p = max(0.0, min(24.0, p))
-        preds.append(p)
-        last_window = np.concatenate([last_window[1:], [p]])
+        preds, last_window = [], arr[-window:].copy()
+        for _ in range(days_ahead):
+            p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+            p = max(0.0, min(24.0, p))
+            preds.append(p)
+            last_window = np.concatenate([last_window[1:], [p]])
 
-    # Add small realistic variation and weekly pattern if output is flat
-    rounded_preds = [round(p, 1) for p in preds]
-    if len(set(rounded_preds)) == 1:
-        np.random.seed(42)
-        variation = np.random.normal(0, 0.3, days_ahead)
-        weekly_pattern = []
-        for i in range(days_ahead):
-            day_of_week = (len(arr) + i) % 7
-            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
-        preds = [max(0.0, min(24.0, p + v + w)) for p, v, w in zip(preds, variation, weekly_pattern)]
+        # If model outputs are suspiciously flat, blend with heuristic to add realistic variation
+        rounded = [round(float(x), 1) for x in preds]
+        if np.std(rounded) < 0.25 or len(set(rounded)) == 1:
+            alt = heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+            blended = []
+            for m, a in zip(preds, alt):
+                # blend model and heuristic (favor model but add diversity)
+                v = 0.7 * float(m) + 0.3 * float(a)
+                blended.append(round(max(0.0, min(24.0, v)), 1))
+            return blended
 
-    return preds
+        return [round(float(x), 1) for x in preds]
+    except Exception:
+        # Final conservative fallback
+        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
 
 # Force-train endpoint (useful in dev)
 @app.route("/train", methods=["POST"])
@@ -1068,7 +1615,8 @@ def add_behavior_log_and_retrain(pet_id, log_data, future_days=7):
             analyze_pet_df(pet_id, df[df['log_date'] <= d], prediction_date=pd.to_datetime(d).date().isoformat(), store=True)
         # --- Predict for future dates using learned pattern ---
         last_date = max(all_dates)
+        # Use logs up to last_date for any future-date predictions to avoid leakage
+        train_df_for_future = df[df['log_date'] <= last_date].copy()
         for i in range(1, future_days + 1):
             future_date = last_date + timedelta(days=i)
-            # Use all data up to last_date for prediction of future_date
-            analyze_pet_df(pet_id, df, prediction_date=future_date.isoformat(), store=True)
+            analyze_pet_df(pet_id, train_df_for_future, prediction_date=future_date.isoformat(), store=True)
