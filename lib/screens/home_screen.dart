@@ -1144,7 +1144,376 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  // Job completion modal removed - only owners can complete jobs
+  // Enhanced modal for owners to finish job and add review of sitter
+  Future<void> _showFinishJobModal(Map<String, dynamic> job) async {
+    double rating = 5;
+    String comment = '';
+    final petName = (job['pets']?['name'] ?? job['pet_id'] ?? 'Pet').toString();
+    
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Container(
+              height: MediaQuery.of(ctx).size.height * 0.75,
+              decoration: BoxDecoration(
+                color: lightBlush,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  // Enhanced header
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [deepRed, coral],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Column(
+                      children: [
+                        // Handle bar
+                        Container(
+                          height: 4,
+                          width: 40,
+                          margin: EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        // Header content
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                Icons.task_alt,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Complete Job',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white70,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                  Text(
+                                    'Job for $petName',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Content area
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Rating section
+                            Container(
+                              padding: EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.08),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.star,
+                                        color: coral,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Rate the sitter',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 16),
+                                  // Star rating display
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: List.generate(5, (index) {
+                                      return GestureDetector(
+                                        onTap: () => setModalState(() => rating = index + 1.0),
+                                        child: Container(
+                                          padding: EdgeInsets.all(4),
+                                          child: Icon(
+                                            index < rating ? Icons.star : Icons.star_border,
+                                            size: 32,
+                                            color: coral,
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'Rating: ${rating.toInt()}/5',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: deepRed,
+                                      fontFamily: 'Roboto',
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: 20),
+                            // Comment section
+                            Container(
+                              padding: EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: coral.withOpacity(0.2)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: deepRed.withOpacity(0.08),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.edit,
+                                        color: coral,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Add Review (Optional)',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: deepRed,
+                                          fontFamily: 'Roboto',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 16),
+                                  TextField(
+                                    maxLines: 4,
+                                    decoration: InputDecoration(
+                                      hintText: 'Share your experience with this sitter...',
+                                      hintStyle: TextStyle(
+                                        color: Colors.grey[400],
+                                        fontFamily: 'Roboto',
+                                      ),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        borderSide: BorderSide(color: coral.withOpacity(0.3)),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        borderSide: BorderSide(color: coral),
+                                      ),
+                                      filled: true,
+                                      fillColor: lightBlush.withOpacity(0.1),
+                                    ),
+                                    style: TextStyle(
+                                      fontFamily: 'Roboto',
+                                      fontSize: 14,
+                                    ),
+                                    onChanged: (value) => comment = value,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Action buttons
+                  Container(
+                    padding: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                          offset: Offset(0, -2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(color: coral),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                            ),
+                            child: Text(
+                              'Cancel',
+                              style: TextStyle(
+                                color: coral,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'Roboto',
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: deepRed,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                              elevation: 2,
+                            ),
+                            onPressed: () async {
+                              Navigator.of(ctx).pop();
+                              try {
+                                // 1) complete job
+                                await _updateJobStatus(job['id'].toString(), 'Completed');
+
+                                // 2) sitter_reviews.sitter_id must be sitters.id.
+                                final sitterUserId = job['sitter_id']?.toString();
+                                final sitterIdForReview = sitterUserId == null
+                                    ? null
+                                    : await _resolveSitterIdForReview(sitterUserId);
+
+                                if (sitterIdForReview == null) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Cannot post review: sitter profile not found.'),
+                                        backgroundColor: deepRed,
+                                        behavior: SnackBarBehavior.floating,
+                                      ),
+                                    );
+                                  }
+                                  return;
+                                }
+
+                                // Force integer rating and request the inserted id back for verification.
+                                await supabase
+                                    .from('sitter_reviews')
+                                    .insert({
+                                      'sitter_id': sitterIdForReview,
+                                      'reviewer_id': widget.userId,                    // users.id (uuid)
+                                      'rating': rating.round(),                        // strict int 1..5
+                                      'comment': comment.trim().isEmpty ? null : comment.trim(),
+                                      'owner_name': (userName.isEmpty ? 'Pet Owner' : userName),
+                                    })
+                                    .select('id')
+                                    .single();
+
+                                // Optional: refresh reviews (useful if current user is the sitter)
+                                await fetchSitterReviews();
+
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Job completed and review posted successfully!'),
+                                      backgroundColor: Colors.green,
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                // Show detailed error for easier debugging (e.g., FK violations, privileges)
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Failed to complete job: $e'),
+                                      backgroundColor: deepRed,
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                }
+                                print('❌ Review insert failed: $e');
+                              }
+                            },
+                            child: Text(
+                              'Complete & Review',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'Roboto',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 
   // Resolve sitter_id for sitter_reviews FK.
   // Accepts either a users.id (preferred) or a sitters.id and returns sitters.id.
@@ -1868,21 +2237,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ],
           ),
           SizedBox(height: 16),
-          // Mark Finished button removed - only owners can complete jobs
+          // Mark Finished button for owners
           Container(
-            padding: EdgeInsets.all(12),
+            width: double.infinity,
             decoration: BoxDecoration(
-              color: Colors.grey[100],
+              gradient: LinearGradient(colors: [deepRed, coral]),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(
-              'Job completion is handled by the pet owner',
-              style: TextStyle(
-                fontFamily: 'Roboto',
-                color: Colors.grey[600],
-                fontSize: 12,
+            child: ElevatedButton(
+              onPressed: () => _showFinishJobModal(job),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                foregroundColor: Colors.white,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
-              textAlign: TextAlign.center,
+              child: Text(
+                'Mark Finished',
+                style: TextStyle(
+                  fontFamily: 'Roboto',
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ),
         ],
