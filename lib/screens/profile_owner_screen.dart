@@ -61,6 +61,57 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   String get address =>
       userData['address'] ?? metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
+  // Helper method to get formatted age for pet display
+  String _getFormattedAge(Map<String, dynamic> pet) {
+    if (pet['date_of_birth'] != null) {
+      try {
+        final birthDate = DateTime.parse(pet['date_of_birth'].toString());
+        return _formatAgeFromBirthDate(birthDate);
+      } catch (e) {
+        // Fallback to old age format
+        final age = pet['age'] ?? 0;
+        return '$age ${age == 1 ? 'year' : 'years'} old';
+      }
+    } else {
+      // Fallback to old age format
+      final age = pet['age'] ?? 0;
+      return '$age ${age == 1 ? 'year' : 'years'} old';
+    }
+  }
+
+  // Helper method to format age from birth date
+  String _formatAgeFromBirthDate(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'} old';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'} old';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'} old';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'} old';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'} old';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -722,7 +773,7 @@ Future<void> pickAndUploadImage() async {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        '${pet['breed'] ?? 'Unknown'} • ${pet['age'] ?? 0} ${(pet['age'] ?? 0) == 1 ? 'year' : 'years'} old',
+                        '${pet['breed'] ?? 'Unknown'} • ${_getFormattedAge(pet)}',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[600],
@@ -3634,6 +3685,7 @@ class _AddPetFormState extends State<_AddPetForm> {
   String name = '';
   String breed = '';
   int age = 0;
+  DateTime? dateOfBirth;
   String health = '';
   String gender = 'Male'; // added gender state
   double weight = 0.0;
@@ -3641,6 +3693,49 @@ class _AddPetFormState extends State<_AddPetForm> {
   bool _isLoading = false;
 
   final ImagePicker _picker = ImagePicker();
+
+  // Helper method to calculate age from date of birth
+  Map<String, int> _calculateAge(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    return {'years': years, 'months': months, 'days': days};
+  }
+
+  // Helper method to format age display
+  String _formatAge(DateTime birthDate) {
+    final ageMap = _calculateAge(birthDate);
+    final years = ageMap['years']!;
+    final months = ageMap['months']!;
+    final days = ageMap['days']!;
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'}';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'}';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'}';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'}';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'}';
+    }
+  }
 
   String _species = 'Dog'; // default
   // Expanded breed lists including common Philippine local mixes (Askal/Aspin)
@@ -3684,6 +3779,22 @@ class _AddPetFormState extends State<_AddPetForm> {
       name = p['name']?.toString() ?? '';
       breed = p['breed']?.toString() ?? '';
       age = (p['age'] is int) ? p['age'] : int.tryParse(p['age']?.toString() ?? '') ?? 0;
+      
+      // Handle date of birth if available, otherwise calculate from age
+      if (p['date_of_birth'] != null) {
+        try {
+          dateOfBirth = DateTime.parse(p['date_of_birth'].toString());
+        } catch (e) {
+          // If parsing fails, calculate from age
+          if (age > 0) {
+            dateOfBirth = DateTime.now().subtract(Duration(days: age * 365));
+          }
+        }
+      } else if (age > 0) {
+        // Calculate approximate date of birth from age
+        dateOfBirth = DateTime.now().subtract(Duration(days: age * 365));
+      }
+      
       health = p['health']?.toString() ?? 'Good';
       gender = p['gender']?.toString() ?? 'Male';
       weight = (p['weight'] is num) ? (p['weight'] as num).toDouble() : double.tryParse(p['weight']?.toString() ?? '') ?? 0.0;
@@ -4133,7 +4244,8 @@ class _AddPetFormState extends State<_AddPetForm> {
       await Supabase.instance.client.from('pets').update({
         'name': name,
         'breed': breed,
-        'age': age,
+        'age': age, // Keep for backward compatibility
+        'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
         'gender': gender,
         'weight': weight,
@@ -4144,7 +4256,8 @@ class _AddPetFormState extends State<_AddPetForm> {
       final response = await Supabase.instance.client.from('pets').insert({
         'name': name,
         'breed': breed,
-        'age': age,
+        'age': age, // Keep for backward compatibility
+        'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
         'gender': gender,
         'weight': weight,
@@ -4466,11 +4579,89 @@ class _AddPetFormState extends State<_AddPetForm> {
              onSaved: (val) => breed = val ?? '',
            ),
          ),
-          _buildTextField(
-            label: "Age (years)",
-            initialValue: age > 0 ? age.toString() : '',
-            keyboardType: TextInputType.number,
-            onSaved: (val) => age = int.tryParse(val ?? '0') ?? 0,
+          // Date of Birth picker
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: InkWell(
+              onTap: () async {
+                final DateTime? picked = await showDatePicker(
+                  context: context,
+                  initialDate: dateOfBirth ?? DateTime.now().subtract(Duration(days: 365)),
+                  firstDate: DateTime.now().subtract(Duration(days: 25 * 365)), // 25 years ago
+                  lastDate: DateTime.now(),
+                  builder: (context, child) {
+                    return Theme(
+                      data: Theme.of(context).copyWith(
+                        colorScheme: ColorScheme.light(
+                          primary: deepRed,
+                          onPrimary: Colors.white,
+                          surface: Colors.white,
+                          onSurface: Colors.black,
+                        ),
+                      ),
+                      child: child!,
+                    );
+                  },
+                );
+                if (picked != null) {
+                  setState(() {
+                    dateOfBirth = picked;
+                    // Calculate age for backward compatibility
+                    final ageMap = _calculateAge(picked);
+                    age = ageMap['years']!;
+                  });
+                }
+              },
+              child: Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade400),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.calendar_today, color: deepRed),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Date of Birth",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            dateOfBirth != null 
+                                ? '${dateOfBirth!.day}/${dateOfBirth!.month}/${dateOfBirth!.year}'
+                                : 'Select date of birth',
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: dateOfBirth != null ? Colors.black : Colors.grey.shade500,
+                            ),
+                          ),
+                          if (dateOfBirth != null) ...[
+                            SizedBox(height: 4),
+                            Text(
+                              'Age: ${_formatAge(dateOfBirth!)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: coral,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
           // Gender dropdown moved under Age
           Padding(

@@ -3187,6 +3187,57 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
     fetchAssignedPets();
   }
 
+  // Helper method to get formatted age for pet display
+  String _getFormattedAge(Map<String, dynamic> pet) {
+    if (pet['date_of_birth'] != null) {
+      try {
+        final birthDate = DateTime.parse(pet['date_of_birth'].toString());
+        return _formatAgeFromBirthDate(birthDate);
+      } catch (e) {
+        // Fallback to old age format
+        final age = pet['age'] ?? 0;
+        return '$age ${age == 1 ? 'year' : 'years'} old';
+      }
+    } else {
+      // Fallback to old age format
+      final age = pet['age'] ?? 0;
+      return '$age ${age == 1 ? 'year' : 'years'} old';
+    }
+  }
+
+  // Helper method to format age from birth date
+  String _formatAgeFromBirthDate(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'} old';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'} old';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'} old';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'} old';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'} old';
+    }
+  }
+
   Future<void> fetchAssignedPets() async {
     final sitterId = supabase.auth.currentUser?.id;
 
@@ -3335,7 +3386,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        '${pet['breed'] ?? 'Unknown'} • ${pet['age'] ?? 0} ${(pet['age'] ?? 0) == 1 ? 'year' : 'years'} old',
+                        '${pet['breed'] ?? 'Unknown'} • ${_getFormattedAge(pet)}',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[600],
