@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, make_response
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import cross_val_score, StratifiedKFold
@@ -67,11 +67,25 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
     # Try to evaluate model (cross-validated AUC) when we have enough samples
     auc_score = None
     try:
-        if len(y) >= 10:
-            cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-            scores = cross_val_score(clf, X, y, cv=cv, scoring='roc_auc')
-            auc_score = float(np.mean(scores))
-    except Exception:
+        # Only run CV when each class has enough members to support the requested n_splits.
+        # Small class counts cause sklearn to warn or raise; guard against that.
+        from collections import Counter
+        class_counts = Counter(y)
+        if len(class_counts) >= 2:
+            min_class = min(class_counts.values())
+            # choose up to 3 splits but no more than the smallest class size
+            n_splits = min(3, min_class)
+            # require at least 2 splits and at least n_splits*2 samples overall
+            if n_splits >= 2 and len(y) >= n_splits * 2:
+                cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                scores = cross_val_score(clf, X, y, cv=cv, scoring='roc_auc')
+                auc_score = float(np.mean(scores))
+            else:
+                print(f"[INFO] Skipping CV AUC: not enough samples per class (counts={dict(class_counts)})")
+        else:
+            print(f"[INFO] Skipping CV AUC: only one class present in training data (counts={dict(class_counts)})")
+    except Exception as e:
+        print(f"[WARN] CV AUC check skipped/failed: {e}")
         auc_score = None
 
     # If we have a CV AUC and it's below the minimum threshold, do NOT save the model.
@@ -826,36 +840,10 @@ def public_pet_page(pet_id):
         actions_html = "".join(f"<li>{a}</li>" for a in (care_tips.get("actions") or [])[:6]) or "<li>Ensure fresh water and rest today.</li>"
         expectations_html = "".join(f"<li>{e}</li>" for e in (care_tips.get("expectations") or [])[:6]) or "<li>Expect normal behavior with routine care.</li>"
 
-        # --- Fetch future predictions (next 7 days) for API consumers ---
+        # The 7-day future predictions feature has been removed.
+        # Keep an empty placeholder so API responses maintain a stable shape.
         future_predictions = []
-        today = datetime.utcnow().date()
-        for i in range(1, 8):
-            future_date = today + timedelta(days=i)
-            presp = supabase.table("predictions").select(
-                "prediction_date, prediction_text, risk_level, suggestions"
-            ).eq("pet_id", pet_id).eq("prediction_date", future_date.isoformat()).limit(1).execute()
-            prows = presp.data or []
-            if prows:
-                p0 = prows[0]
-                future_predictions.append({
-                    "date": p0.get("prediction_date"),
-                    "text": p0.get("prediction_text") or "",
-                    "risk": p0.get("risk_level") or "",
-                    "suggestions": p0.get("suggestions") or ""
-                })
-
-        # If request is from browser, render HTML as before
-        # Build small HTML block for future predictions to embed in modal
-        if future_predictions:
-            future_items = []
-            for fp in future_predictions:
-                fd = fp.get('date') or ''
-                fr = fp.get('risk') or ''
-                ft = fp.get('text') or ''
-                future_items.append(f"<li><strong>{fd}</strong> — {fr}: {ft}</li>")
-            future_html = f"<h4>Upcoming Predictions</h4><ul>{''.join(future_items)}</ul>"
-        else:
-            future_html = ""
+        future_html = ""
 
         if "text/html" in request.headers.get("Accept", ""):
             # Simple HTML with modal dialog - auto-open on load
@@ -984,114 +972,13 @@ def public_pet_page_alias(pet_id):
 
 @app.route("/pet/<pet_id>/7day-health", methods=["GET"])
 def seven_day_health_endpoint(pet_id):
-    """Return a compact 7-day health forecast for a pet.
+    """Endpoint removed: return 404 with a short explanation.
 
-    Response: { pet_id, seven_day_forecast: [ { date, risk_level, prediction_text, suggestions, sleep_forecast } ] }
-    Prefers stored prediction rows; if missing for a date, computes a safe on-the-fly prediction
-    using logs up to the latest available log_date (avoids data leakage).
+    The detailed 7-day forecast endpoint was removed to simplify the
+    API surface. Clients should use the single-date `GET /pet/<id>`
+    route which returns the latest prediction and care tips.
     """
-    try:
-        today = datetime.utcnow().date()
-        # fetch recent logs once
-        df = fetch_logs_df(pet_id, limit=10000)
-        if not df.empty:
-            # normalize
-            df['log_date'] = pd.to_datetime(df['log_date'])
-            last_date = max(df['log_date']).date()
-        else:
-            last_date = None
-
-        forecast_list = []
-        for i in range(1, 8):
-            target_date = today + timedelta(days=i)
-            # Try DB first
-            try:
-                presp = supabase.table("predictions").select(
-                    "prediction_date, prediction_text, risk_level, suggestions, sleep_forecast"
-                ).eq("pet_id", pet_id).eq("prediction_date", target_date.isoformat()).limit(1).execute()
-                prows = presp.data or []
-            except Exception:
-                prows = []
-
-            if prows:
-                row = prows[0]
-                pred_text = row.get("prediction_text") or ""
-                risk = row.get("risk_level") or None
-                suggestions = row.get("suggestions") or ""
-                sf = row.get("sleep_forecast")
-                # normalize sleep_forecast to list of floats
-                sleep_list = []
-                if sf is not None:
-                    if isinstance(sf, str):
-                        try:
-                            sleep_list = json.loads(sf)
-                        except Exception:
-                            try:
-                                sleep_list = [float(sf)]
-                            except Exception:
-                                sleep_list = []
-                    elif isinstance(sf, (list, tuple)):
-                        sleep_list = list(sf)
-                    else:
-                        try:
-                            sleep_list = [float(sf)]
-                        except Exception:
-                            sleep_list = []
-                forecast_list.append({
-                    "date": target_date.isoformat(),
-                    "risk_level": (str(risk).lower() if risk else None),
-                    "prediction_text": pred_text,
-                    "suggestions": suggestions,
-                    "sleep_forecast": [float(x) for x in sleep_list] if sleep_list else []
-                })
-                continue
-
-            # If no DB row, compute safely using logs up to last_date
-            if last_date is None:
-                # no logs -> defaults
-                trend = "No data available."
-                suggestions = ""
-                risk_level = "low"
-                sleep_forecast = predict_future_sleep([], days_ahead=7)
-            else:
-                train_df = df[df['log_date'] <= pd.to_datetime(last_date)].copy()
-                # analyze_pet_df returns summary but by default stores — use store=False
-                try:
-                    res = analyze_pet_df(pet_id, train_df, prediction_date=target_date.isoformat(), store=False)
-                    trend = res.get("trend") or ""
-                    suggestions = res.get("recommendation") or ""
-                except Exception:
-                    trend = ""
-                    suggestions = ""
-
-                # contextual risk + ML risk blended
-                try:
-                    contextual = compute_contextual_risk(train_df)
-                except Exception:
-                    contextual = "low"
-                try:
-                    # ML risk from latest log in train_df
-                    if not train_df.empty:
-                        latest = train_df.sort_values("log_date", ascending=False).iloc[0]
-                        ml_risk = predict_illness_risk(latest.get("mood", ""), latest.get("sleep_hours", 0), latest.get("activity_level", ""))
-                    else:
-                        ml_risk = None
-                except Exception:
-                    ml_risk = None
-                risk_level = blend_illness_risk(ml_risk, contextual)
-                sleep_forecast = predict_future_sleep(train_df['sleep_hours'].tolist() if not train_df.empty else [], days_ahead=7)
-
-            forecast_list.append({
-                "date": target_date.isoformat(),
-                "risk_level": (str(risk_level).lower() if risk_level else None),
-                "prediction_text": trend,
-                "suggestions": suggestions,
-                "sleep_forecast": [float(x) for x in (sleep_forecast or [])]
-            })
-
-        return jsonify({"pet_id": pet_id, "seven_day_forecast": forecast_list})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "7-day health forecast endpoint removed", "note": "Use /pet/<id> for current status"}), 404
 
 @app.route("/", methods=["GET", "HEAD"])
 def root():
@@ -1298,41 +1185,9 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
     except Exception as e:
         print(f"Unexpected error during legacy sleep_forecast migration: {e}")
 
-if __name__ == "__main__":
-    # Run a one-time migration at startup (safe and idempotent)
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", type=str, default=None,
-                        help="Optional task to run directly: daily_analysis | migrate")
-    args = parser.parse_args()
-
-    # If invoked with --task, run that task directly (useful for subprocess workers)
-    if args.task:
-        task = args.task.lower()
-        if task == "daily_analysis":
-            daily_analysis_job()
-        elif task in ("migrate", "migrate_behavior_logs_to_predictions"):
-            migrate_behavior_logs_to_predictions()
-        elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
-            backfill_future_sleep_forecasts()
-        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
-            migrate_legacy_sleep_forecasts()
-        else:
-            print(f"Unknown task: {args.task}")
-        sys.exit(0)
-
-    # Otherwise run startup migration once and start the webserver with scheduler
-    try:
-        migrate_behavior_logs_to_predictions()
-    except Exception as e:
-        print(f"Startup migration error: {e}")
-
-    # Start the lightweight scheduler that enqueues heavy jobs as subprocesses
-    try:
-        start_scheduler()
-    except Exception as e:
-        print(f"Failed to start scheduler: {e}")
-
-    app.run(host="0.0.0.0", port=BACKEND_PORT)
+# The module's CLI dispatch / startup runner is placed at the end of the file
+# to ensure all functions are defined before any task is invoked. See the
+# `if __name__ == '__main__'` block appended to the end of this file.
 
 def store_prediction(pet_id, prediction, risk_level, recommendation):
     # kept for backward compatibility
@@ -1428,7 +1283,15 @@ def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.j
         return "low"
 
 def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    # Robustified predictor that avoids returning flat/linear forecasts when data is sparse
+    """Predict future sleep using lag features + weekday pattern.
+    Strategy:
+    - If very little data (<4) use a small heuristic with jitter.
+    - Build supervised samples using a sliding window of lags and weekday index.
+      Train a RandomForestRegressor when there are enough samples; otherwise use
+      a LinearRegression fallback. For multi-day forecasts we iteratively
+      predict and feed the prediction back as the next lag.
+    - Blend with a weekday-based empirical mean if outputs look too flat.
+    """
     arr = np.array(sleep_series).astype(float) if (sleep_series is not None and len(sleep_series) > 0) else np.array([])
     days_ahead = int(days_ahead or 7)
 
@@ -1436,86 +1299,93 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
     if arr.size == 0:
         return [8.0 for _ in range(days_ahead)]
 
-    # Useful statistics
+    # Basic stats
     recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 8.0
     recent_std = float(np.std(arr[-7:])) if arr.size >= 2 else 0.5
-    last_delta = float(arr[-1] - arr[-2]) if arr.size >= 2 else 0.0
 
-    rng = np.random.default_rng(42)
-
-    # Heuristic fallback generator (momentum + weekly pattern + jitter)
-    def heuristic_preds(base_mean, delta, start_index, n):
+    # heuristic fallback
+    def heuristic_preds(base_mean, n, start_index=0):
         out = []
         for i in range(n):
-            base = base_mean + delta * (i + 1) * 0.15
-            day_of_week = (start_index + i) % 7
-            weekly = 0.3 if day_of_week in (5, 6) else -0.1
-            noise = float(rng.normal(0, max(0.15, recent_std * 0.2)))
-            p = base + weekly + noise
-            out.append(max(0.0, min(24.0, round(p, 1))))
+            # small weekday bump for weekend-ish positions
+            dow = (start_index + i) % 7
+            weekly = 0.3 if dow in (5, 6) else -0.1
+            noise = float(np.random.normal(0, max(0.12, recent_std * 0.15)))
+            p = base_mean + weekly + noise
+            out.append(round(max(0.0, min(24.0, p)), 1))
         return out
 
-    # Very small history: use heuristic only (no model fitting)
-    if arr.size < 3:
-        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+    # If not enough history, rely on heuristic
+    if arr.size < 4:
+        return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
 
-    # Build sliding-window training data (window=7)
-    window = 7
-    X, y = [], []
-    for i in range(max(0, len(arr) - window)):
-        X.append(arr[i:i + window])
-        y.append(arr[i + window])
+    # window size: prefer 7 but shrink for short series
+    window = min(7, max(3, int(arr.size / 2)))
 
-    # If insufficient windowed samples, fall back to heuristic
-    if len(X) < 2:
-        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+    # Build supervised dataset: for t in [window .. len(arr)-1]
+    X_rows = []
+    y = []
+    for t in range(window, len(arr)):
+        lags = arr[t - window:t]
+        dow = (t) % 7
+        X_rows.append(np.concatenate([lags, [dow]]))
+        y.append(arr[t])
 
-    X, y = np.array(X), np.array(y)
+    X = np.array(X_rows) if X_rows else np.empty((0, 0))
+    y = np.array(y) if y else np.array([])
 
-    # Train or load a small Keras model for sequence prediction
+    # If we couldn't build any supervised example (rare), fallback to heuristic
+    if X.shape[0] < 3:
+        return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
+
+    # Normalize weekday feature scale (0-6) to small numeric effect
+    # Train a regressor: RandomForest works well with small tabular data
     try:
-        if os.path.exists(model_path):
-            model = tf.keras.models.load_model(model_path)
-        else:
-            model = tf.keras.Sequential([
-                tf.keras.layers.Input(shape=(X.shape[1],)),
-                tf.keras.layers.Dense(32, activation='relu'),
-                tf.keras.layers.Dropout(0.15),
-                tf.keras.layers.Dense(16, activation='relu'),
-                tf.keras.layers.Dense(1)
-            ])
-            model.compile(optimizer='adam', loss='mse')
+        from sklearn.linear_model import LinearRegression
+        # weekday is last column
+        rf = RandomForestRegressor(n_estimators=100, random_state=42)
+        rf.fit(X, y)
 
-        # Train briefly (keeps runtime bounded) and persist
-        model.fit(X, y, epochs=30, batch_size=8, verbose=0)
-        try:
-            model.save(model_path)
-        except Exception:
-            # non-fatal if save fails in restricted environments
-            pass
-
-        preds, last_window = [], arr[-window:].copy()
-        for _ in range(days_ahead):
-            p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+        preds = []
+        # iterative forecasting
+        last_window = list(arr[-window:])
+        for i in range(days_ahead):
+            dow = (len(arr) + i) % 7
+            feat = np.array(list(last_window) + [dow]).reshape(1, -1)
+            p = float(rf.predict(feat)[0])
             p = max(0.0, min(24.0, p))
             preds.append(p)
-            last_window = np.concatenate([last_window[1:], [p]])
+            # shift window
+            last_window = last_window[1:] + [p]
 
-        # If model outputs are suspiciously flat, blend with heuristic to add realistic variation
-        rounded = [round(float(x), 1) for x in preds]
-        if np.std(rounded) < 0.25 or len(set(rounded)) == 1:
-            alt = heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+        # if model output is suspiciously flat, blend with weekday empirical means
+        if np.std(preds) < 0.25 or len(set([round(x,1) for x in preds])) == 1:
+            # compute empirical weekday means from history
+            wmeans = {i: [] for i in range(7)}
+            for idx, v in enumerate(arr):
+                wmeans[idx % 7].append(v)
+            wmeans_mean = {k: (float(np.mean(v)) if v else recent_mean) for k, v in wmeans.items()}
             blended = []
-            for m, a in zip(preds, alt):
-                # blend model and heuristic (favor model but add diversity)
-                v = 0.7 * float(m) + 0.3 * float(a)
+            for i, m in enumerate(preds):
+                dow = (len(arr) + i) % 7
+                w = wmeans_mean.get(dow, recent_mean)
+                v = 0.7 * float(m) + 0.3 * float(w)
                 blended.append(round(max(0.0, min(24.0, v)), 1))
             return blended
 
         return [round(float(x), 1) for x in preds]
     except Exception:
-        # Final conservative fallback
-        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+        # fallback to simple linear extrapolation on last few points
+        try:
+            from sklearn.linear_model import LinearRegression
+            idx = np.arange(len(arr)).reshape(-1, 1)
+            lr = LinearRegression()
+            lr.fit(idx, arr)
+            future_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
+            out = lr.predict(future_idx).tolist()
+            return [round(max(0.0, min(24.0, float(x))), 1) for x in out]
+        except Exception:
+            return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
 
 # Force-train endpoint (useful in dev)
 @app.route("/train", methods=["POST"])
@@ -1620,3 +1490,40 @@ def add_behavior_log_and_retrain(pet_id, log_data, future_days=7):
         for i in range(1, future_days + 1):
             future_date = last_date + timedelta(days=i)
             analyze_pet_df(pet_id, train_df_for_future, prediction_date=future_date.isoformat(), store=True)
+
+
+if __name__ == "__main__":
+    # Run a one-time migration at startup (safe and idempotent)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", type=str, default=None,
+                        help="Optional task to run directly: daily_analysis | migrate | backfill_sleep | migrate_legacy_sleep_forecasts")
+    args = parser.parse_args()
+
+    # If invoked with --task, run that task directly (useful for subprocess workers)
+    if args.task:
+        task = args.task.lower()
+        if task == "daily_analysis":
+            daily_analysis_job()
+        elif task in ("migrate", "migrate_behavior_logs_to_predictions"):
+            migrate_behavior_logs_to_predictions()
+        elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
+            backfill_future_sleep_forecasts()
+        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
+            migrate_legacy_sleep_forecasts()
+        else:
+            print(f"Unknown task: {args.task}")
+        sys.exit(0)
+
+    # Otherwise run startup migration once and start the webserver with scheduler
+    try:
+        migrate_behavior_logs_to_predictions()
+    except Exception as e:
+        print(f"Startup migration error: {e}")
+
+    # Start the lightweight scheduler that enqueues heavy jobs as subprocesses
+    try:
+        start_scheduler()
+    except Exception as e:
+        print(f"Failed to start scheduler: {e}")
+
+    app.run(host="0.0.0.0", port=BACKEND_PORT)
