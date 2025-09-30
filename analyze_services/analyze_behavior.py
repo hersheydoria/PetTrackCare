@@ -1192,81 +1192,94 @@ def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.j
         return "low"
 
 def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    arr = np.array(sleep_series).astype(float)
-    if len(arr) < 3:
-        # Use linear regression with variation and weekly pattern
-        lr = LinearRegression()
-        idx = np.arange(len(arr)).reshape(-1, 1)
-        lr.fit(idx, arr)
-        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
-        base_predictions = lr.predict(next_idx).clip(0, 24)
-        np.random.seed(42)
-        variation = np.random.normal(0, 0.3, days_ahead)
-        weekly_pattern = []
-        for i in range(days_ahead):
-            day_of_week = (len(arr) + i) % 7
-            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
-        enhanced_predictions = base_predictions + variation + weekly_pattern
-        return enhanced_predictions.clip(0, 24).tolist()
+    # Robustified predictor that avoids returning flat/linear forecasts when data is sparse
+    arr = np.array(sleep_series).astype(float) if (sleep_series is not None and len(sleep_series) > 0) else np.array([])
+    days_ahead = int(days_ahead or 7)
 
+    # Empty input -> sensible default
+    if arr.size == 0:
+        return [8.0 for _ in range(days_ahead)]
+
+    # Useful statistics
+    recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 8.0
+    recent_std = float(np.std(arr[-7:])) if arr.size >= 2 else 0.5
+    last_delta = float(arr[-1] - arr[-2]) if arr.size >= 2 else 0.0
+
+    rng = np.random.default_rng(42)
+
+    # Heuristic fallback generator (momentum + weekly pattern + jitter)
+    def heuristic_preds(base_mean, delta, start_index, n):
+        out = []
+        for i in range(n):
+            base = base_mean + delta * (i + 1) * 0.15
+            day_of_week = (start_index + i) % 7
+            weekly = 0.3 if day_of_week in (5, 6) else -0.1
+            noise = float(rng.normal(0, max(0.15, recent_std * 0.2)))
+            p = base + weekly + noise
+            out.append(max(0.0, min(24.0, round(p, 1))))
+        return out
+
+    # Very small history: use heuristic only (no model fitting)
+    if arr.size < 3:
+        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+
+    # Build sliding-window training data (window=7)
     window = 7
     X, y = [], []
-    for i in range(len(arr) - window):
+    for i in range(max(0, len(arr) - window)):
         X.append(arr[i:i + window])
         y.append(arr[i + window])
 
+    # If insufficient windowed samples, fall back to heuristic
     if len(X) < 2:
-        # Always use linear regression fallback with variation and weekly pattern
-        lr = LinearRegression()
-        idx = np.arange(len(arr)).reshape(-1, 1)
-        lr.fit(idx, arr)
-        next_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
-        base_predictions = lr.predict(next_idx).clip(0, 24)
-        np.random.seed(42)
-        variation = np.random.normal(0, 0.3, days_ahead)
-        weekly_pattern = []
-        for i in range(days_ahead):
-            day_of_week = (len(arr) + i) % 7
-            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
-        enhanced_predictions = base_predictions + variation + weekly_pattern
-        return enhanced_predictions.clip(0, 24).tolist()
+        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
 
     X, y = np.array(X), np.array(y)
 
-    if os.path.exists(model_path):
-        model = tf.keras.models.load_model(model_path)
-    else:
-        model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(X.shape[1],)),
-            tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.Dropout(0.2),
-            tf.keras.layers.Dense(16, activation='relu'),
-            tf.keras.layers.Dense(1)
-        ])
-        model.compile(optimizer='adam', loss='mse')
+    # Train or load a small Keras model for sequence prediction
+    try:
+        if os.path.exists(model_path):
+            model = tf.keras.models.load_model(model_path)
+        else:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Input(shape=(X.shape[1],)),
+                tf.keras.layers.Dense(32, activation='relu'),
+                tf.keras.layers.Dropout(0.15),
+                tf.keras.layers.Dense(16, activation='relu'),
+                tf.keras.layers.Dense(1)
+            ])
+            model.compile(optimizer='adam', loss='mse')
 
-    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
-    model.save(model_path)
+        # Train briefly (keeps runtime bounded) and persist
+        model.fit(X, y, epochs=30, batch_size=8, verbose=0)
+        try:
+            model.save(model_path)
+        except Exception:
+            # non-fatal if save fails in restricted environments
+            pass
 
-    preds, last_window = [], arr[-window:].copy()
-    for _ in range(days_ahead):
-        p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
-        p = max(0.0, min(24.0, p))
-        preds.append(p)
-        last_window = np.concatenate([last_window[1:], [p]])
+        preds, last_window = [], arr[-window:].copy()
+        for _ in range(days_ahead):
+            p = float(model.predict(last_window.reshape(1, -1), verbose=0)[0, 0])
+            p = max(0.0, min(24.0, p))
+            preds.append(p)
+            last_window = np.concatenate([last_window[1:], [p]])
 
-    # Add small realistic variation and weekly pattern if output is flat
-    rounded_preds = [round(p, 1) for p in preds]
-    if len(set(rounded_preds)) == 1:
-        np.random.seed(42)
-        variation = np.random.normal(0, 0.3, days_ahead)
-        weekly_pattern = []
-        for i in range(days_ahead):
-            day_of_week = (len(arr) + i) % 7
-            weekly_pattern.append(0.2 if day_of_week in [5, 6] else -0.1)
-        preds = [max(0.0, min(24.0, p + v + w)) for p, v, w in zip(preds, variation, weekly_pattern)]
+        # If model outputs are suspiciously flat, blend with heuristic to add realistic variation
+        rounded = [round(float(x), 1) for x in preds]
+        if np.std(rounded) < 0.25 or len(set(rounded)) == 1:
+            alt = heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
+            blended = []
+            for m, a in zip(preds, alt):
+                # blend model and heuristic (favor model but add diversity)
+                v = 0.7 * float(m) + 0.3 * float(a)
+                blended.append(round(max(0.0, min(24.0, v)), 1))
+            return blended
 
-    return preds
+        return [round(float(x), 1) for x in preds]
+    except Exception:
+        # Final conservative fallback
+        return heuristic_preds(recent_mean, last_delta, len(arr), days_ahead)
 
 # Force-train endpoint (useful in dev)
 @app.route("/train", methods=["POST"])
