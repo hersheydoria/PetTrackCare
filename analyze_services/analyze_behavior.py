@@ -968,6 +968,118 @@ def public_pet_page(pet_id):
 def public_pet_page_alias(pet_id):
     return public_pet_page(pet_id)
 
+
+@app.route("/pet/<pet_id>/7day-health", methods=["GET"])
+def seven_day_health_endpoint(pet_id):
+    """Return a compact 7-day health forecast for a pet.
+
+    Response: { pet_id, seven_day_forecast: [ { date, risk_level, prediction_text, suggestions, sleep_forecast } ] }
+    Prefers stored prediction rows; if missing for a date, computes a safe on-the-fly prediction
+    using logs up to the latest available log_date (avoids data leakage).
+    """
+    try:
+        today = datetime.utcnow().date()
+        # fetch recent logs once
+        df = fetch_logs_df(pet_id, limit=10000)
+        if not df.empty:
+            # normalize
+            df['log_date'] = pd.to_datetime(df['log_date'])
+            last_date = max(df['log_date']).date()
+        else:
+            last_date = None
+
+        forecast_list = []
+        for i in range(1, 8):
+            target_date = today + timedelta(days=i)
+            # Try DB first
+            try:
+                presp = supabase.table("predictions").select(
+                    "prediction_date, prediction_text, risk_level, suggestions, sleep_forecast"
+                ).eq("pet_id", pet_id).eq("prediction_date", target_date.isoformat()).limit(1).execute()
+                prows = presp.data or []
+            except Exception:
+                prows = []
+
+            if prows:
+                row = prows[0]
+                pred_text = row.get("prediction_text") or ""
+                risk = row.get("risk_level") or None
+                suggestions = row.get("suggestions") or ""
+                sf = row.get("sleep_forecast")
+                # normalize sleep_forecast to list of floats
+                sleep_list = []
+                if sf is not None:
+                    if isinstance(sf, str):
+                        try:
+                            sleep_list = json.loads(sf)
+                        except Exception:
+                            try:
+                                sleep_list = [float(sf)]
+                            except Exception:
+                                sleep_list = []
+                    elif isinstance(sf, (list, tuple)):
+                        sleep_list = list(sf)
+                    else:
+                        try:
+                            sleep_list = [float(sf)]
+                        except Exception:
+                            sleep_list = []
+                forecast_list.append({
+                    "date": target_date.isoformat(),
+                    "risk_level": (str(risk).lower() if risk else None),
+                    "prediction_text": pred_text,
+                    "suggestions": suggestions,
+                    "sleep_forecast": [float(x) for x in sleep_list] if sleep_list else []
+                })
+                continue
+
+            # If no DB row, compute safely using logs up to last_date
+            if last_date is None:
+                # no logs -> defaults
+                trend = "No data available."
+                suggestions = ""
+                risk_level = "low"
+                sleep_forecast = predict_future_sleep([], days_ahead=7)
+            else:
+                train_df = df[df['log_date'] <= pd.to_datetime(last_date)].copy()
+                # analyze_pet_df returns summary but by default stores — use store=False
+                try:
+                    res = analyze_pet_df(pet_id, train_df, prediction_date=target_date.isoformat(), store=False)
+                    trend = res.get("trend") or ""
+                    suggestions = res.get("recommendation") or ""
+                except Exception:
+                    trend = ""
+                    suggestions = ""
+
+                # contextual risk + ML risk blended
+                try:
+                    contextual = compute_contextual_risk(train_df)
+                except Exception:
+                    contextual = "low"
+                try:
+                    # ML risk from latest log in train_df
+                    if not train_df.empty:
+                        latest = train_df.sort_values("log_date", ascending=False).iloc[0]
+                        ml_risk = predict_illness_risk(latest.get("mood", ""), latest.get("sleep_hours", 0), latest.get("activity_level", ""))
+                    else:
+                        ml_risk = None
+                except Exception:
+                    ml_risk = None
+                risk_level = blend_illness_risk(ml_risk, contextual)
+                sleep_forecast = predict_future_sleep(train_df['sleep_hours'].tolist() if not train_df.empty else [], days_ahead=7)
+
+            forecast_list.append({
+                "date": target_date.isoformat(),
+                "risk_level": (str(risk_level).lower() if risk_level else None),
+                "prediction_text": trend,
+                "suggestions": suggestions,
+                "sleep_forecast": [float(x) for x in (sleep_forecast or [])]
+            })
+
+        return jsonify({"pet_id": pet_id, "seven_day_forecast": forecast_list})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/", methods=["GET", "HEAD"])
 def root():
     return "PetTrackCare API is running.", 200
