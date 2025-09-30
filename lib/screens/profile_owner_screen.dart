@@ -4563,25 +4563,53 @@ class _AddPetFormState extends State<_AddPetForm> {
             initialValue: name,
             onSaved: (val) => name = val ?? '',
           ),
-         // Breed dropdown moved to after Name
-         Padding(
-           padding: const EdgeInsets.symmetric(vertical: 8),
+         // Breed dropdown with uniform styling
+         Container(
+           decoration: BoxDecoration(
+             color: Colors.white,
+             borderRadius: BorderRadius.circular(16),
+             border: Border.all(color: coral.withOpacity(0.3)),
+             boxShadow: [
+               BoxShadow(
+                 color: Colors.black.withOpacity(0.05),
+                 blurRadius: 10,
+                 offset: Offset(0, 2),
+               ),
+             ],
+           ),
+           margin: EdgeInsets.only(bottom: 16),
            child: DropdownButtonFormField<String>(
              value: (_species == 'Dog' ? (dogBreeds.contains(breed) ? breed : dogBreeds.first) : (catBreeds.contains(breed) ? breed : catBreeds.first)),
              decoration: InputDecoration(
                labelText: "Breed",
-               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+               labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+               border: InputBorder.none,
+               contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+               prefixIcon: _getFieldIcon("Breed"),
              ),
+             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black),
              items: (_species == 'Dog' ? dogBreeds : catBreeds).map((b) {
-               return DropdownMenuItem(value: b, child: Text(b));
+               return DropdownMenuItem(value: b, child: Text(b, style: TextStyle(color: Colors.black)));
              }).toList(),
              onChanged: (val) => setState(() => breed = val ?? ''),
              onSaved: (val) => breed = val ?? '',
            ),
          ),
-          // Date of Birth picker
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+          // Date of Birth picker with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
             child: InkWell(
               onTap: () async {
                 final DateTime? picked = await showDatePicker(
@@ -4612,16 +4640,12 @@ class _AddPetFormState extends State<_AddPetForm> {
                   });
                 }
               },
-              child: Container(
-                padding: EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade400),
-                  borderRadius: BorderRadius.circular(12),
-                ),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Row(
                   children: [
                     Icon(Icons.calendar_today, color: deepRed),
-                    SizedBox(width: 12),
+                    SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4630,7 +4654,7 @@ class _AddPetFormState extends State<_AddPetForm> {
                             "Date of Birth",
                             style: TextStyle(
                               fontSize: 12,
-                              color: Colors.grey.shade600,
+                              color: deepRed,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -4641,7 +4665,8 @@ class _AddPetFormState extends State<_AddPetForm> {
                                 : 'Select date of birth',
                             style: TextStyle(
                               fontSize: 16,
-                              color: dateOfBirth != null ? Colors.black : Colors.grey.shade500,
+                              fontWeight: FontWeight.w500,
+                              color: dateOfBirth != null ? Colors.black87 : Colors.grey.shade500,
                             ),
                           ),
                           if (dateOfBirth != null) ...[
@@ -4658,38 +4683,75 @@ class _AddPetFormState extends State<_AddPetForm> {
                         ],
                       ),
                     ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: deepRed,
+                      size: 24,
+                    ),
                   ],
                 ),
               ),
             ),
           ),
-          // Gender dropdown moved under Age
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+          // Gender dropdown with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
             child: DropdownButtonFormField<String>(
               value: gender.isNotEmpty ? gender : 'Male',
               decoration: InputDecoration(
                 labelText: "Gender",
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                prefixIcon: _getFieldIcon("Gender"),
               ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black),
               items: ['Male', 'Female', 'Unknown'].map((g) {
-                return DropdownMenuItem(value: g, child: Text(g));
+                return DropdownMenuItem(value: g, child: Text(g, style: TextStyle(color: Colors.black)));
               }).toList(),
               onChanged: (val) => setState(() => gender = val ?? 'Male'),
               onSaved: (val) => gender = val ?? 'Male',
             ),
           ),
-          // replace free-text health field with dropdown
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+          // Health dropdown with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
             child: DropdownButtonFormField<String>(
               value: (health.isNotEmpty ? health : 'Good'),
               decoration: InputDecoration(
                 labelText: "Health",
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                prefixIcon: _getFieldIcon("Health"),
               ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black),
               items: ['Good', 'Bad'].map((h) {
-                return DropdownMenuItem(value: h, child: Text(h));
+                return DropdownMenuItem(value: h, child: Text(h, style: TextStyle(color: Colors.black)));
               }).toList(),
               onChanged: (val) => setState(() => health = val ?? 'Good'),
               onSaved: (val) => health = val ?? 'Good',
@@ -4760,7 +4822,7 @@ class _AddPetFormState extends State<_AddPetForm> {
           contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           prefixIcon: _getFieldIcon(label),
         ),
-        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black87),
         validator: (value) =>
             (value == null || value.isEmpty) ? 'Required' : null,
         onSaved: onSaved,
@@ -4798,14 +4860,14 @@ class _AddPetFormState extends State<_AddPetForm> {
           children: [
             Icon(
               icon,
-              color: isSelected ? Colors.white : deepRed,
+              color: isSelected ? Colors.black87 : deepRed,
               size: 18,
             ),
             SizedBox(width: 8),
             Text(
               species,
               style: TextStyle(
-                color: isSelected ? Colors.white : deepRed,
+                color: isSelected ? Colors.black87 : deepRed,
                 fontWeight: FontWeight.w600,
                 fontSize: 14,
               ),
@@ -4823,11 +4885,14 @@ class _AddPetFormState extends State<_AddPetForm> {
       case 'breed':
         return Icon(Icons.category, color: deepRed);
       case 'age':
-        return Icon(Icons.cake, color: deepRed);
+      case 'date of birth':
+        return Icon(Icons.calendar_today, color: deepRed);
       case 'weight':
         return Icon(Icons.monitor_weight, color: deepRed);
       case 'health':
         return Icon(Icons.health_and_safety, color: deepRed);
+      case 'gender':
+        return Icon(Icons.person, color: deepRed);
       default:
         return Icon(Icons.info, color: deepRed);
     }
