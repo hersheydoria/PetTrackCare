@@ -2320,18 +2320,96 @@ void _disconnectDevice() async {
             margin: EdgeInsets.only(right: 8),
             child: PopupMenuButton<Map<String, dynamic>>(
               icon: Container(
-                padding: EdgeInsets.all(8),
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  Icons.more_vert,
-                  color: Colors.white,
-                  size: 20,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Show selected pet's avatar
+                    if (_selectedPet != null) ...[
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                        child: ClipOval(
+                          child: _selectedPet!['profile_picture'] != null && _selectedPet!['profile_picture'].isNotEmpty
+                              ? Image.network(
+                                  _selectedPet!['profile_picture'],
+                                  fit: BoxFit.cover,
+                                  width: 24,
+                                  height: 24,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: LinearGradient(
+                                          colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                                        ),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          (_selectedPet!['name'] ?? 'U')[0].toUpperCase(),
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                )
+                              : Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: LinearGradient(
+                                      colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      (_selectedPet!['name'] ?? 'U')[0].toUpperCase(),
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      // Show selected pet's name
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: 100),
+                        child: Text(
+                          _selectedPet!['name'] ?? 'Unnamed',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                    ],
+                    Icon(
+                      Icons.keyboard_arrow_down,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ],
                 ),
               ),
-              tooltip: 'Select Pet',
+              tooltip: _selectedPet != null ? 'Switch Pet (${_selectedPet!['name']})' : 'Select Pet',
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -2382,79 +2460,214 @@ void _disconnectDevice() async {
                 _fetchPetDataInBackground(petId);
               },
               itemBuilder: (context) {
-                return _pets.map((pet) {
+                List<PopupMenuEntry<Map<String, dynamic>>> items = [];
+                
+                // Add header
+                items.add(
+                  PopupMenuItem(
+                    enabled: false,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.pets, color: coral, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Choose Pet Profile',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: deepRed,
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Select which pet profile to view and manage',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Divider(height: 1, color: Colors.grey.shade300),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                
+                // Add pet items
+                items.addAll(_pets.map((pet) {
                   final isSelected = pet == _selectedPet;
                   return PopupMenuItem(
                     value: pet,
                     child: Container(
-                      padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                      margin: EdgeInsets.symmetric(vertical: 4),
+                      padding: EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: isSelected ? lightBlush : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
+                        color: isSelected ? lightBlush : Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected ? coral : Colors.grey.shade300,
+                          width: isSelected ? 2 : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
                       child: Row(
                         children: [
+                          // Enhanced pet profile picture or avatar
                           Container(
-                            width: 32,
-                            height: 32,
+                            width: 50,
+                            height: 50,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: isSelected
-                                    ? [coral.withOpacity(0.8), peach.withOpacity(0.8)]
-                                    : [Colors.grey.shade400, Colors.grey.shade500],
+                              border: Border.all(
+                                color: isSelected ? coral : Colors.grey.shade300,
+                                width: 2,
                               ),
                             ),
-                            child: Center(
-                              child: Text(
-                                (pet['name'] ?? 'U')[0].toUpperCase(),
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
+                            child: ClipOval(
+                              child: pet['profile_picture'] != null && pet['profile_picture'].isNotEmpty
+                                  ? Image.network(
+                                      pet['profile_picture'],
+                                      fit: BoxFit.cover,
+                                      width: 50,
+                                      height: 50,
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return _buildPetAvatar(pet, isSelected);
+                                      },
+                                    )
+                                  : _buildPetAvatar(pet, isSelected),
                             ),
                           ),
                           SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
+                                // Pet name
                                 Text(
                                   pet['name'] ?? 'Unnamed',
                                   style: TextStyle(
-                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                                    fontWeight: FontWeight.bold,
                                     color: isSelected ? deepRed : Colors.grey.shade800,
-                                    fontSize: 15,
+                                    fontSize: 16,
                                   ),
                                 ),
-                                if (pet['breed'] != null) ...[
-                                  SizedBox(height: 2),
-                                  Text(
-                                    pet['breed'],
-                                    style: TextStyle(
-                                      fontSize: 12,
+                                SizedBox(height: 4),
+                                // Pet details row
+                                Row(
+                                  children: [
+                                    // Breed and age
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          if (pet['breed'] != null)
+                                            Text(
+                                              pet['breed'],
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: coral,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          if (pet['age'] != null)
+                                            Text(
+                                              '${pet['age']} ${pet['age'] == 1 ? 'year' : 'years'} old',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey.shade600,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    // Health status indicator
+                                    Container(
+                                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: _getHealthStatusColor(pet['health'] ?? 'Good').withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        pet['health'] ?? 'Good',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: _getHealthStatusColor(pet['health'] ?? 'Good'),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                // Pet type and gender
+                                SizedBox(height: 2),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      _getPetTypeIcon(pet['type'] ?? 'Dog'),
+                                      size: 14,
                                       color: Colors.grey.shade600,
                                     ),
-                                  ),
-                                ],
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '${pet['type'] ?? 'Dog'} • ${pet['gender'] ?? 'Unknown'}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                    if (pet['weight'] != null) ...[
+                                      Text(
+                                        ' • ${pet['weight']}kg',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ],
                             ),
                           ),
+                          // Selection indicator
                           if (isSelected)
-                            Icon(
-                              Icons.check_circle,
-                              color: coral,
-                              size: 16,
+                            Container(
+                              padding: EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: coral,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 16,
+                              ),
                             ),
                         ],
                       ),
                     ),
                   );
-                }).toList();
+                }).toList());
+                
+                return items;
               },
             ),
           ),
@@ -6865,7 +7078,7 @@ void _disconnectDevice() async {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.directions_run, color: Colors.green.shade700, size: 20),
+                      Icon(Icons.pets, color: Colors.green.shade700, size: 20),
                       SizedBox(width: 8),
                       Text(
                         "Activity Distribution",
@@ -7897,6 +8110,66 @@ void _disconnectDevice() async {
         ],
       ),
     );
+  }
+
+  // Helper method to build pet avatar
+  Widget _buildPetAvatar(Map<String, dynamic> pet, bool isSelected) {
+    return Container(
+      width: 50,
+      height: 50,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isSelected
+              ? [coral.withOpacity(0.8), peach.withOpacity(0.8)]
+              : [Colors.grey.shade300, Colors.grey.shade400],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          (pet['name'] ?? 'U')[0].toUpperCase(),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper method to get health status color
+  Color _getHealthStatusColor(String health) {
+    switch (health.toLowerCase()) {
+      case 'excellent':
+        return Colors.green;
+      case 'good':
+        return Colors.blue;
+      case 'fair':
+        return Colors.orange;
+      case 'poor':
+        return Colors.red;
+      default:
+        return Colors.blue;
+    }
+  }
+
+  // Helper method to get pet type icon
+  IconData _getPetTypeIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'dog':
+        return Icons.pets;
+      case 'cat':
+        return Icons.pets;
+      case 'bird':
+        return Icons.flutter_dash;
+      case 'rabbit':
+        return Icons.cruelty_free;
+      default:
+        return Icons.pets;
+    }
   }
 
   // Helper method for stat cards

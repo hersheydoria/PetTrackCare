@@ -3853,7 +3853,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           SizedBox(width: 12),
           Expanded(
             child: _buildStatCard(
-              icon: Icons.check_circle,
+              icon: Icons.task_alt,
               label: 'Completed',
               value: '$completedJobsCount',
               color: Colors.green[600]!,
@@ -4200,7 +4200,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     flex: 2,
                     child: ElevatedButton.icon(
                       onPressed: () => _updateJobStatus(jobId, 'Active'),
-                      icon: Icon(Icons.check_circle, size: 18),
+                      icon: Icon(Icons.task_alt, size: 18),
                       label: Text('Accept', style: TextStyle(fontFamily: 'Roboto')),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green[600],
@@ -4773,7 +4773,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               // Completed jobs count
               Expanded(
                 child: _buildJobStatCard(
-                  icon: Icons.check_circle,
+                  icon: Icons.task_alt,
                   title: 'Completed',
                   value: completedJobsCount.toString(),
                   subtitle: completedJobsCount == 1 ? 'Job' : 'Jobs',
