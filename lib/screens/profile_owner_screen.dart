@@ -3687,7 +3687,7 @@ class _AddPetFormState extends State<_AddPetForm> {
   int age = 0;
   DateTime? dateOfBirth;
   String health = 'Good'; // Default to Good 
-  String gender = 'Male'; // added gender state
+  String? gender; // added gender state - null to force selection
   double weight = 0.0;
   File? _petImage;
   bool _isLoading = false;
@@ -3800,10 +3800,9 @@ class _AddPetFormState extends State<_AddPetForm> {
       weight = (p['weight'] is num) ? (p['weight'] as num).toDouble() : double.tryParse(p['weight']?.toString() ?? '') ?? 0.0;
       _species = (p['type'] ?? p['species'] ?? 'Dog').toString();
     } else {
-      // default breed selection
-      breed = dogBreeds.first;
+      // no default breed selection - user must choose
       health = 'Good'; // default health for new pets
-      gender = 'Male';
+      // no default gender - user must choose
     }
   }
 
@@ -4188,6 +4187,273 @@ class _AddPetFormState extends State<_AddPetForm> {
     );
   }
 
+  // Show breed picker dialog
+  void _showBreedPicker() {
+    final breeds = _species == 'Dog' ? dogBreeds : catBreeds;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.category,
+                        color: coral,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Select Breed',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          Text(
+                            'Choose your ${_species.toLowerCase()}\'s breed',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Breed list
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: breeds.length,
+                  itemBuilder: (context, index) {
+                    final breedOption = breeds[index];
+                    final isSelected = breed == breedOption;
+                    return InkWell(
+                      onTap: () {
+                        setState(() {
+                          breed = breedOption;
+                        });
+                        Navigator.pop(context);
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: EdgeInsets.all(16),
+                        margin: EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: isSelected ? coral.withOpacity(0.1) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? coral : Colors.grey.shade200,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                breedOption,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                  color: isSelected ? deepRed : Colors.black87,
+                                ),
+                              ),
+                            ),
+                            if (isSelected)
+                              Icon(
+                                Icons.check_circle,
+                                color: coral,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Show gender picker dialog
+  void _showGenderPicker() {
+    final genders = ['Male', 'Female', 'Unknown'];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.person,
+                        color: coral,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Select Gender',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          Text(
+                            'Choose your pet\'s gender',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Gender list
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: genders.map((genderOption) {
+                    final isSelected = gender == genderOption;
+                    return InkWell(
+                      onTap: () {
+                        setState(() {
+                          gender = genderOption;
+                        });
+                        Navigator.pop(context);
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: EdgeInsets.all(16),
+                        margin: EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: isSelected ? coral.withOpacity(0.1) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? coral : Colors.grey.shade200,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                genderOption,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                  color: isSelected ? deepRed : Colors.black87,
+                                ),
+                              ),
+                            ),
+                            if (isSelected)
+                              Icon(
+                                Icons.check_circle,
+                                color: coral,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<String?> _uploadPetImage(String userId) async {
     if (_petImage == null) return null;
 
@@ -4214,6 +4480,40 @@ class _AddPetFormState extends State<_AddPetForm> {
   void _submit() async {
   if (!_formKey.currentState!.validate()) return;
   _formKey.currentState!.save();
+
+  // Additional validation for required selections
+  if (breed.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a breed'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
+
+  if (gender == null || gender!.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a gender'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
+
+  if (dateOfBirth == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a date of birth'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
 
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return;
@@ -4247,7 +4547,7 @@ class _AddPetFormState extends State<_AddPetForm> {
         'age': age, // Keep for backward compatibility
         'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
-        'gender': gender,
+        'gender': gender!,
         'weight': weight,
         'type': _species,
         if (imageUrl != null) 'profile_picture': imageUrl,
@@ -4259,7 +4559,7 @@ class _AddPetFormState extends State<_AddPetForm> {
         'age': age, // Keep for backward compatibility
         'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
-        'gender': gender,
+        'gender': gender!,
         'weight': weight,
         'owner_id': userId,
         'type': _species, // store species/type
@@ -4563,38 +4863,65 @@ class _AddPetFormState extends State<_AddPetForm> {
             initialValue: name,
             onSaved: (val) => name = val ?? '',
           ),
-         // Breed dropdown with uniform styling
-         Container(
-           decoration: BoxDecoration(
-             color: Colors.white,
-             borderRadius: BorderRadius.circular(16),
-             border: Border.all(color: coral.withOpacity(0.3)),
-             boxShadow: [
-               BoxShadow(
-                 color: Colors.black.withOpacity(0.05),
-                 blurRadius: 10,
-                 offset: Offset(0, 2),
-               ),
-             ],
-           ),
-           margin: EdgeInsets.only(bottom: 16),
-           child: DropdownButtonFormField<String>(
-             value: (_species == 'Dog' ? (dogBreeds.contains(breed) ? breed : dogBreeds.first) : (catBreeds.contains(breed) ? breed : catBreeds.first)),
-             decoration: InputDecoration(
-               labelText: "Breed",
-               labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
-               border: InputBorder.none,
-               contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-               prefixIcon: _getFieldIcon("Breed"),
-             ),
-             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black),
-             items: (_species == 'Dog' ? dogBreeds : catBreeds).map((b) {
-               return DropdownMenuItem(value: b, child: Text(b, style: TextStyle(color: Colors.black)));
-             }).toList(),
-             onChanged: (val) => setState(() => breed = val ?? ''),
-             onSaved: (val) => breed = val ?? '',
-           ),
-         ),
+          // Breed picker with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
+            child: InkWell(
+              onTap: () => _showBreedPicker(),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  children: [
+                    Icon(Icons.category, color: deepRed),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Breed",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            breed.isNotEmpty 
+                                ? breed
+                                : 'Select breed',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: breed.isNotEmpty ? Colors.black87 : Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: deepRed,
+                      size: 24,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
           // Date of Birth picker with uniform styling
           Container(
             decoration: BoxDecoration(
@@ -4693,7 +5020,7 @@ class _AddPetFormState extends State<_AddPetForm> {
               ),
             ),
           ),
-          // Gender dropdown with uniform styling
+          // Gender picker with uniform styling
           Container(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -4708,21 +5035,48 @@ class _AddPetFormState extends State<_AddPetForm> {
               ],
             ),
             margin: EdgeInsets.only(bottom: 16),
-            child: DropdownButtonFormField<String>(
-              value: gender.isNotEmpty ? gender : 'Male',
-              decoration: InputDecoration(
-                labelText: "Gender",
-                labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                prefixIcon: _getFieldIcon("Gender"),
+            child: InkWell(
+              onTap: () => _showGenderPicker(),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  children: [
+                    Icon(Icons.person, color: deepRed),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Gender",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            gender != null 
+                                ? gender!
+                                : 'Select gender',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: gender != null ? Colors.black87 : Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: deepRed,
+                      size: 24,
+                    ),
+                  ],
+                ),
               ),
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black),
-              items: ['Male', 'Female', 'Unknown'].map((g) {
-                return DropdownMenuItem(value: g, child: Text(g, style: TextStyle(color: Colors.black)));
-              }).toList(),
-              onChanged: (val) => setState(() => gender = val ?? 'Male'),
-              onSaved: (val) => gender = val ?? 'Male',
             ),
           ),
           // Health display field (non-interactive, default to Good)
@@ -4851,11 +5205,11 @@ class _AddPetFormState extends State<_AddPetForm> {
     return InkWell(
       onTap: () => setState(() {
         _species = species;
-        // ensure breed matches selected species
+        // reset breed when switching species so user must select again
         if (species == 'Dog' && !dogBreeds.contains(breed)) {
-          breed = dogBreeds.first;
+          breed = '';
         } else if (species == 'Cat' && !catBreeds.contains(breed)) {
-          breed = catBreeds.first;
+          breed = '';
         }
       }),
       borderRadius: BorderRadius.circular(12),
