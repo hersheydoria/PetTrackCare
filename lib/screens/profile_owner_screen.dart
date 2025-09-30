@@ -3686,7 +3686,7 @@ class _AddPetFormState extends State<_AddPetForm> {
   String breed = '';
   int age = 0;
   DateTime? dateOfBirth;
-  String health = '';
+  String health = 'Good'; // Default to Good 
   String gender = 'Male'; // added gender state
   double weight = 0.0;
   File? _petImage;
@@ -4218,17 +4218,17 @@ class _AddPetFormState extends State<_AddPetForm> {
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return;
 
-  // enforce 5-pet limit server-side check
+  // enforce 3-pet limit server-side check
   final existing = await Supabase.instance.client
       .from('pets')
       .select('id')
       .eq('owner_id', userId);
   final currentCount = (existing as List?)?.length ?? 0;
-  // if creating and already 5, block (if editing allow)
+  // if creating and already 3, block (if editing allow)
   final isEditing = widget.initialPet != null;
-  if (!isEditing && currentCount >= 5) {
+  if (!isEditing && currentCount >= 3) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Pet limit reached (5). Cannot add more.')),
+      SnackBar(content: Text('Pet limit reached (3). Cannot add more.')),
     );
     return;
   }
@@ -4725,7 +4725,7 @@ class _AddPetFormState extends State<_AddPetForm> {
               onSaved: (val) => gender = val ?? 'Male',
             ),
           ),
-          // Health dropdown with uniform styling
+          // Health display field (non-interactive, default to Good)
           Container(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -4740,22 +4740,38 @@ class _AddPetFormState extends State<_AddPetForm> {
               ],
             ),
             margin: EdgeInsets.only(bottom: 16),
-            child: DropdownButtonFormField<String>(
-              value: (health.isNotEmpty ? health : 'Good'),
-              decoration: InputDecoration(
-                labelText: "Health",
-                labelStyle: TextStyle(color: deepRed, fontWeight: FontWeight.w500),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                prefixIcon: _getFieldIcon("Health"),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.health_and_safety, color: deepRed),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Health",
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: deepRed,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          "Good",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black),
-              items: ['Good', 'Bad'].map((h) {
-                return DropdownMenuItem(value: h, child: Text(h, style: TextStyle(color: Colors.black)));
-              }).toList(),
-              onChanged: (val) => setState(() => health = val ?? 'Good'),
-              onSaved: (val) => health = val ?? 'Good',
-              validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
             ),
           ),
           _buildTextField(
