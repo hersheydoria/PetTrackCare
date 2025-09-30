@@ -1064,6 +1064,97 @@ def backfill_future_sleep_forecasts(days_ahead: int = 7):
     except Exception as e:
         print(f"Backfill error: {e}")
 
+
+def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 1000):
+    """Migrate legacy prediction rows that have missing or single-element
+    `sleep_forecast` values to a full `days_ahead`-length numeric forecast.
+
+    The migration is idempotent: rows already containing a list of length >=
+    `days_ahead` are skipped. For each candidate prediction we compute the
+    forecast using historical behavior_logs up to the prediction_date to avoid
+    data leakage, then update the prediction row's `sleep_forecast` field.
+    """
+    print(f"Starting migration of legacy sleep_forecast to {days_ahead}-day series...")
+    try:
+        resp = supabase.table("predictions").select("id, pet_id, prediction_date, sleep_forecast").limit(batch_limit).execute()
+        rows = resp.data or []
+        if not rows:
+            print("No prediction rows found to inspect.")
+            return
+
+        updated = 0
+        checked = 0
+        for row in rows:
+            checked += 1
+            try:
+                pred_id = row.get("id")
+                pet_id = row.get("pet_id")
+                pred_date_raw = row.get("prediction_date")
+                sf = row.get("sleep_forecast")
+
+                # Normalize prediction_date
+                if not pred_date_raw:
+                    # skip rows without a clear prediction date
+                    continue
+                try:
+                    pred_date = pd.to_datetime(pred_date_raw).date()
+                except Exception:
+                    continue
+
+                # Parse existing sleep_forecast
+                parsed = None
+                if sf is None:
+                    parsed = []
+                else:
+                    # It's commonly stored as a JSON string
+                    if isinstance(sf, str):
+                        try:
+                            parsed = json.loads(sf)
+                        except Exception:
+                            # maybe a numeric string
+                            try:
+                                parsed = [float(sf)]
+                            except Exception:
+                                parsed = []
+                    elif isinstance(sf, (list, tuple)):
+                        parsed = list(sf)
+                    else:
+                        # numeric or unknown
+                        try:
+                            parsed = [float(sf)]
+                        except Exception:
+                            parsed = []
+
+                # If already full-length, skip
+                if isinstance(parsed, list) and len(parsed) >= int(days_ahead):
+                    continue
+
+                # Build historical logs up to prediction_date to avoid leakage
+                logs_resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).lte("log_date", pred_date.isoformat()).order("log_date", desc=False).limit(10000).execute()
+                logs = logs_resp.data or []
+                df_logs = pd.DataFrame(logs) if logs else pd.DataFrame()
+                if not df_logs.empty:
+                    df_logs['log_date'] = pd.to_datetime(df_logs['log_date']).dt.date
+                    df_logs['sleep_hours'] = pd.to_numeric(df_logs.get('sleep_hours', 0), errors='coerce').fillna(0.0)
+                    sleep_series = df_logs['sleep_hours'].tolist()
+                else:
+                    sleep_series = []
+
+                # Compute forecast and update prediction row
+                forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
+                forecasts_json = json.dumps([float(x) for x in forecasts])
+                update_resp = supabase.table("predictions").update({"sleep_forecast": forecasts_json}).eq("id", pred_id).execute()
+                if getattr(update_resp, "error", None):
+                    print(f"Failed to update prediction id={pred_id} pet={pet_id}: {getattr(update_resp, 'error', '')}")
+                else:
+                    updated += 1
+            except Exception as e:
+                print(f"Error processing prediction row {row.get('id')}: {e}")
+
+        print(f"Migration complete. Checked {checked} rows, updated {updated} rows.")
+    except Exception as e:
+        print(f"Unexpected error during legacy sleep_forecast migration: {e}")
+
 if __name__ == "__main__":
     # Run a one-time migration at startup (safe and idempotent)
     parser = argparse.ArgumentParser()
@@ -1080,6 +1171,8 @@ if __name__ == "__main__":
             migrate_behavior_logs_to_predictions()
         elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
             backfill_future_sleep_forecasts()
+        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
+            migrate_legacy_sleep_forecasts()
         else:
             print(f"Unknown task: {args.task}")
         sys.exit(0)
