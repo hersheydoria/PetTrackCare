@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:PetTrackCare/screens/chat_detail_screen.dart';
 import 'package:PetTrackCare/services/notification_service.dart';
+import '../services/auto_migration_service.dart';
 
 const deepRed = Color(0xFFB82132);
 const coral = Color(0xFFD2665A);
@@ -53,6 +54,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // Search controller for location search
   final TextEditingController _locationSearchController = TextEditingController();
   String _currentSearchQuery = '';
+  
+  // Auto-migration service
+  final AutoMigrationService _autoMigrationService = AutoMigrationService();
 
   @override
   void initState() {
@@ -60,6 +64,51 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     fetchUserData();
     _loadJobs();
     _sitterTabController = TabController(length: 3, vsync: this);
+    
+    // Trigger auto-migration when HomeScreen loads
+    _runAutoMigrationInBackground();
+  }
+  
+  /// Run auto-migration in background without blocking the UI
+  void _runAutoMigrationInBackground() {
+    // Use multiple logging methods to ensure visibility
+    print('=== AUTO-MIGRATION TRIGGER FROM HOME_SCREEN ===');
+    debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM HomeScreen.initState()');
+    print('Timestamp: ${DateTime.now().toIso8601String()}');
+    print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
+    print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
+    
+    Future.microtask(() async {
+      try {
+        print('=== CHECKING MIGRATION CONDITIONS ===');
+        debugPrint('Starting auto-migration check...');
+        
+        final shouldRun = await _autoMigrationService.shouldRunMigration();
+        print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
+        debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
+        
+        if (shouldRun) {
+          print('=== STARTING MIGRATION PROCESS ===');
+          debugPrint('INITIATING BACKGROUND MIGRATION...');
+          await _autoMigrationService.runAutoMigration();
+          print('=== MIGRATION COMPLETED ===');
+          debugPrint('Background migration process completed');
+        } else {
+          print('=== MIGRATION SKIPPED ===');
+          debugPrint('Auto-migration skipped - conditions not met');
+          
+          // TEMPORARY: Force run for testing
+          print('=== FORCE RUNNING MIGRATION FOR TESTING ===');
+          await _autoMigrationService.forceRunMigration();
+          print('=== FORCE MIGRATION COMPLETED ===');
+        }
+      } catch (e) {
+        print('=== MIGRATION ERROR ===');
+        print('Error type: ${e.runtimeType}');
+        print('Error details: $e');
+        debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
+      }
+    });
   }
 
   Future<void> _loadJobs() async {
@@ -2786,7 +2835,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     return Container(
       width: 280, // Set fixed width for horizontal ListView
-      padding: EdgeInsets.all(20),
+      height: 200, // Set fixed height to prevent overflow
+      padding: EdgeInsets.all(16), // Reduced padding
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -2801,6 +2851,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min, // Use minimum space needed
         children: [
           // Header with rating and time
           Row(
@@ -2808,15 +2859,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             children: [
               Row(children: _buildRatingStars(ratingNum)),
               Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 decoration: BoxDecoration(
                   color: coral.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   timeAgo,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 10,
                     color: coral,
                     fontWeight: FontWeight.w500,
                     fontFamily: 'Roboto',
@@ -2825,30 +2876,36 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          SizedBox(height: 12),
+          SizedBox(height: 8),
           
           // Comment
           if (comment.isNotEmpty) ...[
-            Container(
-              // Remove width: double.infinity for horizontal ListView compatibility
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: lightBlush.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: peach.withOpacity(0.3)),
-              ),
-              child: Text(
-                '"$comment"',
-                style: TextStyle(
-                  fontStyle: FontStyle.italic,
-                  fontSize: 14,
-                  color: Colors.grey[700],
-                  fontFamily: 'Roboto',
-                  height: 1.4,
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: lightBlush.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: peach.withOpacity(0.3)),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    '"$comment"',
+                    style: TextStyle(
+                      fontStyle: FontStyle.italic,
+                      fontSize: 13,
+                      color: Colors.grey[700],
+                      fontFamily: 'Roboto',
+                      height: 1.3,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
             ),
-            SizedBox(height: 12),
+            SizedBox(height: 8),
           ],
           
           // Owner info with profile picture
@@ -2856,8 +2913,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             children: [
               // Profile picture or default avatar
               Container(
-                width: 32,
-                height: 32,
+                width: 28,
+                height: 28,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(color: coral.withOpacity(0.3)),
@@ -2866,8 +2923,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: reviewerProfilePicture != null && reviewerProfilePicture.isNotEmpty
                       ? Image.network(
                           reviewerProfilePicture,
-                          width: 32,
-                          height: 32,
+                          width: 28,
+                          height: 28,
                           fit: BoxFit.cover,
                           errorBuilder: (context, error, stackTrace) {
                             return Container(
@@ -2883,7 +2940,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 child: Text(
                                   reviewerName.isNotEmpty ? reviewerName[0].toUpperCase() : 'O',
                                   style: TextStyle(
-                                    fontSize: 14,
+                                    fontSize: 12,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white,
                                     fontFamily: 'Roboto',
@@ -2906,7 +2963,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             child: Text(
                               reviewerName.isNotEmpty ? reviewerName[0].toUpperCase() : 'O',
                               style: TextStyle(
-                                fontSize: 14,
+                                fontSize: 12,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white,
                                 fontFamily: 'Roboto',
@@ -2916,23 +2973,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ),
                 ),
               ),
-              SizedBox(width: 8),
+              SizedBox(width: 6),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       reviewerName,
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
+                        fontSize: 13,
                         color: deepRed,
                         fontFamily: 'Roboto',
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       'Pet Owner',
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
                         color: Colors.grey[600],
                         fontFamily: 'Roboto',
                       ),

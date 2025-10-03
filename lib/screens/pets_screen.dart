@@ -13,6 +13,7 @@ import 'package:latlong2/latlong.dart';
 import 'dart:async'; 
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
+import '../services/location_sync_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);

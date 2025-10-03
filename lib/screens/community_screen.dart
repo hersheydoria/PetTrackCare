@@ -1814,12 +1814,67 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     );
   }
 
+  // Mark missing pet as found
+  Future<void> markAsFound(BuildContext context, Map post) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Mark Pet as Found'),
+        content: Text('Mark this missing pet as found? This will update the post type and add a "Found" update to the caption.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Mark as Found')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final currentContent = post['content']?.toString() ?? '';
+      final foundTime = formatPhilippinesTime(DateTime.now().toUtc());
+      final updatedContent = '$currentContent\n\n🎉 UPDATE: Pet has been found! - $foundTime';
+      
+      await Supabase.instance.client
+          .from('community_posts')
+          .update({
+            'type': 'found',
+            'content': updatedContent,
+          })
+          .eq('id', post['id']);
+
+      // Update local state
+      setState(() {
+        final postIndex = posts.indexWhere((p) => p['id'] == post['id']);
+        if (postIndex != -1) {
+          posts[postIndex]['type'] = 'found';
+          posts[postIndex]['content'] = updatedContent;
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('🎉 Pet marked as found!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('Error marking pet as found: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to mark pet as found. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> deletePost(BuildContext context, String postId) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: Text('Delete Post'),
-        content: Text('Are you sure you want to delete this post?'),
+        content: Text('Are you sure you want to delete this post? This will also delete all comments and notifications related to this post.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel')),
           ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Delete')),
@@ -1830,14 +1885,93 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     if (confirm != true) return;
 
     try {
+      // Delete in the correct order to handle foreign key constraints
+      
+      // 1. First delete all notifications related to comments on this post
+      final commentIds = await Supabase.instance.client
+          .from('comments')
+          .select('id')
+          .eq('post_id', postId);
+      
+      if (commentIds.isNotEmpty) {
+        final commentIdList = commentIds.map((c) => c['id']).toList();
+        
+        // Delete notifications for these comments
+        await Supabase.instance.client
+            .from('notifications')
+            .delete()
+            .inFilter('comment_id', commentIdList);
+        
+        // Delete replies to these comments
+        await Supabase.instance.client
+            .from('replies')
+            .delete()
+            .inFilter('comment_id', commentIdList);
+        
+        // Delete comment likes
+        await Supabase.instance.client
+            .from('comment_likes')
+            .delete()
+            .inFilter('comment_id', commentIdList);
+      }
+      
+      // 2. Delete all notifications related to this post
+      await Supabase.instance.client
+          .from('notifications')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 3. Delete all comments on this post
+      await Supabase.instance.client
+          .from('comments')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 4. Delete all likes on this post
+      await Supabase.instance.client
+          .from('likes')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 5. Delete all bookmarks for this post
+      await Supabase.instance.client
+          .from('bookmarks')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 6. Finally delete the post itself
       await Supabase.instance.client
           .from('community_posts')
           .delete()
           .eq('id', postId);
 
-      fetchPosts();
+      // Clean up local state
+      setState(() {
+        posts.removeWhere((post) => post['id'].toString() == postId);
+        postComments.remove(postId);
+        commentCounts.remove(postId);
+        locallyUpdatedPosts.remove(postId);
+        likedPosts.remove(postId);
+        likeCounts.remove(postId);
+        bookmarkedPosts.remove(postId);
+        showCommentInput.remove(postId);
+        commentControllers.remove(postId);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Post deleted successfully'),
+          backgroundColor: deepRed,
+        ),
+      );
     } catch (e) {
       print('Error deleting post: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete post. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -2122,14 +2256,24 @@ void showEditPostModal(Map post) {
                                             : post['type'] == 'missing'
                                                 ? Icons.search
                                                 : post['type'] == 'found'
-                                                    ? Icons.pets
+                                                    ? Icons.celebration
                                                     : Icons.info,
                                         size: 10,
                                         color: Colors.white,
                                       ),
+                                      if (post['type'] == 'found') ...[
+                                        SizedBox(width: 2),
+                                        Icon(
+                                          Icons.pets,
+                                          size: 10,
+                                          color: Colors.white,
+                                        ),
+                                      ],
                                       SizedBox(width: 3),
                                       Text(
-                                        post['type'].toString().toUpperCase(),
+                                        post['type'] == 'found' 
+                                            ? 'FOUND 🎉'
+                                            : post['type'].toString().toUpperCase(),
                                         style: TextStyle(
                                           fontSize: 10,
                                           color: Colors.white,
@@ -2195,12 +2339,45 @@ void showEditPostModal(Map post) {
                                   showEditPostModal(post);
                                 } else if (value == 'delete') {
                                   deletePost(context, post['id']);
+                                } else if (value == 'mark_found') {
+                                  markAsFound(context, post);
                                 }
                               },
-                              itemBuilder: (_) => [
-                                PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                PopupMenuItem(value: 'delete', child: Text('Delete')),
-                              ],
+                              itemBuilder: (_) {
+                                List<PopupMenuEntry<String>> items = [
+                                  PopupMenuItem(value: 'edit', child: Row(
+                                    children: [
+                                      Icon(Icons.edit, size: 18, color: Colors.grey[600]),
+                                      SizedBox(width: 8),
+                                      Text('Edit'),
+                                    ],
+                                  )),
+                                ];
+                                
+                                // Add "Mark as Found" option only for missing pet posts
+                                if (post['type'] == 'missing') {
+                                  items.add(PopupMenuItem(
+                                    value: 'mark_found', 
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.pets, size: 18, color: Colors.green[600]),
+                                        SizedBox(width: 8),
+                                        Text('Mark as Found', style: TextStyle(color: Colors.green[600])),
+                                      ],
+                                    ),
+                                  ));
+                                }
+                                
+                                items.add(PopupMenuItem(value: 'delete', child: Row(
+                                  children: [
+                                    Icon(Icons.delete, size: 18, color: Colors.red[600]),
+                                    SizedBox(width: 8),
+                                    Text('Delete', style: TextStyle(color: Colors.red[600])),
+                                  ],
+                                )));
+                                
+                                return items;
+                              },
                             )
                           : IconButton(
                               icon: Icon(Icons.report_outlined, color: Colors.deepOrange),

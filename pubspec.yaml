@@ -40,6 +40,7 @@ dependencies:
   android_intent_plus: any
   url_launcher: any
   universal_platform: any
+  firebase_database: ^10.5.7
 
 dev_dependencies:
   flutter_test:
