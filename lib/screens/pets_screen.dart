@@ -1976,7 +1976,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '🚨 Critical - Immediate danger',
+                            'Critical - Immediate danger',
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1991,7 +1991,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '⚠️ High - Just went missing',
+                            'High - Just went missing',
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -2006,7 +2006,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '🔍 Medium - Missing for a while',
+                            'Medium - Missing for a while',
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),

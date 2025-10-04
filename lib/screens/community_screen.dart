@@ -1832,8 +1832,8 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
     try {
       final currentContent = post['content']?.toString() ?? '';
-      final foundTime = formatPhilippinesTime(DateTime.now().toUtc());
-      final updatedContent = '$currentContent\n\n🎉 UPDATE: Pet has been found! - $foundTime';
+      final foundTime = getDetailedPhilippinesTime(DateTime.now().toUtc());
+      final updatedContent = '$currentContent\n\nUPDATE: Pet has been found! - $foundTime';
       
       await Supabase.instance.client
           .from('community_posts')
@@ -1854,7 +1854,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('🎉 Pet marked as found!'),
+          content: Text('Pet marked as found!'),
           backgroundColor: Colors.green,
         ),
       );
@@ -2250,29 +2250,11 @@ void showEditPostModal(Map post) {
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(
-                                        post['type'] == 'general'
-                                            ? Icons.forum
-                                            : post['type'] == 'missing'
-                                                ? Icons.search
-                                                : post['type'] == 'found'
-                                                    ? Icons.celebration
-                                                    : Icons.info,
-                                        size: 10,
-                                        color: Colors.white,
-                                      ),
-                                      if (post['type'] == 'found') ...[
-                                        SizedBox(width: 2),
-                                        Icon(
-                                          Icons.pets,
-                                          size: 10,
-                                          color: Colors.white,
-                                        ),
-                                      ],
+
                                       SizedBox(width: 3),
                                       Text(
                                         post['type'] == 'found' 
-                                            ? 'FOUND 🎉'
+                                            ? 'FOUND'
                                             : post['type'].toString().toUpperCase(),
                                         style: TextStyle(
                                           fontSize: 10,
