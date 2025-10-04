@@ -156,8 +156,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   final TextEditingController _specialNotesController = TextEditingController();
   String _urgencyLevel = 'High';
   bool _hasReward = false;
-  bool _hasMicrochip = false;
-  String _microchipNumber = '';
+
 
   final List<String> moods = [
     "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
@@ -1252,8 +1251,7 @@ void _disconnectDevice() async {
     _customMessageController.clear();
     _specialNotesController.clear();
     _hasReward = false;
-    _hasMicrochip = false;
-    _microchipNumber = '';
+
     _urgencyLevel = 'High';
 
     // Show enhanced modal
@@ -1458,10 +1456,7 @@ void _disconnectDevice() async {
       content += '⚠️ Important Notes:\n${_specialNotesController.text}\n\n';
     }
     
-    // Microchip info
-    if (_hasMicrochip && _microchipNumber.isNotEmpty) {
-      content += '🔍 Microchip ID: $_microchipNumber\n\n';
-    }
+
     
     // Reward info
     if (_hasReward && _rewardAmountController.text.isNotEmpty) {
@@ -1717,6 +1712,7 @@ void _disconnectDevice() async {
             decoration: InputDecoration(
               labelText: 'Phone Number',
               hintText: 'e.g., +1 (555) 123-4567',
+              hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.phone, color: Colors.red.shade600),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
@@ -1763,50 +1759,6 @@ void _disconnectDevice() async {
               ),
             ],
           ),
-          SizedBox(height: 16),
-          
-          // Microchip toggle
-          Row(
-            children: [
-              Checkbox(
-                value: _hasMicrochip,
-                onChanged: (value) {
-                  setModalState(() {
-                    _hasMicrochip = value ?? false;
-                    if (!_hasMicrochip) _microchipNumber = '';
-                  });
-                },
-                activeColor: Colors.blue.shade600,
-              ),
-              Expanded(
-                child: Text(
-                  'Pet has microchip',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-              ),
-            ],
-          ),
-          
-          // Microchip number field
-          if (_hasMicrochip) ...[
-            SizedBox(height: 8),
-            TextField(
-              decoration: InputDecoration(
-                labelText: 'Microchip Number',
-                hintText: 'Enter microchip ID',
-                prefixIcon: Icon(Icons.memory, color: Colors.blue.shade600),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              onChanged: (value) {
-                setModalState(() {
-                  _microchipNumber = value;
-                });
-              },
-            ),
-          ],
-          
           SizedBox(height: 16),
           
           // Reward toggle
@@ -1857,6 +1809,7 @@ void _disconnectDevice() async {
             decoration: InputDecoration(
               labelText: 'Special Notes',
               hintText: 'Medical conditions, temperament, special instructions...',
+              hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.note, color: Colors.blue.shade600),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               filled: true,
@@ -1908,6 +1861,7 @@ void _disconnectDevice() async {
             decoration: InputDecoration(
               labelText: 'Your Message',
               hintText: 'Please help us find our beloved pet. Any information would be greatly appreciated...',
+              hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.edit, color: Colors.orange.shade600),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               filled: true,
@@ -2216,9 +2170,7 @@ void _disconnectDevice() async {
       details += 'Contact: ${_emergencyContactController.text}\n';
     }
     
-    if (_hasMicrochip && _microchipNumber.isNotEmpty) {
-      details += 'Microchip: $_microchipNumber\n';
-    }
+
     
     if (_hasReward && _rewardAmountController.text.isNotEmpty) {
       details += 'Reward: ₱${_rewardAmountController.text}\n';
