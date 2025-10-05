@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'location_sync_service.dart';
 
 /// Service for automatic Firebase to Supabase migration on app startup
+/// Migration runs every time conditions are met (no time limits)
 class AutoMigrationService {
   static const String _lastMigrationKey = 'last_firebase_migration';
   static const String _migrationEnabledKey = 'firebase_migration_enabled';
@@ -15,6 +16,137 @@ class AutoMigrationService {
     print('🚨 FORCE RUN MIGRATION CALLED');
     print('🚨 Bypassing all conditions for testing');
     await runAutoMigration();
+  }
+  
+  /// Reset migration timer (for testing - allows migration to run again)
+  Future<void> resetMigrationTimer() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_lastMigrationKey);
+    print('🔄 Migration timer reset - migration can run again');
+  }
+  
+  /// Force migration bypassing ALL conditions (for immediate testing)
+  Future<void> forceImmediateMigration() async {
+    print('🚨 ==========================================');
+    print('🚨 FORCE IMMEDIATE MIGRATION');
+    print('🚨 Bypassing all conditions and timers');
+    print('🚨 ==========================================');
+    
+    try {
+      // Run migration directly
+      final migrationResult = await _locationSyncService.syncAllLocationsFromFirebase();
+      
+      print('🚨 FORCE MIGRATION RESULTS:');
+      print('   ✅ Successful: ${migrationResult['success']}');
+      print('   ❌ Failed: ${migrationResult['failed']}');
+      print('   📝 Errors: ${migrationResult['errors']}');
+      
+      // Update last migration timestamp if successful
+      if (migrationResult['success'] > 0) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_lastMigrationKey, DateTime.now().toIso8601String());
+        print('🚨 Updated migration timestamp after successful migration');
+      }
+      
+    } catch (e) {
+      print('🚨 Force migration error: $e');
+    }
+    
+    print('🚨 ==========================================');
+  }
+  
+  /// Check migration status and last run time
+  Future<void> checkMigrationStatus() async {
+    print('📊 ==========================================');
+    print('📊 MIGRATION STATUS CHECK');
+    print('📊 ==========================================');
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastMigration = prefs.getString(_lastMigrationKey);
+      final migrationEnabled = prefs.getBool(_migrationEnabledKey) ?? true;
+      final user = Supabase.instance.client.auth.currentUser;
+      
+      print('📊 Migration Enabled: $migrationEnabled');
+      print('📊 User Logged In: ${user != null}');
+      if (user != null) {
+        final metadata = user.userMetadata ?? {};
+        final role = metadata['role']?.toString() ?? 'Pet Owner';
+        print('📊 User Role: $role');
+        print('📊 User ID: ${user.id}');
+      }
+      
+      if (lastMigration != null) {
+        final lastMigrationDate = DateTime.parse(lastMigration);
+        final hoursSince = DateTime.now().difference(lastMigrationDate).inHours;
+        final daysSince = DateTime.now().difference(lastMigrationDate).inDays;
+        
+        print('📊 Last Migration: $lastMigration');
+        print('📊 Time Since Last: $daysSince days, ${hoursSince % 24} hours');
+        print('📊 Can Run Again: YES (no time limit)');
+      } else {
+        print('📊 Last Migration: Never');
+        print('📊 Can Run Again: YES');
+      }
+      
+      final shouldRun = await shouldRunMigration();
+      print('📊 Should Run Now: ${shouldRun ? "YES" : "NO"}');
+      
+    } catch (e) {
+      print('❌ Status check error: $e');
+    }
+    
+    print('📊 ==========================================');
+  }
+  
+  /// Debug migration with detailed Firebase connectivity test
+  Future<void> debugMigrationTest() async {
+    print('🔬 ==========================================');
+    print('🔬 DEBUG MIGRATION TEST');
+    print('🔬 ==========================================');
+    
+    try {
+      // Test Firebase connectivity directly
+      print('🔬 Step 1: Testing Firebase connectivity...');
+      final firebaseData = await _locationSyncService.getFirebaseLocationData();
+      
+      if (firebaseData == null) {
+        print('❌ Firebase returned null - check configuration or network');
+        return;
+      }
+      
+      if (firebaseData.isEmpty) {
+        print('⚠️ Firebase returned empty data - no location entries found');
+        return;
+      }
+      
+      print('✅ Firebase connectivity successful!');
+      print('📊 Found ${firebaseData.length} entries in Firebase');
+      print('📋 Sample keys: ${firebaseData.keys.take(3).toList()}');
+      
+      // Show sample data
+      if (firebaseData.isNotEmpty) {
+        final firstEntry = firebaseData.entries.first;
+        print('📄 Sample entry:');
+        print('   🔑 Key: ${firstEntry.key}');
+        print('   📊 Data: ${firstEntry.value}');
+      }
+      
+      // Test migration
+      print('🔬 Step 2: Running full migration...');
+      final migrationResult = await _locationSyncService.syncAllLocationsFromFirebase();
+      
+      print('🔬 Step 3: Migration Results:');
+      print('   ✅ Successful: ${migrationResult['success']}');
+      print('   ❌ Failed: ${migrationResult['failed']}');
+      print('   📝 Errors: ${migrationResult['errors']}');
+      
+    } catch (e) {
+      print('❌ Debug test error: $e');
+      print('Stack trace: ${StackTrace.current}');
+    }
+    
+    print('🔬 ==========================================');
   }
 
   /// Check if automatic migration should run
@@ -67,25 +199,18 @@ class AutoMigrationService {
         print('✅ Auto-migration allowed for role: $role');
       }
       
-      // Check last migration time (run once per day)
+      // Log last migration time for reference (no time limit enforced)
       final lastMigration = prefs.getString(_lastMigrationKey);
       if (kDebugMode) {
         print('🔄 Last migration timestamp: ${lastMigration ?? "Never"}');
       }
       if (lastMigration != null) {
         final lastMigrationDate = DateTime.parse(lastMigration);
-        final daysSinceLastMigration = DateTime.now().difference(lastMigrationDate).inDays;
         final hoursSinceLastMigration = DateTime.now().difference(lastMigrationDate).inHours;
         
         if (kDebugMode) {
-          print('🔄 Time since last migration: $daysSinceLastMigration days, $hoursSinceLastMigration hours');
-        }
-        
-        if (daysSinceLastMigration < 1) {
-          if (kDebugMode) {
-            print('🔄 Auto-migration skipped: Already ran today (${hoursSinceLastMigration}h ago)');
-          }
-          return false;
+          print('🔄 Time since last migration: ${hoursSinceLastMigration} hours ago');
+          print('🔄 Migration can run anytime (no time limit)');
         }
       }
       

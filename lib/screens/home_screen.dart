@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:PetTrackCare/screens/chat_detail_screen.dart';
 import 'package:PetTrackCare/services/notification_service.dart';
 import '../services/auto_migration_service.dart';
@@ -78,8 +79,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
     print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
     
+    // Debug environment variables
+    print('🔧 Environment Check:');
+    print('   🔗 Firebase Host: ${dotenv.env['FIREBASE_HOST'] ?? "NOT SET"}');
+    print('   🔑 Firebase Key: ${dotenv.env['FIREBASE_AUTH_KEY']?.substring(0, 10) ?? "NOT SET"}...[HIDDEN]');
+    
     Future.microtask(() async {
       try {
+        print('=== MIGRATION STATUS CHECK ===');
+        await _autoMigrationService.checkMigrationStatus();
+        
         print('=== CHECKING MIGRATION CONDITIONS ===');
         debugPrint('Starting auto-migration check...');
         
@@ -96,11 +105,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         } else {
           print('=== MIGRATION SKIPPED ===');
           debugPrint('Auto-migration skipped - conditions not met');
-          
-          // TEMPORARY: Force run for testing
-          print('=== FORCE RUNNING MIGRATION FOR TESTING ===');
-          await _autoMigrationService.forceRunMigration();
-          print('=== FORCE MIGRATION COMPLETED ===');
+          print('=== CONDITIONS: User not authenticated or wrong role ===');
         }
       } catch (e) {
         print('=== MIGRATION ERROR ===');
