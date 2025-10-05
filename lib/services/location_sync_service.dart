@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 /// Service for syncing location data from Firebase to Supabase
-/// Firebase data structure: {"lat":14.5995,"long":120.9842,"device_mac":"00:4B:12:3A:46:44"}
+/// Firebase data structure: {"lat":14.5995,"long":120.9842,"device_mac":"00:4B:12:3A:46:44","timestamp":"2025-10-05T10:30:00Z"}
 class LocationSyncService {
   /// Firebase host from environment variables
   static String get _firebaseHost => dotenv.env['FIREBASE_HOST'] ?? 'pettrackcare-default-rtdb.firebaseio.com';
@@ -282,16 +282,18 @@ class LocationSyncService {
         }
         
         try {
-          // Extract Firebase data: lat, long, device_mac
+          // Extract Firebase data: lat, long, device_mac, timestamp
           final latitude = locationData['lat'];
           final longitude = locationData['long'];
           final deviceMac = locationData['device_mac'];
+          final firebaseTimestamp = locationData['timestamp']; // Extract timestamp from Firebase
           
           if (kDebugMode) {
             print('   🔍 Extracted fields:');
             print('     📍 lat: $latitude (${latitude.runtimeType})');
             print('     📍 long: $longitude (${longitude.runtimeType})');
             print('     📱 device_mac: $deviceMac (${deviceMac.runtimeType})');
+            print('     ⏰ timestamp: $firebaseTimestamp (${firebaseTimestamp.runtimeType})');
           }
           
           // Validate required fields
@@ -322,8 +324,49 @@ class LocationSyncService {
           
           final deviceMacStr = deviceMac.toString();
           
+          // Parse timestamp from Firebase or use current time as fallback
+          DateTime timestampToUse;
+          try {
+            if (firebaseTimestamp != null && firebaseTimestamp.toString().isNotEmpty) {
+              // Try to parse Firebase timestamp
+              if (firebaseTimestamp is int) {
+                // Handle Unix timestamp (seconds or milliseconds)
+                final timestamp = firebaseTimestamp;
+                if (timestamp > 1000000000000) {
+                  // Milliseconds
+                  timestampToUse = DateTime.fromMillisecondsSinceEpoch(timestamp);
+                } else {
+                  // Seconds
+                  timestampToUse = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+                }
+              } else if (firebaseTimestamp is String) {
+                // Handle ISO string timestamp
+                timestampToUse = DateTime.parse(firebaseTimestamp);
+              } else {
+                // Unknown format, use current time
+                timestampToUse = DateTime.now();
+                if (kDebugMode) {
+                  print('   ⚠️  Unknown timestamp format: $firebaseTimestamp (${firebaseTimestamp.runtimeType}), using current time');
+                }
+              }
+            } else {
+              // No timestamp in Firebase, use current time
+              timestampToUse = DateTime.now();
+              if (kDebugMode) {
+                print('   ℹ️  No timestamp in Firebase data, using current time');
+              }
+            }
+          } catch (e) {
+            // Error parsing timestamp, use current time as fallback
+            timestampToUse = DateTime.now();
+            if (kDebugMode) {
+              print('   ⚠️  Error parsing timestamp "$firebaseTimestamp": $e, using current time');
+            }
+          }
+          
           if (kDebugMode) {
             print('   ✅ Validation passed - proceeding to Supabase insert');
+            print('   ⏰ Final timestamp: ${timestampToUse.toIso8601String()}');
           }
           
           // Insert into location_history - the populate_pet_id trigger will handle pet_id mapping
@@ -331,7 +374,7 @@ class LocationSyncService {
             latitude: latValue,
             longitude: longValue,
             deviceMac: deviceMacStr,
-            timestamp: DateTime.now(), // Use current time since Firebase doesn't store timestamp
+            timestamp: timestampToUse, // Use Firebase timestamp or current time as fallback
           );
           
           if (success) {
@@ -413,10 +456,11 @@ class LocationSyncService {
         return false;
       }
       
-      // Extract Firebase data: lat, long, device_mac
+      // Extract Firebase data: lat, long, device_mac, timestamp
       final latitude = firebaseData['lat']?.toDouble();
       final longitude = firebaseData['long']?.toDouble();
       final deviceMac = firebaseData['device_mac'] as String?;
+      final firebaseTimestamp = firebaseData['timestamp'];
       
       if (latitude == null || longitude == null || deviceMac == null) {
         if (kDebugMode) {
@@ -425,12 +469,42 @@ class LocationSyncService {
         return false;
       }
       
+      // Parse timestamp from Firebase or use current time as fallback
+      DateTime timestampToUse;
+      try {
+        if (firebaseTimestamp != null && firebaseTimestamp.toString().isNotEmpty) {
+          if (firebaseTimestamp is int) {
+            // Handle Unix timestamp (seconds or milliseconds)
+            if (firebaseTimestamp > 1000000000000) {
+              timestampToUse = DateTime.fromMillisecondsSinceEpoch(firebaseTimestamp);
+            } else {
+              timestampToUse = DateTime.fromMillisecondsSinceEpoch(firebaseTimestamp * 1000);
+            }
+          } else if (firebaseTimestamp is String) {
+            timestampToUse = DateTime.parse(firebaseTimestamp);
+          } else {
+            timestampToUse = DateTime.now();
+          }
+        } else {
+          timestampToUse = DateTime.now();
+        }
+      } catch (e) {
+        timestampToUse = DateTime.now();
+        if (kDebugMode) {
+          print('⚠️  Error parsing timestamp for entry $entryId: $e');
+        }
+      }
+      
+      if (kDebugMode) {
+        print('📊 Entry data: lat=$latitude, long=$longitude, mac=$deviceMac, timestamp=${timestampToUse.toIso8601String()}');
+      }
+      
       // Insert into location_history
       final success = await pushLocationToSupabase(
         latitude: latitude,
         longitude: longitude,
         deviceMac: deviceMac,
-        timestamp: DateTime.now(),
+        timestamp: timestampToUse,
       );
       
       if (kDebugMode) {
