@@ -656,6 +656,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       setState(() {
         _locationHistory = records;
       });
+      
+      // Automatically refresh addresses for any location without addresses
+      if (records.isNotEmpty) {
+        Future.delayed(Duration(milliseconds: 500), () {
+          _refreshAddressesForLocationHistory();
+        });
+      }
     } catch (_) {
       setState(() {
         _locationHistory = [];
@@ -675,6 +682,47 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       }
     } catch (_) {}
     return null;
+  }
+
+  // Try to resolve address for a specific location in background
+  void _tryResolveAddressForLocation(double lat, double lng, int index) async {
+    try {
+      final address = await _reverseGeocode(lat, lng);
+      if (address != null && address.isNotEmpty && mounted) {
+        setState(() {
+          if (index < _locationHistory.length) {
+            _locationHistory[index]['address'] = address;
+          }
+        });
+      }
+    } catch (e) {
+      // Silently handle errors - address resolution is not critical
+    }
+  }
+
+  // Format address for display - truncate if too long and prioritize important parts
+  String _formatAddressForDisplay(String address) {
+    if (address.length <= 60) return address;
+    
+    // Try to keep the most important parts (first part before first comma)
+    final parts = address.split(', ');
+    if (parts.isNotEmpty) {
+      String formatted = parts[0];
+      
+      // Add city/area info if available and space permits
+      if (parts.length > 2 && formatted.length < 40) {
+        formatted += ', ${parts[parts.length - 2]}';
+      }
+      
+      // Add country if space permits
+      if (parts.length > 1 && formatted.length < 50) {
+        formatted += ', ${parts.last}';
+      }
+      
+      return formatted.length > 60 ? '${formatted.substring(0, 57)}...' : formatted;
+    }
+    
+    return address.length > 60 ? '${address.substring(0, 57)}...' : address;
   }
 
   // Refresh addresses for location history items that don't have addresses yet
@@ -3518,38 +3566,38 @@ void _disconnectDevice() async {
     Color iconColor;
     
     if (address != null && address.isNotEmpty) {
-      title = address;
+      // Show formatted address as title, coordinates as subtitle for precision
+      title = _formatAddressForDisplay(address);
       subtitle = lat != null && lng != null 
-          ? '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'
-          : 'Address only';
+          ? 'Coordinates: ${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}'
+          : 'Address resolved';
       leadingIcon = Icons.location_on;
       iconColor = deepRed;
     } else if (lat != null && lng != null) {
-      title = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
-      subtitle = 'Coordinates only';
+      // Show coordinates as title when no address is available
+      title = 'Lat: ${lat.toStringAsFixed(4)}, Lng: ${lng.toStringAsFixed(4)}';
+      subtitle = 'Resolving address...';
       leadingIcon = Icons.my_location;
       iconColor = Colors.orange;
+      
+      // Try to resolve address in background (non-blocking)
+      _tryResolveAddressForLocation(lat, lng, index);
     } else {
       title = 'Unknown Location';
-      subtitle = 'No coordinates available';
+      subtitle = 'No location data available';
       leadingIcon = Icons.location_off;
       iconColor = Colors.grey;
     }
     
-    // Calculate time ago
-    String timeAgo = 'Unknown time';
+    // Format actual timestamp instead of relative time
+    String timestampDisplay = 'Unknown time';
     if (timestamp != null) {
-      final now = DateTime.now();
-      final difference = now.difference(timestamp);
-      
-      if (difference.inDays > 0) {
-        timeAgo = '${difference.inDays} day${difference.inDays == 1 ? '' : 's'} ago';
-      } else if (difference.inHours > 0) {
-        timeAgo = '${difference.inHours} hour${difference.inHours == 1 ? '' : 's'} ago';
-      } else if (difference.inMinutes > 0) {
-        timeAgo = '${difference.inMinutes} minute${difference.inMinutes == 1 ? '' : 's'} ago';
-      } else {
-        timeAgo = 'Just now';
+      try {
+        // Format as: Oct 5, 2025 • 2:30 PM
+        timestampDisplay = DateFormat('MMM d, yyyy • h:mm a').format(timestamp.toLocal());
+      } catch (e) {
+        // Fallback to ISO string if formatting fails
+        timestampDisplay = timestamp.toLocal().toString().substring(0, 16);
       }
     }
     
@@ -3600,10 +3648,11 @@ void _disconnectDevice() async {
                 Icon(Icons.access_time, size: 12, color: Colors.grey.shade500),
                 SizedBox(width: 4),
                 Text(
-                  timeAgo,
+                  timestampDisplay,
                   style: TextStyle(
                     fontSize: 11,
                     color: Colors.grey.shade500,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 if (device != null) ...[
@@ -3635,14 +3684,14 @@ void _disconnectDevice() async {
                   icon: Icon(Icons.visibility, color: Colors.blue, size: 18),
                   tooltip: 'View on map',
                   onPressed: () {
-                    _updateMapView(LatLng(lat, lng), title, timeAgo);
+                    _updateMapView(LatLng(lat, lng), title, timestampDisplay);
                   },
                 ),
               )
             : null,
         onTap: lat != null && lng != null 
             ? () {
-                _updateMapView(LatLng(lat, lng), title, timeAgo);
+                _updateMapView(LatLng(lat, lng), title, timestampDisplay);
               }
             : null,
       ),
