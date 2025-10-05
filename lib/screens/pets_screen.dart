@@ -1296,7 +1296,7 @@ void _disconnectDevice() async {
               'longitude': lng,
               'address': resolvedAddress,
               'image_url': profilePicture,
-              'created_at': timestamp?.toIso8601String() ?? DateTime.now().toIso8601String(),
+              'created_at': DateTime.now().toUtc().toIso8601String(),
             }).select('id');
             
          // Get the post ID from the response
