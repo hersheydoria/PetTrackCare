@@ -13,6 +13,7 @@ import 'screens/profile_owner_screen.dart';
 import 'screens/profile_sitter_screen.dart';
 import 'widgets/missing_pet_alert_wrapper.dart';
 import 'services/notification_service.dart';
+import 'services/permission_service.dart';
 import 'services/auto_migration_service.dart';
 
 void main() async {
@@ -29,6 +30,9 @@ void main() async {
   
   // Initialize system notifications
   await initializeSystemNotifications();
+  
+  // Initialize camera and gallery permissions
+  await PermissionService.initializePermissions();
   
   runApp(PetTrackCareApp());
 }
