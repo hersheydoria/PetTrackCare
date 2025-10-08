@@ -418,10 +418,6 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                                 // Enhanced Logo and Title
                                 Container(
                                   padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFF6DED8).withOpacity(0.3),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
                                   child: Image.asset('assets/logo.png', height: 80),
                                 ),
                                 const SizedBox(height: 20),

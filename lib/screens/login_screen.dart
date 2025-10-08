@@ -313,9 +313,16 @@ class _LoginScreenState extends State<LoginScreen>
                                 padding: const EdgeInsets.all(20),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFF6DED8).withOpacity(0.3),
-                                  borderRadius: BorderRadius.circular(20),
+                                  borderRadius: BorderRadius.circular(25),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFFB82132).withOpacity(0.1),
+                                      blurRadius: 15,
+                                      offset: const Offset(0, 5),
+                                    ),
+                                  ],
                                 ),
-                                child: Image.asset('assets/logo.png', height: 100),
+                                child: Image.asset('assets/logo.png', height: 140),
                               ),
                               const SizedBox(height: 24),
                               
