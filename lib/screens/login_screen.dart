@@ -310,40 +310,51 @@ class _LoginScreenState extends State<LoginScreen>
                             children: [
                               // Enhanced Logo
                               Container(
-                                padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF6DED8).withOpacity(0.3),
-                                  borderRadius: BorderRadius.circular(25),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: const Color(0xFFB82132).withOpacity(0.1),
-                                      blurRadius: 15,
-                                      offset: const Offset(0, 5),
-                                    ),
-                                  ],
-                                ),
+                                padding: const EdgeInsets.only(top: 20, left: 20, right: 20, bottom: 8),
                                 child: Image.asset('assets/logo.png', height: 140),
                               ),
-                              const SizedBox(height: 24),
+                              const SizedBox(height: 12),
                               
                               // Enhanced Title
-                              ShaderMask(
-                                shaderCallback: (bounds) => const LinearGradient(
-                                  colors: [Color(0xFFB82132), Color(0xFFE91E63)],
-                                ).createShader(bounds),
-                                child: const Text(
-                                  "Welcome to PetTrackCare!",
-                                  style: TextStyle(
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                  ),
+                              Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 10),
+                                child: Column(
+                                  children: [
+                                    const Text(
+                                      "Welcome to",
+                                      style: TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'SF Pro Display',
+                                        color: Color(0xFFB82132),
+                                        letterSpacing: 0.5,
+                                        height: 1.2,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    const Text(
+                                      "PetTrackCare",
+                                      style: TextStyle(
+                                        fontSize: 36,
+                                        fontWeight: FontWeight.w900,
+                                        fontFamily: 'SF Pro Display',
+                                        color: Color(0xFFB82132),
+                                        letterSpacing: -0.5,
+                                        height: 0.95,
+                                        fontFeatures: [
+                                          FontFeature.enable('kern'),
+                                        ],
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ],
                                 ),
                               ),
                               
                               const SizedBox(height: 8),
                               Text(
-                                "Sign in to continue to PetTrackCare",
+                                "Sign in to continue",
                                 style: TextStyle(
                                   fontSize: 16,
                                   color: Colors.grey[600],

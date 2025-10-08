@@ -417,22 +417,44 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                               children: [
                                 // Enhanced Logo and Title
                                 Container(
-                                  padding: const EdgeInsets.all(16),
-                                  child: Image.asset('assets/logo.png', height: 80),
+                                  padding: const EdgeInsets.only(top: 20, left: 20, right: 20, bottom: 8),
+                                  child: Image.asset('assets/logo.png', height: 120),
                                 ),
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 10),
                                 
-                                ShaderMask(
-                                  shaderCallback: (bounds) => const LinearGradient(
-                                    colors: [Color(0xFFB82132), Color(0xFFE91E63)],
-                                  ).createShader(bounds),
-                                  child: const Text(
-                                    "Welcome to PetTrackCare",
-                                    style: TextStyle(
-                                      fontSize: 26,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
+                                Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 10),
+                                  child: Column(
+                                    children: [
+                                      const Text(
+                                        "Welcome to",
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w600,
+                                          fontFamily: 'SF Pro Display',
+                                          color: Color(0xFFB82132),
+                                          letterSpacing: 0.5,
+                                          height: 1.2,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      const Text(
+                                        "PetTrackCare",
+                                        style: TextStyle(
+                                          fontSize: 36,
+                                          fontWeight: FontWeight.w900,
+                                          fontFamily: 'SF Pro Display',
+                                          color: Color(0xFFB82132),
+                                          letterSpacing: -0.5,
+                                          height: 0.95,
+                                          fontFeatures: [
+                                            FontFeature.enable('kern'),
+                                          ],
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
                                   ),
                                 ),
                                 
