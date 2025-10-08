@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'main_navigation.dart';
+import 'onboarding_screen.dart';
 import '../services/notification_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -95,15 +97,34 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => MainNavigation(userId: user.id),
-          ),
-        );
+        _navigateAfterLogin(user.id);
       });
     } else {
       if (mounted) setState(() => isCheckingSession = false);
+    }
+  }
+
+  // Helper method to check if onboarding is needed and navigate accordingly
+  void _navigateAfterLogin(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final onboardingCompleted = prefs.getBool('onboarding_completed') ?? false;
+    
+    if (!onboardingCompleted) {
+      // First time login - show onboarding
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OnboardingScreen(userId: userId),
+        ),
+      );
+    } else {
+      // Returning user - go directly to main app
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MainNavigation(userId: userId),
+        ),
+      );
     }
   }
 
@@ -151,12 +172,7 @@ class _LoginScreenState extends State<LoginScreen>
         // Reinitialize notification subscription for the logged-in user
         await reinitializeNotificationSubscription();
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => MainNavigation(userId: user.id), // ✅ userId passed
-          ),
-        );
+        _navigateAfterLogin(user.id);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Login failed: No user found.')),
@@ -309,10 +325,10 @@ class _LoginScreenState extends State<LoginScreen>
                                   colors: [Color(0xFFB82132), Color(0xFFE91E63)],
                                 ).createShader(bounds),
                                 child: const Text(
-                                  "Welcome Back!",
+                                  "Welcome to PetTrackCare!",
                                   style: TextStyle(
                                     fontSize: 28,
-                                    fontWeight: FontWeight.bold,
+                                    fontWeight: FontWeight.w900,
                                     color: Colors.white,
                                   ),
                                 ),
