@@ -33,9 +33,6 @@ Future<void> initializeSystemNotifications() async {
         ?.requestNotificationsPermission();
     print('Notification permission granted: $permissionGranted');
     
-    // Test notification to verify setup
-    await _showTestNotification();
-    
     // Setup global realtime subscription for system notifications
     await _setupGlobalNotificationSubscription();
     
@@ -335,73 +332,6 @@ Future<void> reinitializeNotificationSubscription() async {
   await _setupGlobalNotificationSubscription();
 }
 
-/// Show a test notification to verify setup
-Future<void> _showTestNotification() async {
-  try {
-    const androidDetails = AndroidNotificationDetails(
-      'test_channel',
-      'Test Notifications',
-      channelDescription: 'Test notification channel',
-      importance: Importance.high,
-      priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
-      enableVibration: true,
-      playSound: true,
-    );
-
-    const notificationDetails = NotificationDetails(android: androidDetails);
-    
-    await _localNotifications.show(
-      999,
-      'PetTrackCare Test',
-      'System notifications are working! 🎉',
-      notificationDetails,
-    );
-    print('Test notification sent successfully');
-  } catch (e) {
-    print('Failed to send test notification: $e');
-  }
-}
-
-/// PUBLIC: Show a test notification to verify setup
-Future<void> showTestNotification() async {
-  await _showTestNotification();
-}
-
-/// PUBLIC: Test if realtime subscription is working at all
-Future<void> testRealtimeSubscription() async {
-  final user = Supabase.instance.client.auth.currentUser;
-  if (user == null) {
-    print('❌ No user logged in for realtime test');
-    return;
-  }
-  
-  print('🧪 Testing realtime subscription with manual insert...');
-  
-  try {
-    // Insert a test notification directly to database
-    final testData = {
-      'user_id': user.id,
-      'actor_id': user.id,
-      'message': 'Realtime subscription test notification',
-      'type': 'test',
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    };
-    
-    print('🧪 Inserting test notification: $testData');
-    
-    final result = await Supabase.instance.client
-        .from('notifications')
-        .insert(testData);
-    
-    print('✅ Test notification inserted: $result');
-    print('⏳ Check console for realtime subscription callback...');
-    
-  } catch (e) {
-    print('❌ Failed to insert test notification: $e');
-  }
-}
 Future<void> testCommunityNotification() async {
   final user = Supabase.instance.client.auth.currentUser;
   if (user == null) {
