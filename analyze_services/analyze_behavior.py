@@ -703,31 +703,43 @@ def predict_endpoint():
 @app.route("/pet/<pet_id>", methods=["GET"])
 def public_pet_page(pet_id):
     try:
-        # fetch pet
-        resp = supabase.table("pets").select("*").eq("id", pet_id).limit(1).execute()
+        # fetch pet with owner information joined from public.users table
+        # Note: email is in auth.users, not public.users, so we only fetch name and role
+        resp = supabase.table("pets").select("*, users!owner_id(name, role)").eq("id", pet_id).limit(1).execute()
         pet_rows = resp.data or []
         if not pet_rows:
             return make_response("<h3>Pet not found</h3>", 404)
         pet = pet_rows[0]
 
-        # resolve owner using the app USERS table (schema: id, name, email, role)
+        # resolve owner using the app USERS table (public.users has: id, name, role)
         owner_name = None
         owner_email = None
         owner_role = None
         owner_id = pet.get("owner_id")
+        
+        # Try to get owner info from the joined data first
+        owner_data = pet.get("users")
+        if owner_data and isinstance(owner_data, dict):
+            owner_name = owner_data.get("name")
+            owner_role = owner_data.get("role")
+            print(f"DEBUG: Got owner from join - name: {owner_name}, role: {owner_role}")
 
-        if owner_id:
+        # Fallback: if join didn't work, try direct query to users table
+        if not owner_name and owner_id:
             try:
-                # use app users table fields per your schema
-                uresp = supabase.table("users").select("name, email, role").eq("id", owner_id).limit(1).execute()
+                # public.users has: id, name, role (email is in auth.users)
+                uresp = supabase.table("users").select("name, role").eq("id", owner_id).limit(1).execute()
                 urows = uresp.data or []
                 if urows:
                     u0 = urows[0]
                     owner_name = u0.get("name")
-                    owner_email = u0.get("email") or owner_email
                     owner_role = u0.get("role") or owner_role
-            except Exception:
+                    print(f"DEBUG: Found owner in users table - name: {owner_name}, role: {owner_role}")
+                else:
+                    print(f"DEBUG: No user found in users table for owner_id: {owner_id}")
+            except Exception as e:
                 # ignore errors and continue to fallback attempts
+                print(f"DEBUG: Error fetching from users table: {e}")
                 owner_name = owner_name or None
 
             # best-effort: if name missing, try to fetch auth users metadata (if available in your Supabase instance)
@@ -741,6 +753,10 @@ def public_pet_page(pet_id):
                         # alternative method name
                         auth_user = supabase.auth.get_user(owner_id)
                     if auth_user:
+                        # Get email from auth.users (it's stored there, not in public.users)
+                        if not owner_email:
+                            owner_email = auth_user.get("email") if isinstance(auth_user, dict) else getattr(auth_user, "email", None)
+                        
                         # auth_user may be dict-like or object; handle both
                         meta = {}
                         try:
