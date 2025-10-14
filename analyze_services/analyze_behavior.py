@@ -845,8 +845,23 @@ def public_pet_page(pet_id):
         future_predictions = []
         future_html = ""
 
+        # Determine if pet is unhealthy for conditional care tips display
+        is_unhealthy = status_text == "Unhealthy"
+        
+        # Build care tips section only if unhealthy
+        care_tips_section = ""
+        if is_unhealthy:
+            care_tips_section = f"""
+                  <hr/>
+                  <h4>Care Tips</h4>
+                  <p><strong>What to do</strong></p>
+                  <ul>{actions_html}</ul>
+                  <p><strong>What to expect</strong></p>
+                  <ul>{expectations_html}</ul>
+            """
+
         if "text/html" in request.headers.get("Accept", ""):
-            # Simple HTML with modal dialog - auto-open on load
+            # Simple HTML with modal dialog - auto-open on load, responsive and scrollable
             html = f"""
             <!doctype html>
             <html>
@@ -854,15 +869,31 @@ def public_pet_page(pet_id):
               <meta name="viewport" content="width=device-width, initial-scale=1">
               <title>Pet Info - {pet_name}</title>
               <style>
-                body {{ font-family: Arial, sans-serif; background:#f6f6f6; padding:16px; }}
-                .card {{ max-width: 520px; margin:24px auto; background:#fff; border-radius:8px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }}
-                .label {{ color:#666; font-size:13px; }}
-                .value {{ color:#222; font-weight:600; font-size:18px; }}
+                * {{ margin:0; padding:0; box-sizing:border-box; }}
+                body {{ font-family: Arial, sans-serif; background:#f6f6f6; padding:12px; min-height:100vh; }}
+                .card {{ max-width: 520px; margin:12px auto; background:#fff; border-radius:8px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }}
+                .label {{ color:#666; font-size:13px; margin-bottom:4px; }}
+                .value {{ color:#222; font-weight:600; font-size:16px; margin-bottom:12px; }}
                 .badge {{ display:inline-block;padding:6px 10px;border-radius:12px;font-weight:600;color:#fff;font-size:13px; }}
+                h2 {{ font-size:20px; margin-bottom:16px; }}
+                h3 {{ font-size:18px; margin-bottom:12px; }}
+                h4 {{ font-size:16px; margin:16px 0 8px 0; }}
+                p {{ margin-bottom:8px; font-size:14px; }}
+                hr {{ margin:16px 0; border:none; border-top:1px solid #eee; }}
+                ul {{ margin-left:20px; margin-bottom:12px; }}
+                li {{ margin-bottom:6px; font-size:14px; }}
                 /* modal */
-                .modal-backdrop{{position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}}
-                .modal{{background:#fff;border-radius:10px;padding:18px;max-width:420px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,0.2);}}
-                .close-btn{{background:#B82132;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;}}
+                .modal-backdrop {{ position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; padding:16px; overflow-y:auto; }}
+                .modal {{ background:#fff; border-radius:10px; padding:20px; max-width:500px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.3); }}
+                .close-btn {{ background:#B82132; color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; font-size:14px; }}
+                button {{ font-size:14px; }}
+                .more-btn {{ background:#eee; border-radius:6px; padding:8px 16px; border:none; cursor:pointer; }}
+                @media (max-width: 600px) {{
+                  .card {{ padding:12px; margin:8px auto; }}
+                  .modal {{ padding:16px; max-height:85vh; }}
+                  h2 {{ font-size:18px; }}
+                  h3 {{ font-size:16px; }}
+                }}
               </style>
             </head>
             <body>
@@ -875,15 +906,15 @@ def public_pet_page(pet_id):
                 <p class="label">Gender</p><p class="value">{pet_gender}</p>
                 <p class="label">Health</p><p class="value">{pet_health}</p>
                 <p class="label">Owner</p><p class="value">{owner_name}</p>
-                <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;">
-                  <div>
+                <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;">
+                  <div style="flex:1;min-width:200px;">
                     <span class="label">Health Status</span><br/>
                     <span class="badge" style="background:{risk_color};">{status_text}</span>
                     <p style="margin-top:6px;color:#666;font-size:12px;">Model: {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
-                    <p style="margin-top:8px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
+                    <p style="margin-top:6px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
                   </div>
                   <div style="text-align:right;">
-                    <button onclick="openModal()" style="background:#eee;border-radius:6px;padding:8px 12px;border:none;cursor:pointer;">More</button>
+                    <button onclick="openModal()" class="more-btn">More</button>
                   </div>
                 </div>
               </div>
@@ -905,14 +936,9 @@ def public_pet_page(pet_id):
                   <p><strong>Model:</strong> {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
                   <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
                   <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
-                  <!-- Care Tips -->
-                  <h4>Care Tips</h4>
-                  <p><strong>What to do</strong></p>
-                  <ul>{actions_html}</ul>
-                  <p><strong>What to expect</strong></p>
-                  <ul>{expectations_html}</ul>
+                  {care_tips_section}
                   {future_html}
-                  <div style="margin-top:12px;text-align:right;">
+                  <div style="margin-top:16px;text-align:right;">
                     <button class="close-btn" onclick="closeModal()">Close</button>
                   </div>
                 </div>
