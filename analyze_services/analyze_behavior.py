@@ -933,7 +933,6 @@ def public_pet_page(pet_id):
                   <h4>Latest Analysis</h4>
                   <p><strong>Status:</strong> {status_text}</p>
                   <p><strong>Risk:</strong> {(latest_risk or 'None')}</p>
-                  <p><strong>Model:</strong> {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
                   <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
                   <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
                   {care_tips_section}
@@ -1492,6 +1491,261 @@ def debug_sleep_forecast():
                 "prediction_method": "linear_regression" if len(sleep_series) < 8 else "neural_network",
                 "explanation": "Predictions based on historical sleep patterns. Low variation in data may result in flat forecasts."
             }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/test_accuracy", methods=["POST"])
+def test_model_accuracy():
+    """
+    Test the accuracy of illness prediction and sleep forecasting models.
+    Uses time-series cross-validation: train on past data, test on future data.
+    
+    Request body:
+    {
+        "pet_id": "optional - test specific pet or all pets if omitted",
+        "test_days": 7  # how many days into future to test predictions
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    pet_id = data.get("pet_id")
+    test_days = int(data.get("test_days", 7))
+    
+    try:
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, mean_absolute_error, mean_squared_error, r2_score
+        
+        results = {
+            "illness_prediction": {
+                "accuracy": None,
+                "precision": None,
+                "recall": None,
+                "f1_score": None,
+                "confusion_matrix": None,
+                "test_samples": 0,
+                "details": []
+            },
+            "sleep_forecast": {
+                "mae": None,
+                "rmse": None,
+                "r2": None,
+                "test_samples": 0,
+                "details": []
+            }
+        }
+        
+        # Get pets to test
+        if pet_id:
+            pet_ids = [pet_id]
+        else:
+            pets_resp = supabase.table("pets").select("id").limit(50).execute()
+            pet_ids = [p["id"] for p in (pets_resp.data or [])]
+        
+        illness_y_true, illness_y_pred = [], []
+        sleep_y_true, sleep_y_pred = [], []
+        
+        for pid in pet_ids:
+            df = fetch_logs_df(pid, limit=500)
+            if df.empty or len(df) < test_days + 10:
+                continue
+            
+            df = df.copy()
+            df['log_date'] = pd.to_datetime(df['log_date'])
+            df = df.sort_values('log_date')
+            
+            # Split: use all but last test_days for training, last test_days for testing
+            split_idx = len(df) - test_days
+            train_df = df.iloc[:split_idx]
+            test_df = df.iloc[split_idx:]
+            
+            # --- Test Illness Prediction ---
+            try:
+                # Train model on training data
+                train_illness_model(train_df)
+                
+                for _, row in test_df.iterrows():
+                    mood = str(row.get("mood", ""))
+                    sleep_hours = float(row.get("sleep_hours", 0))
+                    activity = str(row.get("activity_level", ""))
+                    
+                    # Predict
+                    pred_risk = predict_illness_risk(mood, sleep_hours, activity)
+                    
+                    # Ground truth: use same logic as training
+                    actual_unhealthy = (
+                        (str(mood).lower() in ['lethargic', 'aggressive']) or
+                        (sleep_hours < 5) or
+                        (str(activity).lower() == 'low')
+                    )
+                    actual_risk = "high" if actual_unhealthy else "low"
+                    
+                    # Convert to binary for metrics (unhealthy=1, healthy=0)
+                    illness_y_true.append(1 if actual_risk in ["high", "medium"] else 0)
+                    illness_y_pred.append(1 if pred_risk in ["high", "medium"] else 0)
+                    
+                    results["illness_prediction"]["details"].append({
+                        "pet_id": pid,
+                        "date": str(row['log_date'].date()),
+                        "predicted": pred_risk,
+                        "actual": actual_risk,
+                        "correct": pred_risk == actual_risk
+                    })
+            except Exception as e:
+                print(f"Illness test error for pet {pid}: {e}")
+            
+            # --- Test Sleep Forecasting ---
+            try:
+                # Use training data to forecast
+                train_sleep_series = train_df['sleep_hours'].tolist()
+                predicted_sleep = predict_future_sleep(train_sleep_series, days_ahead=len(test_df))
+                
+                actual_sleep = test_df['sleep_hours'].tolist()
+                
+                # Only compare same length
+                min_len = min(len(predicted_sleep), len(actual_sleep))
+                sleep_y_pred.extend(predicted_sleep[:min_len])
+                sleep_y_true.extend(actual_sleep[:min_len])
+                
+                for i in range(min_len):
+                    results["sleep_forecast"]["details"].append({
+                        "pet_id": pid,
+                        "date": str(test_df.iloc[i]['log_date'].date()),
+                        "predicted": round(predicted_sleep[i], 2),
+                        "actual": round(actual_sleep[i], 2),
+                        "error": round(abs(predicted_sleep[i] - actual_sleep[i]), 2)
+                    })
+            except Exception as e:
+                print(f"Sleep test error for pet {pid}: {e}")
+        
+        # Calculate illness prediction metrics
+        if illness_y_true and illness_y_pred:
+            results["illness_prediction"]["test_samples"] = len(illness_y_true)
+            results["illness_prediction"]["accuracy"] = round(accuracy_score(illness_y_true, illness_y_pred), 3)
+            results["illness_prediction"]["precision"] = round(precision_score(illness_y_true, illness_y_pred, zero_division=0), 3)
+            results["illness_prediction"]["recall"] = round(recall_score(illness_y_true, illness_y_pred, zero_division=0), 3)
+            results["illness_prediction"]["f1_score"] = round(f1_score(illness_y_true, illness_y_pred, zero_division=0), 3)
+            
+            cm = confusion_matrix(illness_y_true, illness_y_pred)
+            results["illness_prediction"]["confusion_matrix"] = {
+                "true_negative": int(cm[0][0]) if cm.shape == (2, 2) else 0,
+                "false_positive": int(cm[0][1]) if cm.shape == (2, 2) else 0,
+                "false_negative": int(cm[1][0]) if cm.shape == (2, 2) else 0,
+                "true_positive": int(cm[1][1]) if cm.shape == (2, 2) else 0
+            }
+        
+        # Calculate sleep forecasting metrics
+        if sleep_y_true and sleep_y_pred:
+            results["sleep_forecast"]["test_samples"] = len(sleep_y_true)
+            results["sleep_forecast"]["mae"] = round(mean_absolute_error(sleep_y_true, sleep_y_pred), 3)
+            results["sleep_forecast"]["rmse"] = round(np.sqrt(mean_squared_error(sleep_y_true, sleep_y_pred)), 3)
+            
+            try:
+                r2 = r2_score(sleep_y_true, sleep_y_pred)
+                results["sleep_forecast"]["r2"] = round(r2, 3)
+            except:
+                results["sleep_forecast"]["r2"] = None
+        
+        # Add interpretation
+        results["interpretation"] = {
+            "illness_prediction": _interpret_illness_metrics(
+                results["illness_prediction"]["accuracy"],
+                results["illness_prediction"]["f1_score"]
+            ),
+            "sleep_forecast": _interpret_sleep_metrics(
+                results["sleep_forecast"]["mae"],
+                results["sleep_forecast"]["r2"]
+            )
+        }
+        
+        return jsonify(results)
+        
+    except Exception as e:
+        return jsonify({"error": str(e), "details": "Error during accuracy testing"}), 500
+
+
+def _interpret_illness_metrics(accuracy, f1):
+    """Interpret illness prediction performance"""
+    if accuracy is None or f1 is None:
+        return "Insufficient data for evaluation"
+    
+    if accuracy >= 0.85 and f1 >= 0.80:
+        return "Excellent - Model is highly accurate and reliable"
+    elif accuracy >= 0.75 and f1 >= 0.70:
+        return "Good - Model performs well with room for improvement"
+    elif accuracy >= 0.65 and f1 >= 0.60:
+        return "Fair - Model is somewhat reliable but needs more training data"
+    else:
+        return "Poor - Model needs significant improvement, consider collecting more diverse data"
+
+
+def _interpret_sleep_metrics(mae, r2):
+    """Interpret sleep forecasting performance"""
+    if mae is None:
+        return "Insufficient data for evaluation"
+    
+    # MAE interpretation (hours off from actual)
+    mae_quality = "excellent" if mae < 0.5 else "good" if mae < 1.0 else "fair" if mae < 1.5 else "poor"
+    
+    # R² interpretation (how much variance explained)
+    if r2 is not None:
+        if r2 >= 0.8:
+            r2_quality = "excellent fit"
+        elif r2 >= 0.6:
+            r2_quality = "good fit"
+        elif r2 >= 0.4:
+            r2_quality = "moderate fit"
+        else:
+            r2_quality = "poor fit"
+        
+        return f"MAE: {mae_quality} (±{mae:.2f} hours error), R²: {r2_quality} ({r2:.2f})"
+    
+    return f"MAE: {mae_quality} (±{mae:.2f} hours error)"
+
+
+@app.route("/test_accuracy/summary", methods=["GET"])
+def test_accuracy_summary():
+    """
+    Get a quick summary of model performance across all pets.
+    This is a lightweight version that provides overview metrics.
+    """
+    try:
+        # Check if illness model is trained
+        illness_trained = is_illness_model_trained()
+        
+        # Get counts
+        pets_resp = supabase.table("pets").select("id", count="exact").execute()
+        pets_count = len(pets_resp.data or [])
+        
+        logs_resp = supabase.table("behavior_logs").select("id", count="exact").limit(1).execute()
+        
+        preds_resp = supabase.table("predictions").select("id", count="exact").limit(1).execute()
+        
+        # Load illness model metadata if available
+        model_metadata = None
+        if illness_trained:
+            try:
+                loaded = load_illness_model()
+                if loaded and loaded[0]:
+                    model_metadata = loaded[4]  # metadata is 5th element
+            except:
+                pass
+        
+        return jsonify({
+            "status": "ready" if illness_trained else "not_trained",
+            "illness_model": {
+                "trained": illness_trained,
+                "metadata": model_metadata
+            },
+            "data_overview": {
+                "total_pets": pets_count,
+                "behavior_logs_available": logs_resp.count if hasattr(logs_resp, 'count') else "unknown",
+                "predictions_stored": preds_resp.count if hasattr(preds_resp, 'count') else "unknown"
+            },
+            "recommendation": (
+                "Model is trained and ready for accuracy testing. Use POST /test_accuracy to run detailed tests."
+                if illness_trained
+                else "Model not yet trained. Log more behavior data and use POST /train to train the model first."
+            )
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
