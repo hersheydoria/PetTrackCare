@@ -3,9 +3,9 @@ from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, make_response
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 import tensorflow as tf
 from supabase import create_client
@@ -1324,14 +1324,14 @@ def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.j
         return "low"
 
 def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    """Predict future sleep using lag features + weekday pattern.
-    Strategy:
-    - If very little data (<4) use a small heuristic with jitter.
-    - Build supervised samples using a sliding window of lags and weekday index.
-      Train a RandomForestRegressor when there are enough samples; otherwise use
-      a LinearRegression fallback. For multi-day forecasts we iteratively
-      predict and feed the prediction back as the next lag.
-    - Blend with a weekday-based empirical mean if outputs look too flat.
+    """Predict future sleep using improved features and ensemble approach.
+    Improvements:
+    - More lag features (7-day and 14-day patterns)
+    - Rolling statistics (mean, std, min, max)
+    - Trend analysis
+    - Better handling of weekday patterns
+    - Ensemble of RandomForest + gradient boosting
+    - Feature normalization
     """
     arr = np.array(sleep_series).astype(float) if (sleep_series is not None and len(sleep_series) > 0) else np.array([])
     days_ahead = int(days_ahead or 7)
@@ -1344,79 +1344,195 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
     recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 8.0
     recent_std = float(np.std(arr[-7:])) if arr.size >= 2 else 0.5
 
-    # heuristic fallback
+    # heuristic fallback with improved weekday modeling
     def heuristic_preds(base_mean, n, start_index=0):
+        # Calculate weekday-specific means from history
+        weekday_means = {}
+        for i, val in enumerate(arr):
+            dow = i % 7
+            if dow not in weekday_means:
+                weekday_means[dow] = []
+            weekday_means[dow].append(val)
+        
+        # Get average for each weekday
+        weekday_avg = {}
+        for dow, vals in weekday_means.items():
+            weekday_avg[dow] = np.mean(vals) if vals else base_mean
+        
         out = []
         for i in range(n):
-            # small weekday bump for weekend-ish positions
             dow = (start_index + i) % 7
-            weekly = 0.3 if dow in (5, 6) else -0.1
-            noise = float(np.random.normal(0, max(0.12, recent_std * 0.15)))
-            p = base_mean + weekly + noise
+            # Use weekday-specific average if available
+            pred = weekday_avg.get(dow, base_mean)
+            # Add small noise for realism
+            noise = float(np.random.normal(0, max(0.1, recent_std * 0.1)))
+            p = pred + noise
             out.append(round(max(0.0, min(24.0, p)), 1))
         return out
 
-    # If not enough history, rely on heuristic
-    if arr.size < 4:
+    # If not enough history, rely on improved heuristic
+    if arr.size < 10:
         return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
 
-    # window size: prefer 7 but shrink for short series
-    window = min(7, max(3, int(arr.size / 2)))
-
-    # Build supervised dataset: for t in [window .. len(arr)-1]
+    # Enhanced feature engineering
+    def create_features(arr, index):
+        """Create rich feature set for given index"""
+        features = []
+        
+        # Lag features (last 7 days)
+        for i in range(1, min(8, index + 1)):
+            if index - i >= 0:
+                features.append(arr[index - i])
+            else:
+                features.append(recent_mean)
+        
+        # Pad if less than 7 lags available
+        while len(features) < 7:
+            features.append(recent_mean)
+        
+        # Rolling statistics (last 7 days)
+        window_vals = arr[max(0, index-7):index] if index > 0 else []
+        if len(window_vals) >= 2:
+            features.append(np.mean(window_vals))  # rolling mean
+            features.append(np.std(window_vals))   # rolling std
+            features.append(np.min(window_vals))   # rolling min
+            features.append(np.max(window_vals))   # rolling max
+        else:
+            features.extend([recent_mean, recent_std, recent_mean, recent_mean])
+        
+        # Trend feature (difference between recent and older average)
+        if index >= 14:
+            recent_avg = np.mean(arr[index-7:index])
+            older_avg = np.mean(arr[index-14:index-7])
+            trend = recent_avg - older_avg
+        else:
+            trend = 0.0
+        features.append(trend)
+        
+        # Day of week (one-hot encoded would be better, but keeping simple)
+        dow = index % 7
+        features.append(dow)
+        
+        # Is weekend (binary feature)
+        is_weekend = 1.0 if dow in [5, 6] else 0.0
+        features.append(is_weekend)
+        
+        return features
+    
+    # Build supervised dataset with enhanced features
     X_rows = []
     y = []
-    for t in range(window, len(arr)):
-        lags = arr[t - window:t]
-        dow = (t) % 7
-        X_rows.append(np.concatenate([lags, [dow]]))
+    min_samples = 10  # Need at least this many samples
+    
+    for t in range(min_samples, len(arr)):
+        feats = create_features(arr, t)
+        X_rows.append(feats)
         y.append(arr[t])
-
+    
     X = np.array(X_rows) if X_rows else np.empty((0, 0))
     y = np.array(y) if y else np.array([])
 
-    # If we couldn't build any supervised example (rare), fallback to heuristic
-    if X.shape[0] < 3:
+    # If we couldn't build enough supervised examples, fallback to heuristic
+    if X.shape[0] < 5:
         return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
 
-    # Normalize weekday feature scale (0-6) to small numeric effect
-    # Train a regressor: RandomForest works well with small tabular data
+    # Feature normalization using StandardScaler
     try:
-        from sklearn.linear_model import LinearRegression
-        # weekday is last column
-        rf = RandomForestRegressor(n_estimators=100, random_state=42)
-        rf.fit(X, y)
-
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.ensemble import GradientBoostingRegressor
+        from sklearn.linear_model import Ridge
+        
+        # Normalize features for better model performance
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Train ensemble of models for better predictions
+        # RandomForest is good at capturing non-linear patterns
+        rf = RandomForestRegressor(
+            n_estimators=150,
+            max_depth=10,
+            min_samples_split=3,
+            min_samples_leaf=2,
+            random_state=42
+        )
+        
+        # Gradient Boosting for sequential pattern learning
+        gb = GradientBoostingRegressor(
+            n_estimators=100,
+            learning_rate=0.1,
+            max_depth=5,
+            random_state=42
+        )
+        
+        # Ridge regression for linear trends
+        ridge = Ridge(alpha=1.0, random_state=42)
+        
+        # Train all models
+        rf.fit(X_scaled, y)
+        gb.fit(X_scaled, y)
+        ridge.fit(X_scaled, y)
+        
+        # Generate predictions using ensemble
         preds = []
-        # iterative forecasting
-        last_window = list(arr[-window:])
+        
+        # For iterative forecasting, we need to maintain state
+        # Use the full array for feature generation
+        forecast_arr = list(arr)
+        
         for i in range(days_ahead):
+            # Create features for next prediction
+            feats = create_features(np.array(forecast_arr), len(forecast_arr))
+            feats_scaled = scaler.transform([feats])
+            
+            # Ensemble prediction (weighted average)
+            rf_pred = float(rf.predict(feats_scaled)[0])
+            gb_pred = float(gb.predict(feats_scaled)[0])
+            ridge_pred = float(ridge.predict(feats_scaled)[0])
+            
+            # Weighted ensemble: RF gets most weight, then GB, then Ridge
+            ensemble_pred = 0.5 * rf_pred + 0.3 * gb_pred + 0.2 * ridge_pred
+            
+            # Clip to valid range
+            ensemble_pred = max(0.0, min(24.0, ensemble_pred))
+            
+            preds.append(ensemble_pred)
+            
+            # Add prediction to array for next iteration
+            forecast_arr.append(ensemble_pred)
+        
+        # Post-processing: smooth extreme predictions
+        smoothed_preds = []
+        for i, pred in enumerate(preds):
+            # Calculate expected value based on weekday pattern
             dow = (len(arr) + i) % 7
-            feat = np.array(list(last_window) + [dow]).reshape(1, -1)
-            p = float(rf.predict(feat)[0])
-            p = max(0.0, min(24.0, p))
-            preds.append(p)
-            # shift window
-            last_window = last_window[1:] + [p]
-
-        # if model output is suspiciously flat, blend with weekday empirical means
-        if np.std(preds) < 0.25 or len(set([round(x,1) for x in preds])) == 1:
-            # compute empirical weekday means from history
-            wmeans = {i: [] for i in range(7)}
-            for idx, v in enumerate(arr):
-                wmeans[idx % 7].append(v)
-            wmeans_mean = {k: (float(np.mean(v)) if v else recent_mean) for k, v in wmeans.items()}
-            blended = []
-            for i, m in enumerate(preds):
+            weekday_history = [arr[j] for j in range(len(arr)) if j % 7 == dow]
+            expected = np.mean(weekday_history) if weekday_history else recent_mean
+            
+            # If prediction deviates too much from expected, blend them
+            deviation = abs(pred - expected)
+            if deviation > 3.0:  # More than 3 hours deviation
+                # Blend: 70% prediction, 30% expected
+                pred = 0.7 * pred + 0.3 * expected
+            
+            smoothed_preds.append(round(max(0.0, min(24.0, pred)), 1))
+        
+        # Final check: if predictions are too flat, add weekday variation
+        if np.std(smoothed_preds) < 0.2:
+            # Add natural weekday variation
+            for i in range(len(smoothed_preds)):
                 dow = (len(arr) + i) % 7
-                w = wmeans_mean.get(dow, recent_mean)
-                v = 0.7 * float(m) + 0.3 * float(w)
-                blended.append(round(max(0.0, min(24.0, v)), 1))
-            return blended
-
-        return [round(float(x), 1) for x in preds]
-    except Exception:
-        # fallback to simple linear extrapolation on last few points
+                # Weekend adjustment
+                if dow in [5, 6]:
+                    smoothed_preds[i] = round(smoothed_preds[i] + 0.3, 1)
+                else:
+                    smoothed_preds[i] = round(smoothed_preds[i] - 0.1, 1)
+                smoothed_preds[i] = max(0.0, min(24.0, smoothed_preds[i]))
+        
+        return smoothed_preds
+        
+    except Exception as e:
+        print(f"Warning: Advanced model failed ({e}), using fallback")
+        # fallback to simple approach
         try:
             from sklearn.linear_model import LinearRegression
             idx = np.arange(len(arr)).reshape(-1, 1)
