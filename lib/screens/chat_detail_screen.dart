@@ -273,11 +273,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   // NEW: setup realtime signaling
+  // NOTE: call_invite is now handled globally by CallInviteService
   void _initCallSignals() {
     final myKey = _sanitizeId(widget.userId);
     _callRx = supabase.channel('call_sig:$myKey');
     _callRx!
-        .onBroadcast(
+        // DISABLED: call_invite is now handled globally by CallInviteService
+        /* .onBroadcast(
           event: 'call_invite',
           callback: (payload, [ref]) async {
             final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
@@ -360,7 +362,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               });
             }
           },
-        )
+        ) */
         .onBroadcast(
           event: 'call_accept',
           callback: (payload, [ref]) async {

@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
 class CallInviteService {
   static final CallInviteService _instance = CallInviteService._internal();
@@ -18,6 +19,7 @@ class CallInviteService {
   Set<String> _processedCallIds = {};
   bool _isShowingDialog = false;
   String? _activeCallId;
+  bool _isRingtonePlaying = false;
 
   final SupabaseClient _supabase = Supabase.instance.client;
 
@@ -141,7 +143,12 @@ class CallInviteService {
             }
           },
         )
-        .subscribe();
+        .subscribe((status, [error]) {
+      print('📞 CallInviteService: Channel subscription status: $status');
+      if (error != null) {
+        print('📞 CallInviteService: Subscription error: $error');
+      }
+    });
 
     print('📞 CallInviteService: Call monitoring started successfully');
   }
@@ -168,6 +175,9 @@ class CallInviteService {
 
     _activeCallId = callId;
     final isVideo = mode == 'video';
+
+    // Play ringtone when showing the dialog
+    _playRingtone();
 
     showDialog<bool>(
       context: _context!,
@@ -266,6 +276,9 @@ class CallInviteService {
   Future<void> _acceptCall(BuildContext dialogContext, String from, String to, String callId, bool isVideo) async {
     print('📞 CallInviteService: Call accepted - joining Zego');
     
+    // Stop ringtone when accepting
+    _stopRingtone();
+    
     // Close the dialog
     Navigator.of(dialogContext).pop(true);
     _isShowingDialog = false;
@@ -303,6 +316,9 @@ class CallInviteService {
   // Decline the call
   Future<void> _declineCall(BuildContext dialogContext, String from, String to, String callId) async {
     print('📞 CallInviteService: Call declined');
+    
+    // Stop ringtone when declining
+    _stopRingtone();
     
     // Close the dialog
     Navigator.of(dialogContext).pop(false);
@@ -435,15 +451,48 @@ class CallInviteService {
   // Dismiss dialog
   void _dismissDialog() {
     if (_context != null && _context!.mounted && _isShowingDialog) {
+      _stopRingtone(); // Stop ringtone when dialog is dismissed
       Navigator.of(_context!, rootNavigator: true).pop();
       _isShowingDialog = false;
       _activeCallId = null;
     }
   }
 
+  // Play ringtone for incoming call
+  void _playRingtone() {
+    if (!_isRingtonePlaying) {
+      try {
+        print('📞 CallInviteService: Playing ringtone');
+        FlutterRingtonePlayer().play(
+          android: AndroidSounds.ringtone,
+          ios: IosSounds.electronic,
+          looping: true, // Loop until answered or declined
+          volume: 1.0,
+        );
+        _isRingtonePlaying = true;
+      } catch (e) {
+        print('📞 CallInviteService: Error playing ringtone: $e');
+      }
+    }
+  }
+
+  // Stop ringtone
+  void _stopRingtone() {
+    if (_isRingtonePlaying) {
+      try {
+        print('📞 CallInviteService: Stopping ringtone');
+        FlutterRingtonePlayer().stop();
+        _isRingtonePlaying = false;
+      } catch (e) {
+        print('📞 CallInviteService: Error stopping ringtone: $e');
+      }
+    }
+  }
+
   // Dispose the service
   void dispose() {
     print('📞 CallInviteService: Disposing');
+    _stopRingtone(); // Stop ringtone on dispose
     _callChannel?.unsubscribe();
     _callChannel = null;
     _isInitialized = false;

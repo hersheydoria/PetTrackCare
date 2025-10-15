@@ -101,9 +101,10 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
     
     print('🚀 PetTrackCareApp: Starting with initial route: $initialRoute');
     
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'PetTrackCare',
+    return CallInviteWrapper(
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'PetTrackCare',
       theme: ThemeData(
         primaryColor: Color(0xFFB82132), // Main red color
         scaffoldBackgroundColor: Color(0xFFF6DED8), // Light blush background
@@ -144,24 +145,20 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
           return RegistrationScreen();
         },
         '/home': (_) {
-            print('🚀 Route: /home accessed - initializing wrappers');
+            print('🚀 Route: /home accessed - initializing MissingPetAlertWrapper');
             final user = Supabase.instance.client.auth.currentUser;
             
             // Run auto-migration in background when user enters home
             _runAutoMigrationInBackground();
             
-            return CallInviteWrapper(
-              child: MissingPetAlertWrapper(
-                child: MainNavigation(userId: user!.id),
-              ),
+            return MissingPetAlertWrapper(
+              child: MainNavigation(userId: user!.id),
             );
           },
         '/location_picker': (_) {
-          print('🚀 Route: /location_picker accessed - initializing wrappers');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: LocationPicker(),
-            ),
+          print('🚀 Route: /location_picker accessed - initializing MissingPetAlertWrapper');
+          return MissingPetAlertWrapper(
+            child: LocationPicker(),
           );
         },
         '/reset-password': (_) {
@@ -169,46 +166,37 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
           return ResetPasswordScreen();
         },
         '/notification' : (_) {
-          print('🚀 Route: /notification accessed - initializing wrappers');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: NotificationScreen(),
-            ),
+          print('🚀 Route: /notification accessed - initializing MissingPetAlertWrapper');
+          return MissingPetAlertWrapper(
+            child: NotificationScreen(),
           );
         },
          '/postDetail': (context) {
-          print('🚀 Route: /postDetail accessed - initializing wrappers');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: PostDetailScreen.fromRoute(context),
-            ),
+          print('🚀 Route: /postDetail accessed - initializing MissingPetAlertWrapper');
+          return MissingPetAlertWrapper(
+            child: PostDetailScreen.fromRoute(context),
           );
         },
           '/petAlert': (context) {
-          print('🚀 Route: /petAlert accessed - initializing wrappers');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: PetAlertScreen.fromRoute(context),
-            ),
+          print('🚀 Route: /petAlert accessed - initializing MissingPetAlertWrapper');
+          return MissingPetAlertWrapper(
+            child: PetAlertScreen.fromRoute(context),
           );
         },
         '/profile_owner': (_) {
-          print('🚀 Route: /profile_owner accessed - initializing wrappers');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: OwnerProfileScreen(openSavedPosts: false),
-            ),
+          print('🚀 Route: /profile_owner accessed - initializing MissingPetAlertWrapper');
+          return MissingPetAlertWrapper(
+            child: OwnerProfileScreen(openSavedPosts: false),
           );
         },
         '/profile_sitter': (_) {
-          print('🚀 Route: /profile_sitter accessed - initializing wrappers');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: SitterProfileScreen(openSavedPosts: false),
-            ),
+          print('🚀 Route: /profile_sitter accessed - initializing MissingPetAlertWrapper');
+          return MissingPetAlertWrapper(
+            child: SitterProfileScreen(openSavedPosts: false),
           );
         },
       },
+      ),
     );
   }
 }
