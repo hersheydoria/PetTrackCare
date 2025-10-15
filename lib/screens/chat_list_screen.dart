@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'chat_detail_screen.dart';
 import 'notification_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -23,10 +24,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   // Track prompted call_ids to avoid duplicate dialogs
   final Set<String> _promptedCallIds = {};
-
-  // Zego app credentials (same as in chat_detail_screen.dart)
-  static const int appID = 1445580868;
-  static const String appSign = '2136993e53a5a7926531f24e693db2403af6e916e1f6dca8970c71c21e4b29be';
 
   String _sanitizeId(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '').isEmpty
       ? 'user'
@@ -58,8 +55,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => ZegoUIKitPrebuiltCall(
-          appID: appID,
-          appSign: appSign,
+          appID: int.parse(dotenv.env['ZEGO_APP_ID'] ?? '0'),
+          appSign: dotenv.env['ZEGO_APP_SIGN'] ?? '',
           userID: me,
           userName: me, // or fetch/display your own name here if needed
           callID: callId,
