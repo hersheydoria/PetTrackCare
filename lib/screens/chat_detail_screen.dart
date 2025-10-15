@@ -331,6 +331,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               });
               
               print('🔵 RECEIVER joining Zego with callID: $callId');
+              // Small delay to let caller's Zego instance initialize the room first
+              await Future.delayed(Duration(milliseconds: 500));
               await _joinZegoCall(callId: callId, video: mode == 'video');
             } else {
               // DB record for history
@@ -1970,10 +1972,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   String _sharedCallId(String userA, String userB) {
+    print('📞 _sharedCallId INPUT:');
+    print('   Original UserA: $userA');
+    print('   Original UserB: $userB');
+    
     // Sort to make it order-independent
     final sorted = [userA, userB]..sort();
+    
+    print('   After sorting[0]: ${sorted[0]}');
+    print('   After sorting[1]: ${sorted[1]}');
+    
     final left = _sanitizeId(sorted[0]);
     final right = _sanitizeId(sorted[1]);
+    
+    print('   Sorted[0] sanitized: $left');
+    print('   Sorted[1] sanitized: $right');
 
     // Keep a compact, deterministic ID: prefix + 12 chars from each side
     final leftShort = (left.length >= 12) ? left.substring(0, 12) : left.padRight(12, '0');
@@ -1981,10 +1994,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     final id = 'ptc_${leftShort}_${rightShort}';
     
-    // Debug logging
-    print('📞 _sharedCallId generated:');
-    print('   UserA: $userA -> sanitized: $left -> short: $leftShort');
-    print('   UserB: $userB -> sanitized: $right -> short: $rightShort');
+    print('   Left short (12 chars): $leftShort');
+    print('   Right short (12 chars): $rightShort');
     print('   Final CallID: $id');
     
     // Max 64 characters (we are well under)
