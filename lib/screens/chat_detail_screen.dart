@@ -652,9 +652,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   void _dismissCallingDialog() {
+    print('📞 _dismissCallingDialog called: dialogOpen=$_callingDialogOpen, mounted=$mounted');
     if (_callingDialogOpen && mounted) {
-      Navigator.of(context, rootNavigator: true).maybePop();
-      _callingDialogOpen = false;
+      print('📞 Attempting to dismiss calling dialog with rootNavigator');
+      try {
+        Navigator.of(context, rootNavigator: true).pop();
+        _callingDialogOpen = false;
+        print('📞 Calling dialog dismissed successfully');
+      } catch (e) {
+        print('📞 Error dismissing dialog: $e');
+        _callingDialogOpen = false;
+      }
+    } else {
+      print('📞 Dialog not open or widget not mounted, skipping dismiss');
     }
   }
 
@@ -2364,8 +2374,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       ),
     );
 
-    // Call ended - broadcast hangup to other user
-    print('📞 Call ended - broadcasting hangup to other user');
+    // Call ended - dismiss any calling dialog that might still be open
+    print('📞 Call ended - checking for calling dialog to dismiss');
+    print('📞 Dialog state: _callingDialogOpen=$_callingDialogOpen, _awaitingAccept=$_awaitingAccept');
+    
+    // Use a post-frame callback to ensure we're back on the correct screen
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _callingDialogOpen) {
+          print('📞 Post-frame: Dismissing calling dialog');
+          _dismissCallingDialog();
+        }
+      });
+    }
+
+    // Broadcast hangup to other user
     await _sendSignal(widget.receiverId, 'call_hangup', {
       'from': widget.userId,
       'to': widget.receiverId,
@@ -2379,6 +2402,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         _inActiveCall = false;
         _activeCallId = null;
         _awaitingAccept = false;
+        _outgoingCallId = null; // Also clear outgoing call ID
       });
     }
   }
