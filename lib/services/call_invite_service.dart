@@ -10,7 +10,25 @@ import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 class CallInviteService {
   static final CallInviteService _instance = CallInviteService._internal();
   factory CallInviteService() => _instance;
-  CallInviteService._internal();
+  CallInviteService._internal() {
+    // Listen for auth state changes
+    _supabase.auth.onAuthStateChange.listen((data) {
+      print('📞 CallInviteService: Auth state changed - session: ${data.session != null}');
+      if (data.session != null && !_isInitialized) {
+        _currentUserId = data.session?.user.id;
+        print('📞 CallInviteService: User logged in, starting call monitoring for: $_currentUserId');
+        if (_context != null && _currentUserId != null) {
+          _startCallMonitoring();
+          _isInitialized = true;
+        } else {
+          print('📞 CallInviteService: Context not available yet, will initialize when context is set');
+        }
+      } else if (data.session == null && _isInitialized) {
+        print('📞 CallInviteService: User logged out, cleaning up');
+        dispose();
+      }
+    });
+  }
 
   BuildContext? _context;
   bool _isInitialized = false;
@@ -28,6 +46,7 @@ class CallInviteService {
     print('📞 CallInviteService: Initializing with context');
     _context = context;
     
+    // Try to initialize if we have a user but haven't started monitoring yet
     if (!_isInitialized) {
       _currentUserId = _supabase.auth.currentUser?.id;
       if (_currentUserId != null) {
@@ -35,7 +54,7 @@ class CallInviteService {
         _startCallMonitoring();
         _isInitialized = true;
       } else {
-        print('📞 CallInviteService: No user ID, cannot initialize');
+        print('📞 CallInviteService: No user ID yet, waiting for auth state change');
       }
     } else {
       print('📞 CallInviteService: Already initialized, just updating context');
@@ -118,10 +137,16 @@ class CallInviteService {
 
             final callId = (body['call_id'] ?? '').toString();
             print('📞 CallInviteService: Call canceled: $callId');
+            print('📞 CallInviteService: Current state - showing dialog: $_isShowingDialog, active call: $_activeCallId');
+
+            // Always stop ringtone when call is canceled
+            _stopRingtone();
 
             if (_isShowingDialog && _activeCallId == callId) {
               print('📞 CallInviteService: Dismissing call dialog due to cancellation');
               _dismissDialog();
+            } else {
+              print('📞 CallInviteService: No matching dialog to dismiss (dialog showing: $_isShowingDialog, callId match: ${_activeCallId == callId})');
             }
           },
         )
