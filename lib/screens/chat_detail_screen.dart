@@ -479,21 +479,31 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       );
       print('📞 _sendSignal: Subscribing to channel...');
-      await ch.subscribe(); // Wait for subscription to complete
+      ch.subscribe((status, [error]) {
+        print('📞 _sendSignal: 📡 Channel subscription status: $status');
+        if (error != null) {
+          print('📞 _sendSignal: ❌ Subscription error: $error');
+        }
+      });
+      
+      // Wait for subscription to be fully established
+      print('📞 _sendSignal: ⏳ Waiting for channel to be ready...');
+      await Future.delayed(Duration(milliseconds: 1500));
+      
       _sigChans[key] = ch;
-      print('📞 _sendSignal: Channel subscribed successfully');
+      print('📞 _sendSignal: ✅ Channel ready for broadcasting');
     }
     
     try {
-      print('📞 _sendSignal: Sending broadcast event $event with payload: $payload');
+      print('📞 _sendSignal: 📤 Sending broadcast event $event with payload: $payload');
       await ch.send(
         type: rt.RealtimeListenTypes.broadcast,
         event: event,
         payload: payload,
       );
-      print('📞 _sendSignal: Broadcast sent successfully');
+      print('📞 _sendSignal: ✅ Broadcast sent successfully');
     } catch (e) {
-      print('📞 _sendSignal: Error sending broadcast: $e');
+      print('📞 _sendSignal: ❌ Error sending broadcast: $e');
       // ignore; DB insert path still delivers signaling via onPostgresChanges
     }
   }
