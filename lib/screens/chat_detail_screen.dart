@@ -2184,6 +2184,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final config = video
         ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
         : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall();
+    
+    // Ensure audio and video are enabled
+    config.turnOnCameraWhenJoining = video;
+    config.turnOnMicrophoneWhenJoining = true;
+    config.useSpeakerWhenJoining = true;
+    
+    // Enable audio/video settings
+    config.audioVideoView.showCameraStateOnView = true;
+    config.audioVideoView.showMicrophoneStateOnView = true;
+    config.audioVideoView.showSoundWavesInAudioMode = true;
 
     await Navigator.push(
       context,
