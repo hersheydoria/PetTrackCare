@@ -471,7 +471,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     var ch = _sigChans[key];
     if (ch == null) {
       print('📞 _sendSignal: Creating new channel call_sig:$key');
-      ch = supabase.channel('call_sig:$key');
+      ch = supabase.channel(
+        'call_sig:$key',
+        opts: const RealtimeChannelConfig(
+          self: true, // Receive broadcasts from self
+          ack: true,  // Request acknowledgments
+        ),
+      );
+      print('📞 _sendSignal: Subscribing to channel...');
       await ch.subscribe(); // Wait for subscription to complete
       _sigChans[key] = ch;
       print('📞 _sendSignal: Channel subscribed successfully');

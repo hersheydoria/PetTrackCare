@@ -79,14 +79,28 @@ class CallInviteService {
     if (_currentUserId == null) return;
 
     final sanitizedUserId = _sanitizeId(_currentUserId!);
-    print('📞 CallInviteService: Subscribing to call channel: call_sig:$sanitizedUserId');
+    print('📞 CallInviteService: ===========================================');
+    print('📞 CallInviteService: SUBSCRIBING TO CHANNEL');
+    print('📞 CallInviteService: Raw User ID: $_currentUserId');
+    print('📞 CallInviteService: Sanitized ID: $sanitizedUserId');
+    print('📞 CallInviteService: Channel Name: call_sig:$sanitizedUserId');
+    print('📞 CallInviteService: ===========================================');
 
-    _callChannel = _supabase.channel('call_sig:$sanitizedUserId');
+    // Create channel with broadcast configuration
+    _callChannel = _supabase.channel(
+      'call_sig:$sanitizedUserId',
+      opts: const RealtimeChannelConfig(
+        self: true, // Receive broadcasts from self
+        ack: true,  // Request acknowledgments
+      ),
+    );
+    
+    print('📞 CallInviteService: Registering broadcast listeners...');
     _callChannel!
         .onBroadcast(
           event: 'call_invite',
           callback: (payload, [ref]) async {
-            print('📞 CallInviteService: Received call_invite broadcast');
+            print('📞 CallInviteService: 🔔🔔🔔 RECEIVED call_invite BROADCAST! 🔔🔔🔔');
             final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
             if (body == null) {
               print('📞 CallInviteService: Invalid payload');
@@ -176,15 +190,18 @@ class CallInviteService {
           },
         )
         .subscribe((status, [error]) {
-      print('📞 CallInviteService: 📡 Subscription status: $status');
+      print('📞 CallInviteService: 📡📡📡 SUBSCRIPTION STATUS CHANGED: $status 📡📡📡');
       if (error != null) {
         print('📞 CallInviteService: ❌ Subscription error: $error');
       }
+      if (status == RealtimeSubscribeStatus.subscribed) {
+        print('📞 CallInviteService: ✅✅✅ CHANNEL IS NOW SUBSCRIBED AND READY! ✅✅✅');
+      }
     });
 
-    // Wait for subscription to be established
+    // Wait for subscription to be established (increased timeout)
     print('📞 CallInviteService: ⏳ Waiting for channel to be ready...');
-    await Future.delayed(Duration(milliseconds: 1000)); // Give it more time
+    await Future.delayed(Duration(milliseconds: 2000)); // Increased to 2 seconds
     print('📞 CallInviteService: ✅ Call monitoring setup complete - ready to receive broadcasts');
   }
 
