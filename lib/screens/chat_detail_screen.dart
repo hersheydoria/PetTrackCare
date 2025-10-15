@@ -49,6 +49,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String? _playingMessageId;
   String? _incomingPromptedCallId;
   bool _joiningCall = false;
+  bool _inActiveCall = false; // Track if user is currently in an active call
+  String? _activeCallId; // Store the active call ID for hangup broadcast
   String? _myDisplayName; // current user's display name, used for Zego
 
   String? _outgoingCallId;
@@ -415,6 +417,47 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             }
           },
         )
+        .onBroadcast(
+          event: 'call_hangup',
+          callback: (payload, [ref]) {
+            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            if (body == null) return;
+            final to = (body['to'] ?? '').toString();
+            final from = (body['from'] ?? '').toString();
+            final callId = (body['call_id'] ?? '').toString();
+            
+            print('📞 Received call_hangup event:');
+            print('   From: $from');
+            print('   To: $to');
+            print('   CallID: $callId');
+            print('   My active call: $_activeCallId');
+            print('   In active call: $_inActiveCall');
+            
+            if (to != widget.userId || callId.isEmpty) return;
+            
+            // If I'm currently in this call, end it
+            if (_inActiveCall && _activeCallId == callId) {
+              print('📞 Other user ended call - forcing navigation back');
+              
+              // Reset state
+              if (mounted) {
+                setState(() {
+                  _inActiveCall = false;
+                  _activeCallId = null;
+                  _awaitingAccept = false;
+                });
+                
+                // Pop the Zego call screen if it's currently displayed
+                Navigator.of(context).popUntil((route) => route.isFirst);
+                
+                // Show notification
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Call ended by other user')),
+                );
+              }
+            }
+          },
+        )
         .subscribe();
   }
 
@@ -673,6 +716,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Caller flow: send invite then wait for accept (do not auto-join)
   void _startZegoCall(bool video) async {
+    // Prevent initiating a new call while already in an active call
+    if (_inActiveCall) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You are already in an active call')),
+        );
+      }
+      return;
+    }
+    
     final callId = _sharedCallId(widget.userId, widget.receiverId);
     
     // Debug: Log call details for sender
@@ -2251,31 +2304,58 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Ensure video mirror for selfie camera
     config.audioVideoView.isVideoMirror = true;
     
-    // Top bar configuration - show speaker toggle button
+    // CRITICAL: Configure layout to show both local and remote video in PIP mode
+    // This ensures your local video appears in a small floating window
+    config.layout = ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall().layout;
+    
+    // Additional debug info
+    print('🎥 Video call config:');
+    print('   - Camera on join: ${config.turnOnCameraWhenJoining}');
+    print('   - Microphone on join: ${config.turnOnMicrophoneWhenJoining}');
+    print('   - Speaker: ${config.useSpeakerWhenJoining}');
+    print('   - Video mirror: ${config.audioVideoView.isVideoMirror}');
+    
+    // Top bar configuration - REMOVED minimize button (causes issue with no return path)
     config.topMenuBar.isVisible = true;
     config.topMenuBar.buttons = [
-      ZegoCallMenuBarButtonName.minimizingButton,
       ZegoCallMenuBarButtonName.showMemberListButton,
     ];
     
-    // Bottom bar configuration - ensure speaker toggle is available
+    // Bottom bar configuration - includes camera switch and speaker toggle
     config.bottomMenuBar.buttons = [
-      ZegoCallMenuBarButtonName.toggleCameraButton,
-      ZegoCallMenuBarButtonName.toggleMicrophoneButton,
-      ZegoCallMenuBarButtonName.hangUpButton,
-      ZegoCallMenuBarButtonName.switchAudioOutputButton, // Speaker toggle
+      ZegoCallMenuBarButtonName.toggleCameraButton,        // Turn camera on/off
+      ZegoCallMenuBarButtonName.switchCameraButton,        // Switch front/back camera
+      ZegoCallMenuBarButtonName.toggleMicrophoneButton,    // Mute/unmute
+      ZegoCallMenuBarButtonName.switchAudioOutputButton,   // Speaker/earpiece toggle
+      ZegoCallMenuBarButtonName.hangUpButton,              // End call
     ];
     
     // Member list configuration
     config.memberList.showMicrophoneState = true;
     config.memberList.showCameraState = true;
 
+    // Use .env with fallback to correct hardcoded values if .env fails
+    final appId = int.tryParse(dotenv.env['ZEGO_APP_ID'] ?? '') ?? 129707582;
+    final appSign = dotenv.env['ZEGO_APP_SIGN']?.isNotEmpty == true 
+        ? dotenv.env['ZEGO_APP_SIGN']! 
+        : 'ce6c20f99a76f7068d60f00d91a059b4ae2e660c2092048d2847acc4807cee8f';
+    
+    print('🔧 Chat Detail Zego Config: AppID=$appId');
+
+    // Mark as in active call before joining
+    if (mounted) {
+      setState(() {
+        _inActiveCall = true;
+        _activeCallId = callId;
+      });
+    }
+
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ZegoUIKitPrebuiltCall(
-          appID: int.parse(dotenv.env['ZEGO_APP_ID'] ?? '0'),
-          appSign: dotenv.env['ZEGO_APP_SIGN'] ?? '',
+          appID: appId,
+          appSign: appSign,
           userID: me,
           userName: myName,
           callID: callId,
@@ -2284,7 +2364,23 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       ),
     );
 
-    _joiningCall = false;
+    // Call ended - broadcast hangup to other user
+    print('📞 Call ended - broadcasting hangup to other user');
+    await _sendSignal(widget.receiverId, 'call_hangup', {
+      'from': widget.userId,
+      'to': widget.receiverId,
+      'call_id': callId,
+    });
+
+    // Reset state when returning from call screen
+    if (mounted) {
+      setState(() {
+        _joiningCall = false;
+        _inActiveCall = false;
+        _activeCallId = null;
+        _awaitingAccept = false;
+      });
+    }
   }
 
   @override
