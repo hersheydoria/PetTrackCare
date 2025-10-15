@@ -331,8 +331,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               });
               
               print('🔵 RECEIVER joining Zego with callID: $callId');
-              // Small delay to let caller's Zego instance initialize the room first
-              await Future.delayed(Duration(milliseconds: 500));
+              // Longer delay to let caller's Zego instance fully initialize the room
+              print('🔵 RECEIVER waiting 1.5 seconds for room initialization...');
+              await Future.delayed(Duration(milliseconds: 1500));
+              print('🔵 RECEIVER now joining...');
               await _joinZegoCall(callId: callId, video: mode == 'video');
             } else {
               // DB record for history
@@ -2238,21 +2240,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Ensure audio and video are enabled
     config.turnOnCameraWhenJoining = video;
     config.turnOnMicrophoneWhenJoining = true;
-    
-    // IMPORTANT: For voice calls, ALWAYS use speaker (not earpiece)
-    // For video calls, speaker is default behavior
     config.useSpeakerWhenJoining = true;
     
-    // Audio configuration - ensure speaker is used for voice calls
-    if (!video) {
-      // Voice call specific: force speaker output
-      config.audioVideoView.useVideoViewAspectFill = false;
-    }
-    
-    // Enable audio/video settings
+    // Enable audio/video settings - ensure both local and remote streams display
     config.audioVideoView.showCameraStateOnView = true;
     config.audioVideoView.showMicrophoneStateOnView = true;
     config.audioVideoView.showSoundWavesInAudioMode = true;
+    config.audioVideoView.useVideoViewAspectFill = true;
+    
+    // Ensure video mirror for selfie camera
+    config.audioVideoView.isVideoMirror = true;
     
     // Top bar configuration - show speaker toggle button
     config.topMenuBar.isVisible = true;
