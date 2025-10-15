@@ -667,59 +667,65 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       // Perform update without select() to avoid PostgREST single-object errors on 0 rows
       await supabase.from('sitting_jobs').update(update).eq('id', jobId);
 
-      // Get job details for notifications
-      final jobResponse = await supabase
-          .from('sitting_jobs')
-          .select('pet_id, sitter_id, pets(name, owner_id), users!sitter_id(name)')
-          .eq('id', jobId)
-          .single();
-      
-      final petData = jobResponse['pets'] as Map<String, dynamic>?;
-      final sitterData = jobResponse['users'] as Map<String, dynamic>?;
-      final petName = petData?['name'] as String? ?? 'Pet';
-      final ownerId = petData?['owner_id'] as String?;
-      final sitterName = sitterData?['name'] as String? ?? 'Sitter';
-      
-      // Send notifications based on status change
-      if (status == 'Active' || status == 'Cancelled') {
-        // Sitter accepted or declined - notify owner
-        if (ownerId != null) {
-          await sendJobNotification(
-            recipientId: ownerId,
-            actorId: widget.userId,
-            jobId: jobId,
-            type: status == 'Active' ? 'job_accepted' : 'job_declined',
-            petName: petName,
-            actorName: sitterName,
-          );
+      // Try to send notifications (don't fail if this errors)
+      try {
+        // Get job details for notifications
+        final jobResponse = await supabase
+            .from('sitting_jobs')
+            .select('pet_id, sitter_id, pets(name, owner_id), users!sitter_id(name)')
+            .eq('id', jobId)
+            .single();
+        
+        final petData = jobResponse['pets'] as Map<String, dynamic>?;
+        final sitterData = jobResponse['users'] as Map<String, dynamic>?;
+        final petName = petData?['name'] as String? ?? 'Pet';
+        final ownerId = petData?['owner_id'] as String?;
+        final sitterName = sitterData?['name'] as String? ?? 'Sitter';
+        
+        // Send notifications based on status change
+        if (status == 'Active' || status == 'Cancelled') {
+          // Sitter accepted or declined - notify owner
+          if (ownerId != null) {
+            await sendJobNotification(
+              recipientId: ownerId,
+              actorId: widget.userId,
+              jobId: jobId,
+              type: status == 'Active' ? 'job_accepted' : 'job_declined',
+              petName: petName,
+              actorName: sitterName,
+            );
+          }
+        } else if (status == 'Completed') {
+          // Job completed - notify the other party
+          final sitterId = jobResponse['sitter_id'] as String?;
+          if (widget.userId == sitterId && ownerId != null) {
+            // Sitter completed the job - notify owner
+            await sendJobNotification(
+              recipientId: ownerId,
+              actorId: widget.userId,
+              jobId: jobId,
+              type: 'job_completed',
+              petName: petName,
+              actorName: sitterName,
+            );
+          } else if (widget.userId == ownerId && sitterId != null) {
+            // Owner marked as completed - notify sitter
+            final ownerResponse = await supabase.from('users').select('name').eq('id', widget.userId).single();
+            final ownerName = ownerResponse['name'] as String? ?? 'Pet Owner';
+            
+            await sendJobNotification(
+              recipientId: sitterId,
+              actorId: widget.userId,
+              jobId: jobId,
+              type: 'job_completed',
+              petName: petName,
+              actorName: ownerName,
+            );
+          }
         }
-      } else if (status == 'Completed') {
-        // Job completed - notify the other party
-        final sitterId = jobResponse['sitter_id'] as String?;
-        if (widget.userId == sitterId && ownerId != null) {
-          // Sitter completed the job - notify owner
-          await sendJobNotification(
-            recipientId: ownerId,
-            actorId: widget.userId,
-            jobId: jobId,
-            type: 'job_completed',
-            petName: petName,
-            actorName: sitterName,
-          );
-        } else if (widget.userId == ownerId && sitterId != null) {
-          // Owner marked as completed - notify sitter
-          final ownerResponse = await supabase.from('users').select('name').eq('id', widget.userId).single();
-          final ownerName = ownerResponse['name'] as String? ?? 'Pet Owner';
-          
-          await sendJobNotification(
-            recipientId: sitterId,
-            actorId: widget.userId,
-            jobId: jobId,
-            type: 'job_completed',
-            petName: petName,
-            actorName: ownerName,
-          );
-        }
+      } catch (notificationError) {
+        // Log notification errors but don't fail the job update
+        print('⚠️ Failed to send notification: $notificationError');
       }
 
       // Optimistically patch local UI

@@ -525,9 +525,9 @@ def migrate_behavior_logs_to_predictions(limit_per_pet=1000):
     """
     Fetch behavior_logs and generate/store predictions historically.
     For each pet, for each unique log_date, analyze logs up to that date and insert prediction if missing.
-    This is idempotent: it checks predictions table for existence before inserting.
+    This is IDEMPOTENT: runs every time but only processes records that don't exist in predictions table yet.
     """
-    print("Starting migration of behavior_logs -> predictions...")
+    print("Starting idempotent migration of behavior_logs -> predictions...")
     try:
         resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
         logs = resp.data or []
@@ -566,18 +566,25 @@ def migrate_behavior_logs_to_predictions(limit_per_pet=1000):
                 except Exception as e:
                     print(f"Model training error for pet {pet_id} on date {d}: {e}")
 
+                # Check if prediction already exists for this pet and date (IDEMPOTENT CHECK)
+                existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", d.isoformat()).limit(1).execute()
+                if existing.data and len(existing.data) > 0:
+                    # Prediction already exists, skip this date
+                    continue
+                
                 # analyze and store prediction for that historic date
                 try:
                     # analyze_pet_df will attempt to store (store=True)
                     analyze_pet_df(pet_id, subset, prediction_date=d.isoformat(), store=True)
-                    # After analyze_pet_df runs, check if inserted by querying predictions
-                    existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", d.isoformat()).execute()
-                    if existing.data:
+                    # Verify insertion
+                    verify = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", d.isoformat()).limit(1).execute()
+                    if verify.data and len(verify.data) > 0:
                         inserted_total += 1
                 except Exception as e:
                     print(f"Analysis error for pet {pet_id} on date {d}: {e}")
 
-        print(f"Migration completed. Pets processed: {pet_count}, dates analyzed: {analyzed_total}, predictions present/inserted: {inserted_total}.")
+        print(f"✓ Migration completed. Pets processed: {pet_count}, dates analyzed: {analyzed_total}, new predictions inserted: {inserted_total}.")
+            
     except Exception as e:
         print(f"Unexpected error during migration: {e}")
 
@@ -1122,13 +1129,14 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
     """Paginated migration to update prediction rows with a full `days_ahead`-day
     numeric `sleep_forecast` stored as a JSON string.
 
-    - Scans `predictions` in batches (by id) and updates rows where
+    - IDEMPOTENT: Scans `predictions` in batches and only updates rows where
       `sleep_forecast` is missing, empty, or shorter than `days_ahead`.
     - For each candidate row, computes forecasts using behavior_logs up to
       the prediction_date to avoid leakage.
+    - Runs every time but only processes records that need updating.
     - dry_run=True will only print what would be updated.
     """
-    print(f"Starting migration of legacy sleep_forecast to {days_ahead}-day series (batch={batch_limit}, dry_run={dry_run})...")
+    print(f"Starting idempotent migration of legacy sleep_forecast to {days_ahead}-day series (batch={batch_limit}, dry_run={dry_run})...")
     try:
         offset = 0
         total_checked = 0
@@ -1222,7 +1230,8 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
 
             offset += batch_limit
 
-        print(f"Migration complete. Checked {total_checked} rows, updated {total_updated} rows.")
+        print(f"✓ Migration complete. Checked {total_checked} rows, updated {total_updated} rows.")
+                
     except Exception as e:
         print(f"Unexpected error during legacy sleep_forecast migration: {e}")
 

@@ -589,12 +589,36 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         } else if (rawTs is DateTime) {
           ts = rawTs;
         }
+        
+        // Fetch location history first to get address
+        await _fetchLocationHistoryForDevice(deviceId, petId: petId);
+        
         setState(() {
           _latestDeviceId = deviceId;
           _latestDeviceTimestamp = ts;
           _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
+          
+          // Automatically set the map to show the latest location
+          // Always reset to latest location when fetching (e.g., when switching pets or refreshing)
+          if (_latestDeviceLocation != null) {
+            _currentMapLocation = _latestDeviceLocation;
+            // Get address from location history if available
+            if (_locationHistory.isNotEmpty) {
+              final latestHistory = _locationHistory.first;
+              final address = latestHistory['address']?.toString();
+              if (address != null && address.isNotEmpty) {
+                _currentMapLabel = address;
+              } else {
+                _currentMapLabel = 'Live GPS Location';
+              }
+              _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts.toLocal()) : 'Latest location';
+            } else {
+              _currentMapLabel = 'Live GPS Location';
+              _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts.toLocal()) : 'Latest location';
+            }
+          }
         });
-  await _fetchLocationHistoryForDevice(deviceId, petId: petId);
+  
       } else {
         // device exists but no location rows yet
         setState(() {
@@ -2909,29 +2933,14 @@ void _disconnectDevice() async {
     String? markerSub;
     String? locationSource;
 
-    // Use current map location if set, otherwise prefer latest device location
-    if (_currentMapLocation != null) {
-      lat = _currentMapLocation!.latitude;
-      lng = _currentMapLocation!.longitude;
-      markerLabel = _currentMapLabel;
-      markerSub = _currentMapSub;
-      locationSource = 'Historical Location';
-      markerWidget = Container(
-        padding: EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.blue.withOpacity(0.3),
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Icon(Icons.history, color: Colors.blue, size: 24),
-      );
-    } else if (_latestDeviceLocation != null) {
+    // Check if current map location is the same as latest device location (live GPS)
+    final isShowingLiveLocation = _currentMapLocation != null && 
+                                   _latestDeviceLocation != null &&
+                                   _currentMapLocation!.latitude == _latestDeviceLocation!.latitude &&
+                                   _currentMapLocation!.longitude == _latestDeviceLocation!.longitude;
+
+    // Prefer latest device location (live GPS) for display
+    if (_latestDeviceLocation != null && (isShowingLiveLocation || _currentMapLocation == null)) {
       lat = _latestDeviceLocation!.latitude;
       lng = _latestDeviceLocation!.longitude;
       locationSource = 'Live GPS';
@@ -2961,7 +2970,29 @@ void _disconnectDevice() async {
       markerLabel = locationAddress?.isNotEmpty == true 
           ? '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${locationAddress!.length > 40 ? '${locationAddress.substring(0, 40)}...' : locationAddress}'
           : '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${_latestDeviceId ?? 'Device Location'}';
-      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!.toLocal()) : 'Last seen: unknown';
+      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, yyyy • h:mm a').format(_latestDeviceTimestamp!.toLocal()) : 'Last seen: unknown';
+    } else if (_currentMapLocation != null) {
+      // Showing a historical location (user clicked on a location from history)
+      lat = _currentMapLocation!.latitude;
+      lng = _currentMapLocation!.longitude;
+      markerLabel = _currentMapLabel;
+      markerSub = _currentMapSub;
+      locationSource = 'Historical Location';
+      markerWidget = Container(
+        padding: EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.blue.withOpacity(0.3),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Icon(Icons.history, color: Colors.blue, size: 24),
+      );
     } else if (_selectedPet != null &&
         _selectedPet!['latitude'] != null &&
         _selectedPet!['longitude'] != null) {
@@ -3241,6 +3272,7 @@ void _disconnectDevice() async {
                       child: Stack(
                         children: [
                           FlutterMap(
+                            key: ValueKey('map_${lat}_${lng}_${_selectedPet?['id']}'),
                             options: MapOptions(
                               initialCenter: mapCenter,
                               initialZoom: 15,

@@ -316,13 +316,12 @@ Future<void> _setupGlobalNotificationSubscription() async {
   );
   
   print('🔗 Subscribing to global notification channel...');
-  final subscribeResult = await _globalNotificationChannel!.subscribe();
-  print('📡 Global notification subscription result: $subscribeResult');
   
-  if (subscribeResult == RealtimeSubscribeStatus.subscribed) {
+  try {
+    await _globalNotificationChannel!.subscribe();
     print('✅ Successfully subscribed to global notifications for user: $userId');
-  } else {
-    print('❌ Failed to subscribe to global notifications. Status: $subscribeResult');
+  } catch (e) {
+    print('❌ Failed to subscribe to global notifications. Error: $e');
   }
 }
 
@@ -413,27 +412,27 @@ Future<void> showSystemNotification({
   String? type,
   String? recipientId, // Added recipient ID to check if current user should receive notification
 }) async {
-  print('🔔 showSystemNotification called:');
+  print('\n🔔 ========== showSystemNotification CALLED ==========');
   print('   Title: $title');
+  print('   Body: $body');
   print('   Type: $type');
-  print('   RecipientId: $recipientId');
+  print('   Recipient ID: $recipientId');
   
   // Only show notification if the current user is the intended recipient
   final currentUser = Supabase.instance.client.auth.currentUser;
   if (currentUser == null) {
-    print('❌ No current user - skipping system notification');
-    return;
-  }
-  
-  print('   Current User ID: ${currentUser.id}');
-  
-  // If recipientId is specified, only show notification to that user
-  if (recipientId != null && currentUser.id != recipientId) {
-    print('❌ System notification not for current user (${currentUser.id}) - intended for $recipientId');
+    print('⚠️ No user logged in - cannot show notification');
     return;
   }
 
-  print('✅ User is intended recipient, checking preferences...');
+  // If recipientId is specified, only show notification to that user
+  if (recipientId != null && currentUser.id != recipientId) {
+    // Skip silently - notification not for this user (this is normal behavior)
+    print('⏭️  Skipping notification - intended for $recipientId, current user is ${currentUser.id}');
+    return;
+  }
+  
+  print('✅ Recipient match confirmed - will show notification to ${currentUser.id}');
 
   // Check if user has enabled notifications
   final metadata = currentUser.userMetadata ?? {};
@@ -441,13 +440,11 @@ Future<void> showSystemNotification({
   final notificationsEnabled = notificationPrefs['enabled'] ?? true;
   
   if (!notificationsEnabled) {
-    print('❌ System notifications disabled by user');
+    print('⚠️ Notifications disabled by user in preferences');
     return;
   }
-
-  print('✅ Notifications enabled, configuring notification...');
-
-  // Configure notification based on type
+  
+  print('✓ User check passed, preparing notification...');  // Configure notification based on type
   String channelId = 'general_notifications';
   String channelName = 'General Notifications';
   String channelDescription = 'General app notifications';
@@ -506,7 +503,9 @@ Future<void> showSystemNotification({
   final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
   
   try {
-    print('🚀 Attempting to show notification with ID: $id');
+    // Debug: Show notification attempt (only for important info, not spam)
+    print('📱 Showing notification: $title');
+    
     await _localNotifications.show(
       id,
       title,
@@ -514,9 +513,11 @@ Future<void> showSystemNotification({
       notificationDetails,
       payload: payload,
     );
-    print('✅ Android system notification shown successfully: $title');
+    
+    print('✅ Notification displayed successfully');
   } catch (e) {
-    print('❌ Failed to show system notification: $e');
+    // Important: Log errors to help debug notification issues
+    print('❌ Failed to display notification: $e');
   }
 }
 
@@ -653,6 +654,8 @@ Future<void> sendJobNotification({
         break;
     }
     
+    print('📤 Attempting to send system notification: $notificationTitle to user $recipientId');
+    
     await showSystemNotification(
       title: notificationTitle,
       body: message,
@@ -666,9 +669,9 @@ Future<void> sendJobNotification({
       }),
     );
     
-    print('Job notification sent: $message to user $recipientId');
+    print('✅ Job notification sent successfully');
   } catch (e) {
-    print('Failed to send job notification: $e');
+    print('❌ Error sending job notification: $e');
   }
 }
 

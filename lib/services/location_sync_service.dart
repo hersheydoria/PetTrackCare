@@ -159,21 +159,29 @@ class LocationSyncService {
     required double longitude,
     required String deviceMac,
     DateTime? timestamp,
+    String? firebaseEntryId,
   }) async {
     try {
-      final locationData = {
+      final locationData = <String, dynamic>{
         'latitude': latitude,
         'longitude': longitude,
         'timestamp': timestamp?.toIso8601String() ?? DateTime.now().toIso8601String(),
         'device_mac': deviceMac, // This will trigger the populate_pet_id() function
       };
       
+      // Explicitly add firebase_entry_id if provided (ensures it's included in the payload)
+      if (firebaseEntryId != null) {
+        locationData['firebase_entry_id'] = firebaseEntryId;
+      }
+      
       if (kDebugMode) {
         print('📤 Pushing location data to Supabase location_history table');
         print('   📍 Coordinates: ($latitude, $longitude)');
         print('   📱 Device MAC: $deviceMac');
         print('   ⏰ Timestamp: ${locationData['timestamp']}');
-        print('   📊 Full payload: $locationData');
+        print('   🔑 Firebase Entry ID: ${firebaseEntryId ?? "NOT PROVIDED"}');
+        print('   � firebase_entry_id in payload: ${locationData.containsKey('firebase_entry_id') ? locationData['firebase_entry_id'] : "NOT IN PAYLOAD"}');
+        print('   �📊 Full payload: $locationData');
       }
       
       final response = await _supabase
@@ -186,10 +194,11 @@ class LocationSyncService {
         print('   📋 Response type: ${response.runtimeType}');
         print('   📋 Response data: $response');
         
-        if (response is List && response.isNotEmpty) {
+        if (response.isNotEmpty) {
           final insertedRecord = response.first;
           print('   🆔 Inserted record ID: ${insertedRecord['id']}');
           print('   🐾 Auto-populated pet_id: ${insertedRecord['pet_id']}');
+          print('   🔑 Stored firebase_entry_id: ${insertedRecord['firebase_entry_id'] ?? "NULL"}');
           print('   ✅ Record successfully created in location_history table');
         } else {
           print('   ⚠️  Unexpected response format: $response');
@@ -365,8 +374,68 @@ class LocationSyncService {
           }
           
           if (kDebugMode) {
-            print('   ✅ Validation passed - proceeding to Supabase insert');
+            print('   ✅ Validation passed - checking if already migrated');
+            print('   🔑 Firebase Entry ID to check: $entryId');
             print('   ⏰ Final timestamp: ${timestampToUse.toIso8601String()}');
+          }
+          
+          // CHECK IF ALREADY MIGRATED: Query Supabase using firebase_entry_id to prevent duplicate migrations
+          try {
+            if (kDebugMode) {
+              print('   🔍 Querying Supabase for firebase_entry_id: $entryId');
+            }
+            
+            final existingRecords = await _supabase
+                .from('location_history')
+                .select('id, firebase_entry_id')
+                .eq('firebase_entry_id', entryId)
+                .limit(1);
+            
+            if (kDebugMode) {
+              print('   📊 Query result: ${existingRecords.length} records found');
+              if (existingRecords.isNotEmpty) {
+                print('   📋 Existing record: ${existingRecords.first}');
+              }
+            }
+            
+            if (existingRecords.isNotEmpty) {
+              if (kDebugMode) {
+                print('   ⏭️  SKIPPED: Firebase entry $entryId already migrated (Supabase id: ${existingRecords.first['id']})');
+              }
+              // Don't count as success or failure - just skip
+              continue;
+            }
+            
+            if (kDebugMode) {
+              print('   🆕 NEW: Firebase entry $entryId not yet migrated - proceeding with insert');
+            }
+          } catch (checkError) {
+            if (kDebugMode) {
+              print('   ⚠️  Could not check existing record: $checkError');
+              // If firebase_entry_id column doesn't exist, fall back to coordinate/timestamp matching
+              print('   ⚠️  Attempting fallback check using coordinates and timestamp...');
+              try {
+                final fallbackRecords = await _supabase
+                    .from('location_history')
+                    .select('id')
+                    .eq('device_mac', deviceMacStr)
+                    .eq('latitude', latValue)
+                    .eq('longitude', longValue)
+                    .eq('timestamp', timestampToUse.toIso8601String())
+                    .limit(1);
+                
+                if (fallbackRecords.isNotEmpty) {
+                  if (kDebugMode) {
+                    print('   ⏭️  SKIPPED: Entry matches existing record (id: ${fallbackRecords.first['id']})');
+                  }
+                  continue;
+                }
+              } catch (fallbackError) {
+                if (kDebugMode) {
+                  print('   ⚠️  Fallback check also failed: $fallbackError - proceeding with insert');
+                }
+              }
+            }
           }
           
           // Insert into location_history - the populate_pet_id trigger will handle pet_id mapping
@@ -375,6 +444,7 @@ class LocationSyncService {
             longitude: longValue,
             deviceMac: deviceMacStr,
             timestamp: timestampToUse, // Use Firebase timestamp or current time as fallback
+            firebaseEntryId: entryId, // Track which Firebase entry this came from
           );
           
           if (success) {
@@ -499,12 +569,33 @@ class LocationSyncService {
         print('📊 Entry data: lat=$latitude, long=$longitude, mac=$deviceMac, timestamp=${timestampToUse.toIso8601String()}');
       }
       
+      // Check if already migrated
+      try {
+        final existingRecords = await _supabase
+            .from('location_history')
+            .select('id, firebase_entry_id')
+            .eq('firebase_entry_id', entryId)
+            .limit(1);
+        
+        if (existingRecords.isNotEmpty) {
+          if (kDebugMode) {
+            print('⏭️  Entry $entryId already migrated (id: ${existingRecords.first['id']})');
+          }
+          return true; // Already migrated, consider it a success
+        }
+      } catch (checkError) {
+        if (kDebugMode) {
+          print('⚠️  Could not check existing record: $checkError');
+        }
+      }
+      
       // Insert into location_history
       final success = await pushLocationToSupabase(
         latitude: latitude,
         longitude: longitude,
         deviceMac: deviceMac,
         timestamp: timestampToUse,
+        firebaseEntryId: entryId, // Track which Firebase entry this came from
       );
       
       if (kDebugMode) {
