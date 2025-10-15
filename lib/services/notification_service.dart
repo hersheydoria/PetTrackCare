@@ -10,6 +10,10 @@ final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotifica
 // Global realtime channel for notifications
 RealtimeChannel? _globalNotificationChannel;
 
+// Track recently shown notifications to prevent duplicates
+final Set<String> _recentNotifications = {};
+final Map<String, DateTime> _notificationTimestamps = {};
+
 /// Initialize system notifications (Android only)
 Future<void> initializeSystemNotifications() async {
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -433,6 +437,34 @@ Future<void> showSystemNotification({
   }
   
   print('✅ Recipient match confirmed - will show notification to ${currentUser.id}');
+
+  // Deduplication: Create a unique key for this notification
+  final notificationKey = '${recipientId ?? currentUser.id}:$type:$title:$body';
+  final now = DateTime.now();
+  
+  // Check if we've shown this notification recently (within last 5 seconds)
+  if (_recentNotifications.contains(notificationKey)) {
+    final lastShown = _notificationTimestamps[notificationKey];
+    if (lastShown != null && now.difference(lastShown).inSeconds < 5) {
+      print('⏭️  DUPLICATE NOTIFICATION BLOCKED - shown ${now.difference(lastShown).inSeconds}s ago');
+      return;
+    }
+  }
+  
+  // Add to recent notifications
+  _recentNotifications.add(notificationKey);
+  _notificationTimestamps[notificationKey] = now;
+  
+  // Clean up old entries (older than 10 seconds)
+  _notificationTimestamps.removeWhere((key, timestamp) {
+    final shouldRemove = now.difference(timestamp).inSeconds > 10;
+    if (shouldRemove) {
+      _recentNotifications.remove(key);
+    }
+    return shouldRemove;
+  });
+  
+  print('✅ New notification - will show (key: $notificationKey)');
 
   // Check if user has enabled notifications
   final metadata = currentUser.userMetadata ?? {};

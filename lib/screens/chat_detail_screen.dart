@@ -466,16 +466,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // NEW: send a broadcast signal to a user's channel
   Future<void> _sendSignal(String userId, String event, Map<String, dynamic> payload) async {
     final key = _sanitizeId(userId);
+    print('📞 _sendSignal: Sending $event to $key');
+    
     var ch = _sigChans[key];
-    ch ??= supabase.channel('call_sig:$key')..subscribe();
-    _sigChans[key] = ch;
+    if (ch == null) {
+      print('📞 _sendSignal: Creating new channel call_sig:$key');
+      ch = supabase.channel('call_sig:$key');
+      await ch.subscribe(); // Wait for subscription to complete
+      _sigChans[key] = ch;
+      print('📞 _sendSignal: Channel subscribed successfully');
+    }
+    
     try {
+      print('📞 _sendSignal: Sending broadcast event $event with payload: $payload');
       await ch.send(
         type: rt.RealtimeListenTypes.broadcast,
         event: event,
         payload: payload,
       );
-    } catch (_) {
+      print('📞 _sendSignal: Broadcast sent successfully');
+    } catch (e) {
+      print('📞 _sendSignal: Error sending broadcast: $e');
       // ignore; DB insert path still delivers signaling via onPostgresChanges
     }
   }

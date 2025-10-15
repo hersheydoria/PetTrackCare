@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'chat_detail_screen.dart';
 import 'notification_screen.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import '../services/notification_service.dart';
 
 // Color palette
@@ -22,51 +19,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
   final supabase = Supabase.instance.client;
   List<Map<String, dynamic>> messages = [];
 
-  // Track prompted call_ids to avoid duplicate dialogs
-  final Set<String> _promptedCallIds = {};
-
-  String _sanitizeId(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '').isEmpty
-      ? 'user'
-      : s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '');
-
-  Future<void> _joinZegoCall({required String callId, required bool video}) async {
-    final meRaw = supabase.auth.currentUser?.id ?? '';
-    final me = _sanitizeId(meRaw);
-
-    final mic = await Permission.microphone.request();
-    if (!mic.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission denied')));
-      }
-      return;
-    }
-    if (video) {
-      final cam = await Permission.camera.request();
-      if (!cam.isGranted) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Camera permission denied')));
-        }
-        return;
-      }
-    }
-
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ZegoUIKitPrebuiltCall(
-          appID: int.parse(dotenv.env['ZEGO_APP_ID'] ?? '0'),
-          appSign: dotenv.env['ZEGO_APP_SIGN'] ?? '',
-          userID: me,
-          userName: me, // or fetch/display your own name here if needed
-          callID: callId,
-          config: video
-              ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
-              : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall(),
-        ),
-      ),
-    );
-  }
+  // REMOVED: Call handling is now done by CallInviteService
+  // final Set<String> _promptedCallIds = {};
+  // String _sanitizeId(String s) => ...
+  // Future<void> _joinZegoCall(...) async { ... }
 
   @override
   void initState() {
@@ -154,7 +110,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
               print('   messageType: $messageType (excluded: call_accept, call_decline)');
             }
 
-            // Handle call invite globally (even when not inside ChatDetailScreen)
+            // DISABLED: Call invite handling is now done globally by CallInviteService
+            // This prevents duplicate dialogs and notifications
+            /*
             final me = supabase.auth.currentUser?.id;
             if (me == null) return;
 
@@ -212,6 +170,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 } catch (_) {}
               }
             }
+            */
           },
         )
         .subscribe();

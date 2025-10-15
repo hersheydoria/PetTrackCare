@@ -12,14 +12,16 @@ class CallInviteService {
   factory CallInviteService() => _instance;
   CallInviteService._internal() {
     // Listen for auth state changes
-    _supabase.auth.onAuthStateChange.listen((data) {
+    _supabase.auth.onAuthStateChange.listen((data) async {
       print('📞 CallInviteService: Auth state changed - session: ${data.session != null}');
-      if (data.session != null && !_isInitialized) {
+      if (data.session != null && !_isInitialized && !_isStartingMonitoring) {
         _currentUserId = data.session?.user.id;
         print('📞 CallInviteService: User logged in, starting call monitoring for: $_currentUserId');
         if (_context != null && _currentUserId != null) {
-          _startCallMonitoring();
+          _isStartingMonitoring = true;
+          await _startCallMonitoring();
           _isInitialized = true;
+          _isStartingMonitoring = false;
         } else {
           print('📞 CallInviteService: Context not available yet, will initialize when context is set');
         }
@@ -32,6 +34,7 @@ class CallInviteService {
 
   BuildContext? _context;
   bool _isInitialized = false;
+  bool _isStartingMonitoring = false; // Prevent double initialization
   RealtimeChannel? _callChannel;
   String? _currentUserId;
   Set<String> _processedCallIds = {};
@@ -42,20 +45,24 @@ class CallInviteService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
   // Initialize the service with the app's main context
-  void initialize(BuildContext context) {
+  void initialize(BuildContext context) async {
     print('📞 CallInviteService: Initializing with context');
     _context = context;
     
     // Try to initialize if we have a user but haven't started monitoring yet
-    if (!_isInitialized) {
+    if (!_isInitialized && !_isStartingMonitoring) {
       _currentUserId = _supabase.auth.currentUser?.id;
       if (_currentUserId != null) {
         print('📞 CallInviteService: Starting call monitoring for user: $_currentUserId');
-        _startCallMonitoring();
+        _isStartingMonitoring = true;
+        await _startCallMonitoring();
         _isInitialized = true;
+        _isStartingMonitoring = false;
       } else {
         print('📞 CallInviteService: No user ID yet, waiting for auth state change');
       }
+    } else if (_isStartingMonitoring) {
+      print('📞 CallInviteService: Already starting monitoring, skipping duplicate call');
     } else {
       print('📞 CallInviteService: Already initialized, just updating context');
     }
@@ -68,7 +75,7 @@ class CallInviteService {
   }
 
   // Start monitoring for incoming calls
-  void _startCallMonitoring() {
+  Future<void> _startCallMonitoring() async {
     if (_currentUserId == null) return;
 
     final sanitizedUserId = _sanitizeId(_currentUserId!);
@@ -169,13 +176,16 @@ class CallInviteService {
           },
         )
         .subscribe((status, [error]) {
-      print('📞 CallInviteService: Channel subscription status: $status');
+      print('📞 CallInviteService: 📡 Subscription status: $status');
       if (error != null) {
-        print('📞 CallInviteService: Subscription error: $error');
+        print('📞 CallInviteService: ❌ Subscription error: $error');
       }
     });
 
-    print('📞 CallInviteService: Call monitoring started successfully');
+    // Wait for subscription to be established
+    print('📞 CallInviteService: ⏳ Waiting for channel to be ready...');
+    await Future.delayed(Duration(milliseconds: 1000)); // Give it more time
+    print('📞 CallInviteService: ✅ Call monitoring setup complete - ready to receive broadcasts');
   }
 
   // Get caller's name from database
