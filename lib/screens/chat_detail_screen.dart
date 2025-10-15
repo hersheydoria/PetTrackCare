@@ -303,6 +303,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             );
 
             if (accept == true) {
+              // Debug: Log call details for receiver
+              print('🔵 RECEIVER accepting call:');
+              print('   From: $from');
+              print('   To: ${widget.userId}');
+              print('   CallID received: $callId');
+              print('   Mode: $mode');
+              
               // DB record for history
               try {
                 await supabase.from('messages').insert({
@@ -322,6 +329,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 'call_id': callId,
                 'mode': mode,
               });
+              
+              print('🔵 RECEIVER joining Zego with callID: $callId');
               await _joinZegoCall(callId: callId, video: mode == 'video');
             } else {
               // DB record for history
@@ -354,8 +363,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             final to = (body['to'] ?? '').toString();
             final callId = (body['call_id'] ?? '').toString();
             final mode = (body['mode'] ?? 'voice').toString();
+            
+            print('🔴 CALLER received broadcast call_accept:');
+            print('   To: $to (my ID: ${widget.userId})');
+            print('   CallID from broadcast: $callId');
+            print('   My outgoing CallID: $_outgoingCallId');
+            print('   Awaiting accept: $_awaitingAccept');
+            print('   Match: ${to == widget.userId && callId == _outgoingCallId}');
+            
             if (to != widget.userId || callId.isEmpty) return;
             if (_awaitingAccept && _outgoingCallId == callId) {
+              print('🔴 CALLER JOINING via broadcast with callID: $callId');
               _dismissCallingDialog();
               _awaitingAccept = false;
               await _joinZegoCall(callId: callId, video: mode == 'video');
@@ -554,8 +572,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               final mode = (msg['call_mode'] ?? 'voice').toString();
               if (callId.isEmpty) return;
               if (_awaitingAccept && _outgoingCallId == callId) {
+                print('🔴 CALLER received acceptance:');
+                print('   CallID to join: $callId');
+                print('   Outgoing CallID was: $_outgoingCallId');
+                print('   Mode: $mode');
+                
                 _dismissCallingDialog();
                 _awaitingAccept = false;
+                
+                print('🔴 CALLER joining Zego with callID: $callId');
                 await _joinZegoCall(callId: callId, video: mode == 'video');
               }
             }
@@ -645,6 +670,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // Caller flow: send invite then wait for accept (do not auto-join)
   void _startZegoCall(bool video) async {
     final callId = _sharedCallId(widget.userId, widget.receiverId);
+    
+    // Debug: Log call details for sender
+    print('🔴 CALLER initiating call:');
+    print('   From: ${widget.userId}');
+    print('   To: ${widget.receiverId}');
+    print('   Generated CallID: $callId');
+    print('   Mode: ${video ? "video" : "voice"}');
 
     try {
       await supabase.from('messages').insert({
@@ -1948,6 +1980,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final rightShort = (right.length >= 12) ? right.substring(0, 12) : right.padRight(12, '0');
 
     final id = 'ptc_${leftShort}_${rightShort}';
+    
+    // Debug logging
+    print('📞 _sharedCallId generated:');
+    print('   UserA: $userA -> sanitized: $left -> short: $leftShort');
+    print('   UserB: $userB -> sanitized: $right -> short: $rightShort');
+    print('   Final CallID: $id');
+    
     // Max 64 characters (we are well under)
     return id;
   }
@@ -2188,12 +2227,40 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Ensure audio and video are enabled
     config.turnOnCameraWhenJoining = video;
     config.turnOnMicrophoneWhenJoining = true;
+    
+    // IMPORTANT: For voice calls, ALWAYS use speaker (not earpiece)
+    // For video calls, speaker is default behavior
     config.useSpeakerWhenJoining = true;
+    
+    // Audio configuration - ensure speaker is used for voice calls
+    if (!video) {
+      // Voice call specific: force speaker output
+      config.audioVideoView.useVideoViewAspectFill = false;
+    }
     
     // Enable audio/video settings
     config.audioVideoView.showCameraStateOnView = true;
     config.audioVideoView.showMicrophoneStateOnView = true;
     config.audioVideoView.showSoundWavesInAudioMode = true;
+    
+    // Top bar configuration - show speaker toggle button
+    config.topMenuBar.isVisible = true;
+    config.topMenuBar.buttons = [
+      ZegoCallMenuBarButtonName.minimizingButton,
+      ZegoCallMenuBarButtonName.showMemberListButton,
+    ];
+    
+    // Bottom bar configuration - ensure speaker toggle is available
+    config.bottomMenuBar.buttons = [
+      ZegoCallMenuBarButtonName.toggleCameraButton,
+      ZegoCallMenuBarButtonName.toggleMicrophoneButton,
+      ZegoCallMenuBarButtonName.hangUpButton,
+      ZegoCallMenuBarButtonName.switchAudioOutputButton, // Speaker toggle
+    ];
+    
+    // Member list configuration
+    config.memberList.showMicrophoneState = true;
+    config.memberList.showCameraState = true;
 
     await Navigator.push(
       context,
