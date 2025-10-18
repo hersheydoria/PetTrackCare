@@ -98,6 +98,14 @@ class CallInviteService {
     print('📞 CallInviteService: Registering broadcast listeners...');
     _callChannel!
         .onBroadcast(
+          event: 'test',
+          callback: (payload, [ref]) {
+            print('📞 CallInviteService: 🧪🧪🧪 RECEIVED TEST BROADCAST! 🧪🧪🧪');
+            print('📞 CallInviteService: Test payload: $payload');
+            print('📞 CallInviteService: ✅ BROADCASTS ARE WORKING! ✅');
+          },
+        )
+        .onBroadcast(
           event: 'call_invite',
           callback: (payload, [ref]) async {
             print('📞 CallInviteService: 🔔🔔🔔 RECEIVED call_invite BROADCAST! 🔔🔔🔔');
@@ -203,6 +211,18 @@ class CallInviteService {
     print('📞 CallInviteService: ⏳ Waiting for channel to be ready...');
     await Future.delayed(Duration(milliseconds: 2000)); // Increased to 2 seconds
     print('📞 CallInviteService: ✅ Call monitoring setup complete - ready to receive broadcasts');
+    
+    // TEST: Send a test broadcast to verify broadcasts are working
+    try {
+      print('📞 CallInviteService: 🧪 SENDING TEST BROADCAST to verify broadcasts work...');
+      await _callChannel!.sendBroadcastMessage(
+        event: 'test',
+        payload: {'message': 'test broadcast', 'timestamp': DateTime.now().toIso8601String()},
+      );
+      print('📞 CallInviteService: ✅ Test broadcast sent successfully');
+    } catch (e) {
+      print('📞 CallInviteService: ❌ Test broadcast failed: $e');
+    }
   }
 
   // Get caller's name from database

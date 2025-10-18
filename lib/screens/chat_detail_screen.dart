@@ -7,7 +7,6 @@ import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
-import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/notification_service.dart';
 
@@ -496,8 +495,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     
     try {
       print('📞 _sendSignal: 📤 Sending broadcast event $event with payload: $payload');
-      await ch.send(
-        type: rt.RealtimeListenTypes.broadcast,
+      await ch.sendBroadcastMessage(
         event: event,
         payload: payload,
       );
