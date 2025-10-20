@@ -98,8 +98,8 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         (df['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination'])) |
         # Multiple symptoms
         (df['symptom_count'] >= 2) |
-        # Sleep issues
-        (df['sleep_hours'] < 5) | (df['sleep_hours'] > 14) |
+        # Sleep issues - Updated: 12+ hours is normal for dogs and cats
+        (df['sleep_hours'] < 12) | (df['sleep_hours'] > 18) |
         # Activity issues
         (df['activity_level'].str.lower() == 'low') |
         # Mood issues (kept for backward compatibility)
@@ -259,8 +259,8 @@ def forecast_sleep_with_tf(series, days_ahead=7, model_path=os.path.join(MODELS_
     try:
         return predict_future_sleep(series, days_ahead=days_ahead, model_path=model_path)
     except Exception:
-        # conservative fallback
-        last = float(series[-1]) if series else 8.0
+        # conservative fallback (12 hours is normal for pets)
+        last = float(series[-1]) if series else 12.0
         return [last for _ in range(days_ahead)]
 
 def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep, sleep_trend):
@@ -268,7 +268,7 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
     risk = (str(illness_risk or "low")).lower()
     mood_prob = mood_prob or {}
     activity_prob = activity_prob or {}
-    avg_sleep = float(avg_sleep) if avg_sleep is not None else 8.0
+    avg_sleep = float(avg_sleep) if avg_sleep is not None else 12.0
     s_trend = (sleep_trend or "").lower()
 
     actions, expectations = [], []
@@ -352,17 +352,19 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
             "Temporary restlessness can settle with a consistent routine."
         ]
 
-    # Sleep tips
-    if avg_sleep < 6 or ("depriv" in s_trend):
+    # Sleep tips - Updated: 12-18 hours is normal for dogs and cats
+    if avg_sleep < 12 or ("depriv" in s_trend):
         actions += [
-            "Set a consistent sleep routine; avoid late‑night stimulation."
+            "Set a consistent sleep routine; avoid late‑night stimulation.",
+            "Dogs and cats typically need 12-14 hours of sleep daily."
         ]
         expectations += [
             "Sleep should normalize within 2–3 nights with routine."
         ]
-    elif avg_sleep > 9 or ("oversleep" in s_trend):
+    elif avg_sleep > 18 or ("oversleep" in s_trend):
         actions += [
-            "Break up long naps with gentle activity and enrichment."
+            "Break up long naps with gentle activity and enrichment.",
+            "Excessive sleep (>18 hours) may indicate illness."
         ]
         expectations += [
             "Oversleeping often eases with more engaging daytime activity."
@@ -423,19 +425,19 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         happy_calm_count = sum(1 for m in last3_moods if m in ('happy', 'calm'))
 
         risk = "low"
-        # Strong signals -> high
-        if (avg_sleep7 < 5.0) or (avg_sleep3 < 5.0) or (p_aggr > 0.25):
+        # Strong signals -> high (Updated: <12 hours is low sleep)
+        if (avg_sleep7 < 12.0) or (avg_sleep3 < 12.0) or (p_aggr > 0.25):
             risk = "high"
         # Moderate signals -> medium
-        elif (p_leth > 0.35) or (p_anx > 0.35) or (p_low_act > 0.6) or (avg_sleep7 < 6.5):
+        elif (p_leth > 0.35) or (p_anx > 0.35) or (p_low_act > 0.6) or (avg_sleep7 < 14.0):
             risk = "medium"
 
         # De-escalation: if most recent days are healthy, dial back
         if risk == "high":
-            if (happy_calm_count >= 2) and (avg_sleep3 >= 6.0) and (p_aggr <= 0.25):
+            if (happy_calm_count >= 2) and (avg_sleep3 >= 12.0) and (p_aggr <= 0.25):
                 risk = "medium"
         if risk == "medium":
-            if (happy_calm_count >= 2) and (avg_sleep3 >= 6.0) and (p_low_act <= 0.6) and (p_leth <= 0.35) and (p_anx <= 0.35):
+            if (happy_calm_count >= 2) and (avg_sleep3 >= 12.0) and (p_low_act <= 0.6) and (p_leth <= 0.35) and (p_anx <= 0.35):
                 risk = "low"
 
         return risk
@@ -456,9 +458,9 @@ def forecast_sleep_trend(df):
         return "No sleep data available"
 
     avg_sleep = df["sleep_hours"].mean()
-    if avg_sleep < 6:
+    if avg_sleep < 12:
         return "Pet might be sleep deprived"
-    elif avg_sleep > 9:
+    elif avg_sleep > 18:
         return "Pet is oversleeping"
     else:
         return "Pet sleep is normal"
@@ -527,11 +529,11 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
     # Sleep trend forecast
     sleep_trend = forecast_sleep_trend(df)
     avg_sleep = df["sleep_hours"].mean()
-    if avg_sleep < 6:
+    if avg_sleep < 12:
         trend += " Possible sleep deprivation."
         risk_level = "high"
         recommendation += " Ensure your pet gets enough rest."
-    elif avg_sleep > 9:
+    elif avg_sleep > 18:
         trend += " Pet may be oversleeping."
         recommendation += " Monitor for signs of illness."
 
@@ -556,8 +558,8 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
 
         # Ensure we always persist a 7-element numeric list. If the predictor
         # returns a shorter list (or a non-list), pad with a reasonable default
-        # (last observed sleep or 8.0 hours).
-        default_val = float(sleep_series[-1]) if sleep_series else 8.0
+        # (last observed sleep or 12.0 hours - normal for pets).
+        default_val = float(sleep_series[-1]) if sleep_series else 12.0
         if not isinstance(sleep_forecast, list):
             sleep_forecast = [default_val for _ in range(7)]
         if len(sleep_forecast) < 7:
@@ -567,9 +569,9 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
         # store as JSON string to be safe for different DB column types
         payload["sleep_forecast"] = json.dumps([float(x) for x in sleep_forecast])
     except Exception as e:
-        # Log the error and persist a conservative default 7-day forecast
+        # Log the error and persist a conservative default 7-day forecast (12 hours is normal)
         print(f"[WARN] predict_future_sleep failed for pet {pet_id}: {e}")
-        payload["sleep_forecast"] = json.dumps([8.0 for _ in range(7)])
+        payload["sleep_forecast"] = json.dumps([12.0 for _ in range(7)])
 
     if store:
         try:
@@ -695,7 +697,7 @@ def analyze_endpoint():
         sleep_series = df["sleep_hours"].tolist() if not df.empty else []
         sleep_forecast = predict_future_sleep(sleep_series)
     except Exception:
-        last = sleep_series[-1] if sleep_series else 8.0
+        last = sleep_series[-1] if sleep_series else 12.0
         sleep_forecast = [last for _ in range(7)]
 
     # ML illness_risk on latest log (or fallback)
@@ -727,7 +729,7 @@ def analyze_endpoint():
     health_status = "unhealthy" if is_unhealthy else "healthy"
 
     # Care tips based on blended risk
-    avg_sleep_val = float(df["sleep_hours"].mean()) if not df.empty else 8.0
+    avg_sleep_val = float(df["sleep_hours"].mean()) if not df.empty else 12.0
     tips = build_care_recommendations(
         illness_risk_final,
         result.get("mood_probabilities") or result.get("mood_prob"),
@@ -775,7 +777,7 @@ def predict_endpoint():
     # Build pseudo-probabilities from input to drive tips
     mood_prob = {str(mood).lower(): 1.0}
     activity_prob = {str(activity_level).lower(): 1.0}
-    avg_sleep_val = float(sleep_hours) if sleep_hours is not None else 8.0
+    avg_sleep_val = float(sleep_hours) if sleep_hours is not None else 12.0
     tips = build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep_val, None)
 
     return jsonify({
@@ -929,7 +931,7 @@ def public_pet_page(pet_id):
         df_recent = fetch_logs_df(pet_id, limit=60)
         if df_recent.empty:
             mood_prob_recent, activity_prob_recent = {}, {}
-            avg_sleep_recent = 8.0
+            avg_sleep_recent = 12.0
             sleep_trend_recent = ""
         else:
             mood_prob_recent = df_recent['mood'].str.lower().value_counts(normalize=True).to_dict()
@@ -1292,14 +1294,14 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
                         forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
                         # ensure list and pad if necessary
                         if not isinstance(forecasts, list):
-                            forecasts = [float(sleep_series[-1]) if sleep_series else 8.0 for _ in range(days_ahead)]
+                            forecasts = [float(sleep_series[-1]) if sleep_series else 12.0 for _ in range(days_ahead)]
                         if len(forecasts) < days_ahead:
-                            last = float(sleep_series[-1]) if sleep_series else 8.0
+                            last = float(sleep_series[-1]) if sleep_series else 12.0
                             forecasts = list(forecasts) + [last for _ in range(days_ahead - len(forecasts))]
                         forecasts_json = json.dumps([float(x) for x in forecasts])
                     except Exception as e:
                         print(f"[WARN] Failed to compute forecast for prediction id={pred_id} pet={pet_id} date={pred_date}: {e}")
-                        forecasts_json = json.dumps([8.0 for _ in range(days_ahead)])
+                        forecasts_json = json.dumps([12.0 for _ in range(days_ahead)])
 
                     if dry_run:
                         print(f"[DRY] Would update prediction id={pred_id} pet={pet_id} with sleep_forecast={forecasts_json}")
@@ -1347,8 +1349,8 @@ def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.j
     except Exception:
         sleep_f = 0.0
 
-    # conservative rule-based fallback
-    rule_flag = (mood_in in ["lethargic", "aggressive"]) or (sleep_f < 5) or (activity_in == "low")
+    # conservative rule-based fallback (pets need 12+ hours of sleep)
+    rule_flag = (mood_in in ["lethargic", "aggressive"]) or (sleep_f < 12) or (activity_in == "low")
 
     loaded = load_illness_model(model_path)
     # load_illness_model returns (model, (le_mood, le_activity), mood_map, act_map, metadata) or (None, None)
@@ -1429,12 +1431,12 @@ def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MOD
     arr = np.array(sleep_series).astype(float) if (sleep_series is not None and len(sleep_series) > 0) else np.array([])
     days_ahead = int(days_ahead or 7)
 
-    # Empty input -> sensible default
+    # Empty input -> sensible default (12 hours is normal for pets)
     if arr.size == 0:
-        return [8.0 for _ in range(days_ahead)]
+        return [12.0 for _ in range(days_ahead)]
 
     # Basic stats
-    recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 8.0
+    recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 12.0
     recent_std = float(np.std(arr[-7:])) if arr.size >= 2 else 0.5
 
     # heuristic fallback with improved weekday modeling
@@ -1796,10 +1798,10 @@ def test_model_accuracy():
                     # Predict
                     pred_risk = predict_illness_risk(mood, sleep_hours, activity)
                     
-                    # Ground truth: use same logic as training
+                    # Ground truth: use same logic as training (pets need 12+ hours of sleep)
                     actual_unhealthy = (
                         (str(mood).lower() in ['lethargic', 'aggressive']) or
-                        (sleep_hours < 5) or
+                        (sleep_hours < 12) or
                         (str(activity).lower() == 'low')
                     )
                     actual_risk = "high" if actual_unhealthy else "low"
