@@ -126,6 +126,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   double? _sleepHours;
   String? _notes;
 
+  // New health tracking fields
+  String? _foodIntake; // "Not Eating", "Eating Less", "Normal", "Eating More"
+  String? _waterIntake; // "Not Drinking", "Drinking Less", "Normal", "Drinking More"
+  String? _bathroomHabits; // "Normal", "Diarrhea", "Constipation", "Frequent Urination"
+  List<String> _selectedSymptoms = []; // Multiple symptoms
+  String? _bodyTemperature; // "Normal", "Fever", "Cold"
+  String? _appetiteBehavior; // "Eager", "Normal", "Reluctant", "Refuses"
+
   // Latest mood from behavior logs for display in health status
   String? _latestMood;
 
@@ -162,6 +170,51 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
   ];
 
+  // Food intake options
+  final List<String> foodIntakeOptions = [
+    "Not Eating", "Eating Less", "Normal", "Eating More"
+  ];
+
+  // Water intake options
+  final List<String> waterIntakeOptions = [
+    "Not Drinking", "Drinking Less", "Normal", "Drinking More"
+  ];
+
+  // Bathroom habits options
+  final List<String> bathroomOptions = [
+    "Normal", "Diarrhea", "Constipation", "Frequent Urination"
+  ];
+
+  // Body temperature options
+  final List<String> temperatureOptions = [
+    "Normal", "Warm/Fever", "Cold"
+  ];
+
+  // Appetite behavior options
+  final List<String> appetiteOptions = [
+    "Eager to Eat", "Normal", "Reluctant", "Refuses Food"
+  ];
+
+  // Common symptoms for dogs and cats
+  final List<String> commonSymptoms = [
+    "Vomiting",
+    "Coughing",
+    "Sneezing",
+    "Excessive Scratching",
+    "Limping",
+    "Loss of Appetite",
+    "Excessive Thirst",
+    "Discharge from Eyes/Nose",
+    "Bad Breath",
+    "Lethargy/Weakness",
+    "Bloated Stomach",
+    "Difficulty Breathing",
+    "Excessive Drooling",
+    "Trembling/Shaking",
+    "Aggression/Irritability",
+    "None of the Above"
+  ];
+
   final List<String> activityLevels = ["High", "Medium", "Low"];
 
   // Add these variables
@@ -180,6 +233,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     'Calm': '😌',
     'Lethargic': '😴',
   };
+
   final Map<String, String> _activityEmojis = {
     'High': '🐕',
     'Medium': '🐾',
@@ -4373,6 +4427,12 @@ void _disconnectDevice() async {
       _activityLevel = null;
       _sleepHours = null;
       _notes = null;
+      _foodIntake = null;
+      _waterIntake = null;
+      _bathroomHabits = null;
+      _selectedSymptoms = [];
+      _bodyTemperature = null;
+      _appetiteBehavior = null;
       _sleepController.text = '';
     });
   }
@@ -7246,6 +7306,33 @@ void _disconnectDevice() async {
       _activityLevel = existing['activity_level']?.toString();
       _sleepHours = double.tryParse(existing['sleep_hours']?.toString() ?? '');
       _notes = existing['notes']?.toString();
+      _foodIntake = existing['food_intake']?.toString();
+      _waterIntake = existing['water_intake']?.toString();
+      _bathroomHabits = existing['bathroom_habits']?.toString();
+      _bodyTemperature = existing['body_temperature']?.toString();
+      _appetiteBehavior = existing['appetite_behavior']?.toString();
+      
+      // Parse symptoms from JSON string or comma-separated string
+      final symptomsData = existing['symptoms'];
+      if (symptomsData != null) {
+        if (symptomsData is List) {
+          _selectedSymptoms = List<String>.from(symptomsData);
+        } else if (symptomsData is String) {
+          try {
+            // Try to parse as JSON array first
+            final decoded = json.decode(symptomsData);
+            if (decoded is List) {
+              _selectedSymptoms = List<String>.from(decoded);
+            } else {
+              _selectedSymptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+            }
+          } catch (_) {
+            // Fall back to comma-separated
+            _selectedSymptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+          }
+        }
+      }
+      
       _sleepController.text = _sleepHours?.toString() ?? '';
     } else {
       // Clear form for new entry
@@ -7265,11 +7352,13 @@ void _disconnectDevice() async {
         return StatefulBuilder(
           builder: (context, setModalState) {
             bool _isFormValid() {
-              return _selectedMood != null && 
+              return _foodIntake != null && 
+                     _waterIntake != null && 
                      _activityLevel != null && 
                      _sleepHours != null && 
                      _sleepHours! >= 0 && 
-                     _sleepHours! <= 24;
+                     _sleepHours! <= 24 &&
+                     _bathroomHabits != null;
             }
 
             return AnimatedContainer(
@@ -7319,7 +7408,7 @@ void _disconnectDevice() async {
                             borderRadius: BorderRadius.circular(15),
                           ),
                           child: Icon(
-                            isEdit ? Icons.edit : Icons.pets,
+                            isEdit ? Icons.edit : Icons.health_and_safety,
                             color: deepRed,
                             size: 24,
                           ),
@@ -7330,7 +7419,7 @@ void _disconnectDevice() async {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                isEdit ? 'Update Behavior Log' : 'Log Pet Behavior',
+                                isEdit ? 'Update Health Log' : 'Log Pet Health Data',
                                 style: TextStyle(
                                   fontSize: 20,
                                   fontWeight: FontWeight.bold,
@@ -7367,102 +7456,350 @@ void _disconnectDevice() async {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Mood Section
+                          // Food Intake Section
                           _buildFormSection(
-                            title: "How is ${_selectedPet?['name'] ?? 'your pet'} feeling?",
-                            icon: Icons.mood,
+                            title: "Food Intake - Is ${_selectedPet?['name'] ?? 'your pet'} eating well?",
+                            icon: Icons.restaurant,
                             iconColor: Colors.orange,
                             child: Column(
                               children: [
-                                SizedBox(height: 12),
-                                GridView.builder(
-                                  shrinkWrap: true,
-                                  physics: NeverScrollableScrollPhysics(),
-                                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 3,
-                                    crossAxisSpacing: 12,
-                                    mainAxisSpacing: 12,
-                                    childAspectRatio: 0.8,
-                                  ),
-                                  itemCount: moods.length,
-                                  itemBuilder: (context, index) {
-                                    final mood = moods[index];
-                                    final emoji = _moodEmojis[mood] ?? '•';
-                                    final selected = _selectedMood == mood;
+                                SizedBox(height: 8),
+                                Column(
+                                  children: foodIntakeOptions.map((intake) {
+                                    final selected = _foodIntake == intake;
+                                    IconData iconData;
+                                    Color iconColor;
+                                    
+                                    switch(intake) {
+                                      case "Not Eating":
+                                        iconData = Icons.close_rounded;
+                                        iconColor = Colors.red;
+                                        break;
+                                      case "Eating Less":
+                                        iconData = Icons.trending_down;
+                                        iconColor = Colors.orange;
+                                        break;
+                                      case "Normal":
+                                        iconData = Icons.check_circle_outline;
+                                        iconColor = Colors.green;
+                                        break;
+                                      case "Eating More":
+                                        iconData = Icons.trending_up;
+                                        iconColor = Colors.blue;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        iconColor = Colors.grey;
+                                    }
                                     
                                     return GestureDetector(
                                       onTap: () {
-                                        setModalState(() => _selectedMood = mood);
-                                        setState(() => _selectedMood = mood);
+                                        setModalState(() => _foodIntake = intake);
+                                        setState(() => _foodIntake = intake);
                                         HapticFeedback.lightImpact();
                                       },
                                       child: AnimatedContainer(
                                         duration: Duration(milliseconds: 200),
+                                        margin: EdgeInsets.only(bottom: 8),
                                         padding: EdgeInsets.all(12),
                                         decoration: BoxDecoration(
                                           color: selected 
-                                            ? deepRed.withOpacity(0.15) 
-                                            : Colors.grey.shade50,
+                                            ? deepRed.withOpacity(0.1) 
+                                            : Colors.white,
                                           border: Border.all(
                                             color: selected 
                                               ? deepRed 
                                               : Colors.grey.shade300,
                                             width: selected ? 2 : 1,
                                           ),
-                                          borderRadius: BorderRadius.circular(16),
+                                          borderRadius: BorderRadius.circular(10),
                                           boxShadow: selected ? [
                                             BoxShadow(
-                                              color: deepRed.withOpacity(0.3),
-                                              blurRadius: 8,
-                                              offset: Offset(0, 4),
+                                              color: deepRed.withOpacity(0.2),
+                                              blurRadius: 4,
+                                              offset: Offset(0, 1),
                                             ),
                                           ] : null,
                                         ),
-                                        child: Column(
-                                          mainAxisAlignment: MainAxisAlignment.center,
+                                        child: Row(
                                           children: [
-                                            Text(
-                                              emoji, 
-                                              style: TextStyle(fontSize: 32),
-                                            ),
-                                            SizedBox(height: 8),
-                                            Text(
-                                              mood,
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: selected 
-                                                  ? FontWeight.bold 
-                                                  : FontWeight.w500,
+                                            Container(
+                                              padding: EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
                                                 color: selected 
-                                                  ? deepRed 
-                                                  : Colors.grey.shade700,
+                                                  ? iconColor.withOpacity(0.2)
+                                                  : Colors.grey.shade100,
+                                                borderRadius: BorderRadius.circular(6),
                                               ),
-                                              textAlign: TextAlign.center,
+                                              child: Icon(
+                                                iconData,
+                                                color: selected ? iconColor : Colors.grey.shade400,
+                                                size: 20,
+                                              ),
                                             ),
+                                            SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                intake,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: selected 
+                                                    ? FontWeight.w600 
+                                                    : FontWeight.w500,
+                                                  color: selected 
+                                                    ? deepRed 
+                                                    : Colors.grey.shade700,
+                                                ),
+                                              ),
+                                            ),
+                                            if (selected)
+                                              Icon(
+                                                Icons.check_circle,
+                                                color: deepRed,
+                                                size: 20,
+                                              ),
                                           ],
                                         ),
                                       ),
                                     );
-                                  },
+                                  }).toList(),
                                 ),
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 24),
+                          SizedBox(height: 16),
+
+                          // Water Intake Section
+                          _buildFormSection(
+                            title: "Water Intake",
+                            icon: Icons.water_drop,
+                            iconColor: Colors.blue,
+                            child: Column(
+                              children: [
+                                SizedBox(height: 8),
+                                Column(
+                                  children: waterIntakeOptions.map((intake) {
+                                    final selected = _waterIntake == intake;
+                                    IconData iconData;
+                                    Color iconColor;
+                                    
+                                    switch(intake) {
+                                      case "Not Drinking":
+                                        iconData = Icons.close_rounded;
+                                        iconColor = Colors.red;
+                                        break;
+                                      case "Drinking Less":
+                                        iconData = Icons.trending_down;
+                                        iconColor = Colors.orange;
+                                        break;
+                                      case "Normal":
+                                        iconData = Icons.check_circle_outline;
+                                        iconColor = Colors.blue;
+                                        break;
+                                      case "Drinking More":
+                                        iconData = Icons.trending_up;
+                                        iconColor = Colors.purple;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        iconColor = Colors.grey;
+                                    }
+                                    
+                                    return GestureDetector(
+                                      onTap: () {
+                                        setModalState(() => _waterIntake = intake);
+                                        setState(() => _waterIntake = intake);
+                                        HapticFeedback.lightImpact();
+                                      },
+                                      child: AnimatedContainer(
+                                        duration: Duration(milliseconds: 200),
+                                        margin: EdgeInsets.only(bottom: 8),
+                                        padding: EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: selected 
+                                            ? Colors.blue.withOpacity(0.08) 
+                                            : Colors.white,
+                                          border: Border.all(
+                                            color: selected 
+                                              ? Colors.blue 
+                                              : Colors.grey.shade300,
+                                            width: selected ? 2 : 1,
+                                          ),
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              padding: EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                color: selected 
+                                                  ? iconColor.withOpacity(0.2)
+                                                  : Colors.grey.shade100,
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Icon(
+                                                iconData,
+                                                color: selected ? iconColor : Colors.grey.shade400,
+                                                size: 20,
+                                              ),
+                                            ),
+                                            SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                intake,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: selected 
+                                                    ? FontWeight.w600 
+                                                    : FontWeight.w500,
+                                                  color: selected 
+                                                    ? Colors.blue.shade800 
+                                                    : Colors.grey.shade700,
+                                                ),
+                                              ),
+                                            ),
+                                            if (selected)
+                                              Icon(
+                                                Icons.check_circle,
+                                                color: Colors.blue,
+                                                size: 20,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          SizedBox(height: 16),
+
+                          // Bathroom Habits Section
+                          _buildFormSection(
+                            title: "Bathroom Habits",
+                            icon: Icons.health_and_safety,
+                            iconColor: Colors.purple,
+                            child: Column(
+                              children: [
+                                SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: bathroomOptions.map((habit) {
+                                    final selected = _bathroomHabits == habit;
+                                    IconData iconData;
+                                    Color chipColor;
+                                    
+                                    switch(habit) {
+                                      case "Normal":
+                                        iconData = Icons.check_circle_outline;
+                                        chipColor = Colors.green;
+                                        break;
+                                      case "Diarrhea":
+                                        iconData = Icons.warning_amber_rounded;
+                                        chipColor = Colors.orange;
+                                        break;
+                                      case "Constipation":
+                                        iconData = Icons.block;
+                                        chipColor = Colors.red;
+                                        break;
+                                      case "Frequent Urination":
+                                        iconData = Icons.repeat_rounded;
+                                        chipColor = Colors.purple;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        chipColor = Colors.grey;
+                                    }
+                                    
+                                    return GestureDetector(
+                                      onTap: () {
+                                        setModalState(() => _bathroomHabits = habit);
+                                        setState(() => _bathroomHabits = habit);
+                                        HapticFeedback.lightImpact();
+                                      },
+                                      child: AnimatedContainer(
+                                        duration: Duration(milliseconds: 200),
+                                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: selected 
+                                            ? chipColor.withOpacity(0.15) 
+                                            : Colors.white,
+                                          border: Border.all(
+                                            color: selected 
+                                              ? chipColor 
+                                              : Colors.grey.shade300,
+                                            width: selected ? 2 : 1,
+                                          ),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              iconData,
+                                              color: selected ? chipColor : Colors.grey.shade400,
+                                              size: 16,
+                                            ),
+                                            SizedBox(width: 6),
+                                            Text(
+                                              habit,
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: selected 
+                                                  ? FontWeight.w600 
+                                                  : FontWeight.w500,
+                                                color: selected 
+                                                  ? chipColor.withOpacity(1.0)
+                                                  : Colors.grey.shade700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          SizedBox(height: 16),
 
                           // Activity Level Section
                           _buildFormSection(
-                            title: "Activity level today?",
+                            title: "Activity Level Today",
                             icon: Icons.directions_run,
                             iconColor: Colors.green,
                             child: Column(
                               children: [
-                                SizedBox(height: 12),
+                                SizedBox(height: 8),
                                 Row(
                                   children: activityLevels.map((level) {
-                                    final emoji = _activityEmojis[level] ?? '•';
                                     final selected = _activityLevel == level;
+                                    IconData iconData;
+                                    Color levelColor;
+                                    
+                                    switch(level) {
+                                      case "High":
+                                        iconData = Icons.flash_on;
+                                        levelColor = Colors.green;
+                                        break;
+                                      case "Medium":
+                                        iconData = Icons.wb_sunny_outlined;
+                                        levelColor = Colors.orange;
+                                        break;
+                                      case "Low":
+                                        iconData = Icons.bedtime;
+                                        levelColor = Colors.blue;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        levelColor = Colors.grey;
+                                    }
                                     
                                     return Expanded(
                                       child: GestureDetector(
@@ -7474,23 +7811,36 @@ void _disconnectDevice() async {
                                         child: AnimatedContainer(
                                           duration: Duration(milliseconds: 200),
                                           margin: EdgeInsets.symmetric(horizontal: 4),
-                                          padding: EdgeInsets.symmetric(vertical: 16),
+                                          padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                                           decoration: BoxDecoration(
                                             color: selected 
-                                              ? Colors.green.withOpacity(0.15) 
-                                              : Colors.grey.shade50,
+                                              ? levelColor.withOpacity(0.12) 
+                                              : Colors.white,
                                             border: Border.all(
                                               color: selected 
-                                                ? Colors.green 
+                                                ? levelColor 
                                                 : Colors.grey.shade300,
                                               width: selected ? 2 : 1,
                                             ),
-                                            borderRadius: BorderRadius.circular(16),
+                                            borderRadius: BorderRadius.circular(10),
                                           ),
                                           child: Column(
                                             children: [
-                                              Text(emoji, style: TextStyle(fontSize: 28)),
-                                              SizedBox(height: 8),
+                                              Container(
+                                                padding: EdgeInsets.all(8),
+                                                decoration: BoxDecoration(
+                                                  color: selected 
+                                                    ? levelColor.withOpacity(0.2)
+                                                    : Colors.grey.shade100,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: Icon(
+                                                  iconData,
+                                                  color: selected ? levelColor : Colors.grey.shade400,
+                                                  size: 22,
+                                                ),
+                                              ),
+                                              SizedBox(height: 6),
                                               Text(
                                                 level,
                                                 style: TextStyle(
@@ -7514,23 +7864,23 @@ void _disconnectDevice() async {
                             ),
                           ),
 
-                          SizedBox(height: 24),
+                          SizedBox(height: 16),
 
                           // Sleep Hours Section
                           _buildFormSection(
-                            title: "Sleep hours",
+                            title: "Sleep Hours (Last 24 Hours)",
                             icon: Icons.bedtime,
-                            iconColor: Colors.blue,
+                            iconColor: Colors.indigo,
                             child: Column(
                               children: [
-                                SizedBox(height: 12),
+                                SizedBox(height: 8),
                                 Container(
-                                  padding: EdgeInsets.all(16),
+                                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                   decoration: BoxDecoration(
-                                    color: Colors.blue.withOpacity(0.05),
-                                    borderRadius: BorderRadius.circular(16),
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
                                     border: Border.all(
-                                      color: Colors.blue.withOpacity(0.2),
+                                      color: Colors.grey.shade300,
                                     ),
                                   ),
                                   child: Row(
@@ -7540,27 +7890,29 @@ void _disconnectDevice() async {
                                           controller: _sleepController,
                                           keyboardType: TextInputType.numberWithOptions(decimal: true),
                                           style: TextStyle(
-                                            fontSize: 18,
+                                            fontSize: 16,
                                             fontWeight: FontWeight.w600,
+                                            color: Colors.indigo,
                                           ),
                                           decoration: InputDecoration(
-                                            border: OutlineInputBorder(
-                                              borderRadius: BorderRadius.circular(12),
-                                              borderSide: BorderSide.none,
-                                            ),
-                                            filled: true,
-                                            fillColor: Colors.white,
-                                            hintText: "0.0",
-                                            hintStyle: TextStyle(color: Colors.grey.shade400),
-                                            contentPadding: EdgeInsets.symmetric(
-                                              horizontal: 16, 
-                                              vertical: 16,
-                                            ),
-                                            suffixText: "hours",
-                                            suffixStyle: TextStyle(
-                                              color: Colors.grey.shade600,
+                                            border: InputBorder.none,
+                                            hintText: "Enter hours",
+                                            hintStyle: TextStyle(
+                                              color: Colors.grey.shade400,
                                               fontSize: 14,
+                                              fontWeight: FontWeight.normal,
                                             ),
+                                            suffixIcon: Padding(
+                                              padding: EdgeInsets.only(top: 8),
+                                              child: Text(
+                                                "hrs",
+                                                style: TextStyle(
+                                                  color: Colors.grey.shade600,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ),
+                                            contentPadding: EdgeInsets.symmetric(vertical: 4),
                                           ),
                                           onChanged: (value) {
                                             final parsed = double.tryParse(value);
@@ -7589,7 +7941,7 @@ void _disconnectDevice() async {
                                           },
                                         ),
                                       ),
-                                      SizedBox(width: 12),
+                                      SizedBox(width: 10),
                                       Column(
                                         children: [
                                           _buildSleepButton(
@@ -7609,7 +7961,7 @@ void _disconnectDevice() async {
                                               HapticFeedback.lightImpact();
                                             },
                                           ),
-                                          SizedBox(height: 8),
+                                          SizedBox(height: 4),
                                           _buildSleepButton(
                                             icon: Icons.remove,
                                             onPressed: () {
@@ -7632,23 +7984,33 @@ void _disconnectDevice() async {
                                     ],
                                   ),
                                 ),
-                                if (_sleepHours != null) ...[
-                                  SizedBox(height: 12),
+                                if (_sleepHours != null && _sleepHours! > 0) ...[
+                                  SizedBox(height: 6),
                                   Container(
-                                    padding: EdgeInsets.all(12),
+                                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                     decoration: BoxDecoration(
-                                      color: Colors.blue.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.indigo.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.indigo.withOpacity(0.2),
+                                      ),
                                     ),
                                     child: Row(
                                       children: [
-                                        Icon(Icons.info_outline, color: Colors.blue, size: 16),
-                                        SizedBox(width: 8),
-                                        Text(
-                                          _getSleepFeedback(_sleepHours!),
-                                          style: TextStyle(
-                                            color: Colors.blue.shade700,
-                                            fontSize: 12,
+                                        Icon(
+                                          Icons.lightbulb_outline,
+                                          color: Colors.indigo.shade600,
+                                          size: 14,
+                                        ),
+                                        SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            _getSleepFeedback(_sleepHours!),
+                                            style: TextStyle(
+                                              color: Colors.indigo.shade800,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w500,
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -7659,45 +8021,157 @@ void _disconnectDevice() async {
                             ),
                           ),
 
-                          SizedBox(height: 24),
+                          SizedBox(height: 16),
 
-                          // Notes Section
+                          // Symptoms Section (replaces notes)
                           _buildFormSection(
-                            title: "Additional notes (optional)",
-                            icon: Icons.note_alt,
-                            iconColor: Colors.purple,
+                            title: "Health Symptoms",
+                            icon: Icons.medical_services,
+                            iconColor: Colors.red,
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                SizedBox(height: 12),
-                                TextFormField(
-                                  initialValue: _notes,
-                                  maxLines: 4,
-                                  style: TextStyle(fontSize: 16),
-                                  decoration: InputDecoration(
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: BorderSide(color: Colors.grey.shade300),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: BorderSide(color: deepRed, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.grey.shade50,
-                                    hintText: "Any observations, behaviors, or concerns...",
-                                    hintStyle: TextStyle(color: Colors.grey.shade400),
-                                    contentPadding: EdgeInsets.all(16),
+                                SizedBox(height: 8),
+                                Text(
+                                  "Check any symptoms your pet is experiencing:",
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                    fontStyle: FontStyle.italic,
                                   ),
-                                  onChanged: (value) {
-                                    setModalState(() => _notes = value);
-                                    setState(() => _notes = value);
-                                  },
                                 ),
+                                SizedBox(height: 8),
+                                ...commonSymptoms.map((symptom) {
+                                  final isSelected = _selectedSymptoms.contains(symptom);
+                                  final isNone = symptom == "None of the Above";
+                                  
+                                  return Container(
+                                    margin: EdgeInsets.only(bottom: 6),
+                                    child: Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: () {
+                                          setModalState(() {
+                                            if (isNone) {
+                                              // If "None" is selected, clear all other symptoms
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(symptom);
+                                              } else {
+                                                _selectedSymptoms.clear();
+                                                _selectedSymptoms.add(symptom);
+                                              }
+                                            } else {
+                                              // If any other symptom is selected, remove "None"
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(symptom);
+                                              } else {
+                                                _selectedSymptoms.remove("None of the Above");
+                                                _selectedSymptoms.add(symptom);
+                                              }
+                                            }
+                                          });
+                                          setState(() {
+                                            if (isNone) {
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(symptom);
+                                              } else {
+                                                _selectedSymptoms.clear();
+                                                _selectedSymptoms.add(symptom);
+                                              }
+                                            } else {
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(symptom);
+                                              } else {
+                                                _selectedSymptoms.remove("None of the Above");
+                                                _selectedSymptoms.add(symptom);
+                                              }
+                                            }
+                                          });
+                                          HapticFeedback.selectionClick();
+                                        },
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Container(
+                                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                          decoration: BoxDecoration(
+                                            color: isSelected 
+                                              ? (isNone ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1))
+                                              : Colors.grey.shade50,
+                                            border: Border.all(
+                                              color: isSelected 
+                                                ? (isNone ? Colors.green : Colors.red)
+                                                : Colors.grey.shade300,
+                                              width: isSelected ? 2 : 1,
+                                            ),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                isSelected 
+                                                  ? Icons.check_box 
+                                                  : Icons.check_box_outline_blank,
+                                                color: isSelected 
+                                                  ? (isNone ? Colors.green : Colors.red)
+                                                  : Colors.grey.shade400,
+                                                size: 20,
+                                              ),
+                                              SizedBox(width: 10),
+                                              Expanded(
+                                                child: Text(
+                                                  symptom,
+                                                  style: TextStyle(
+                                                    fontSize: 13,
+                                                    fontWeight: isSelected 
+                                                      ? FontWeight.w600 
+                                                      : FontWeight.w500,
+                                                    color: isSelected 
+                                                      ? (isNone ? Colors.green.shade800 : Colors.red.shade800)
+                                                      : Colors.grey.shade700,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                                if (_selectedSymptoms.isNotEmpty && !_selectedSymptoms.contains("None of the Above")) ...[
+                                  SizedBox(height: 8),
+                                  Container(
+                                    padding: EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Colors.orange.withOpacity(0.3),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 18),
+                                        SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            "${_selectedSymptoms.length} symptom(s) selected. Consider consulting a vet if symptoms persist.",
+                                            style: TextStyle(
+                                              color: Colors.orange.shade900,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 32),
+                          SizedBox(height: 20),
                         ],
                       ),
                     ),
@@ -7734,7 +8208,7 @@ void _disconnectDevice() async {
                             size: 20,
                           ),
                           label: Text(
-                            isEdit ? "Update Behavior Log" : "Save Behavior Log",
+                            isEdit ? "Update Health Log" : "Save Health Log",
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -7753,6 +8227,13 @@ void _disconnectDevice() async {
                                 'mood': _selectedMood,
                                 'sleep_hours': _sleepHours,
                                 'activity_level': _activityLevel,
+                                // New health tracking fields
+                                'food_intake': _foodIntake,
+                                'water_intake': _waterIntake,
+                                'bathroom_habits': _bathroomHabits,
+                                'symptoms': json.encode(_selectedSymptoms), // Store as JSON string
+                                'body_temperature': _bodyTemperature,
+                                'appetite_behavior': _appetiteBehavior,
                               };
                               
                               if (isEdit) {
@@ -7783,8 +8264,8 @@ void _disconnectDevice() async {
                                         Icon(Icons.check_circle, color: Colors.white),
                                         SizedBox(width: 8),
                                         Text(isEdit 
-                                          ? 'Behavior log updated successfully!' 
-                                          : 'Behavior logged and analyzed!'),
+                                          ? 'Health log updated successfully!' 
+                                          : 'Health data logged and analyzed!'),
                                       ],
                                     ),
                                     backgroundColor: Colors.green,
@@ -7841,38 +8322,40 @@ void _disconnectDevice() async {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: Offset(0, 2),
+            blurRadius: 6,
+            offset: Offset(0, 1),
           ),
         ],
       ),
       child: Padding(
-        padding: EdgeInsets.all(16),
+        padding: EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(6),
                   decoration: BoxDecoration(
                     color: iconColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(6),
                   ),
-                  child: Icon(icon, color: iconColor, size: 20),
+                  child: Icon(icon, color: iconColor, size: 18),
                 ),
-                SizedBox(width: 12),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade800,
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade800,
+                    ),
                   ),
                 ),
               ],
@@ -7892,14 +8375,14 @@ void _disconnectDevice() async {
     return Container(
       decoration: BoxDecoration(
         color: Colors.blue.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: Colors.blue.withOpacity(0.3)),
       ),
       child: IconButton(
-        icon: Icon(icon, color: Colors.blue, size: 20),
+        icon: Icon(icon, color: Colors.blue, size: 16),
         onPressed: onPressed,
-        padding: EdgeInsets.all(8),
-        constraints: BoxConstraints(minWidth: 40, minHeight: 40),
+        padding: EdgeInsets.all(4),
+        constraints: BoxConstraints(minWidth: 32, minHeight: 32),
       ),
     );
   }

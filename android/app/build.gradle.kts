@@ -64,15 +64,6 @@ android {
     }
 }
 
-// Rename APK output file
-androidComponents {
-    onVariants { variant ->
-        variant.outputs.forEach { output ->
-            output.outputFileName.set("pettrackcare-${variant.name}.apk")
-        }
-    }
-}
-
 kotlin {
     jvmToolchain(17)
 }

@@ -43,23 +43,73 @@ def fetch_logs_df(pet_id, limit=200):
     df['sleep_hours'] = pd.to_numeric(df['sleep_hours'], errors='coerce').fillna(0.0)
     df['mood'] = df['mood'].fillna('Unknown').astype(str)
     df['activity_level'] = df['activity_level'].fillna('Unknown').astype(str)
+    
+    # Handle new health tracking columns
+    df['food_intake'] = df.get('food_intake', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
+    df['water_intake'] = df.get('water_intake', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
+    df['bathroom_habits'] = df.get('bathroom_habits', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
+    df['symptoms'] = df.get('symptoms', pd.Series(['[]'] * len(df))).fillna('[]').astype(str)
+    df['body_temperature'] = df.get('body_temperature', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
+    df['appetite_behavior'] = df.get('appetite_behavior', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
+    
     return df
 
 def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.pkl"), min_auc_threshold: float = 0.6):
     if df.shape[0] < 5:
         return None, None
+    
+    # Prepare label encoders for categorical features
     le_mood = LabelEncoder()
     le_activity = LabelEncoder()
+    le_food = LabelEncoder()
+    le_water = LabelEncoder()
+    le_bathroom = LabelEncoder()
+    
+    # Encode categorical features
     df['mood_enc'] = le_mood.fit_transform(df['mood'])
     df['act_enc'] = le_activity.fit_transform(df['activity_level'])
-    X = df[['mood_enc', 'sleep_hours', 'act_enc']].values
-    y = ((df['mood'].str.lower().isin(['lethargic','aggressive'])) | 
-         (df['sleep_hours'] < 5) | 
-         (df['activity_level'].str.lower()=='low')).astype(int).values
+    df['food_enc'] = le_food.fit_transform(df['food_intake'])
+    df['water_enc'] = le_water.fit_transform(df['water_intake'])
+    df['bathroom_enc'] = le_bathroom.fit_transform(df['bathroom_habits'])
+    
+    # Count symptoms (parse JSON array)
+    def count_symptoms(symptoms_str):
+        try:
+            import json
+            symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+            # Filter out "None of the Above"
+            filtered = [s for s in symptoms if s != "None of the Above"]
+            return len(filtered)
+        except:
+            return 0
+    
+    df['symptom_count'] = df['symptoms'].apply(count_symptoms)
+    
+    # Build feature matrix with health indicators
+    X = df[['mood_enc', 'sleep_hours', 'act_enc', 'food_enc', 'water_enc', 'bathroom_enc', 'symptom_count']].values
+    
+    # Enhanced illness indicator based on comprehensive health data
+    y = (
+        # Food intake issues
+        (df['food_intake'].str.lower().isin(['not eating', 'eating less'])) |
+        # Water intake issues
+        (df['water_intake'].str.lower().isin(['not drinking', 'drinking less'])) |
+        # Bathroom issues
+        (df['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination'])) |
+        # Multiple symptoms
+        (df['symptom_count'] >= 2) |
+        # Sleep issues
+        (df['sleep_hours'] < 5) | (df['sleep_hours'] > 14) |
+        # Activity issues
+        (df['activity_level'].str.lower() == 'low') |
+        # Mood issues (kept for backward compatibility)
+        (df['mood'].str.lower().isin(['lethargic', 'aggressive']))
+    ).astype(int).values
 
     # Guard: need both classes to train a classifier
     if len(np.unique(y)) < 2:
         return None, None
+    
     # Use class balancing to mitigate imbalance
     clf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
     clf.fit(X, y)
@@ -97,10 +147,17 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
     # Build mapping dictionaries to handle unseen labels at prediction time
     mood_map = {v: i for i, v in enumerate(getattr(le_mood, 'classes_', []))}
     act_map = {v: i for i, v in enumerate(getattr(le_activity, 'classes_', []))}
+    food_map = {v: i for i, v in enumerate(getattr(le_food, 'classes_', []))}
+    water_map = {v: i for i, v in enumerate(getattr(le_water, 'classes_', []))}
+    bathroom_map = {v: i for i, v in enumerate(getattr(le_bathroom, 'classes_', []))}
 
     # Determine most common classes seen during training for safe fallback
     mood_most_common = None
     act_most_common = None
+    food_most_common = None
+    water_most_common = None
+    bathroom_most_common = None
+    
     try:
         mood_most_common = df['mood'].mode().iloc[0] if not df['mood'].mode().empty else None
     except Exception:
@@ -109,6 +166,18 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         act_most_common = df['activity_level'].mode().iloc[0] if not df['activity_level'].mode().empty else None
     except Exception:
         act_most_common = None
+    try:
+        food_most_common = df['food_intake'].mode().iloc[0] if not df['food_intake'].mode().empty else None
+    except Exception:
+        food_most_common = None
+    try:
+        water_most_common = df['water_intake'].mode().iloc[0] if not df['water_intake'].mode().empty else None
+    except Exception:
+        water_most_common = None
+    try:
+        bathroom_most_common = df['bathroom_habits'].mode().iloc[0] if not df['bathroom_habits'].mode().empty else None
+    except Exception:
+        bathroom_most_common = None
 
     metadata = {
         'trained_at': datetime.utcnow().isoformat(),
@@ -117,18 +186,27 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         'auc': auc_score,
         'mood_most_common': (mood_most_common or '').lower() if mood_most_common else None,
         'act_most_common': (act_most_common or '').lower() if act_most_common else None,
+        'food_most_common': (food_most_common or '').lower() if food_most_common else None,
+        'water_most_common': (water_most_common or '').lower() if water_most_common else None,
+        'bathroom_most_common': (bathroom_most_common or '').lower() if bathroom_most_common else None,
     }
 
     joblib.dump({
         'model': clf,
         'le_mood': le_mood,
         'le_activity': le_activity,
+        'le_food': le_food,
+        'le_water': le_water,
+        'le_bathroom': le_bathroom,
         'mood_map': mood_map,
         'act_map': act_map,
+        'food_map': food_map,
+        'water_map': water_map,
+        'bathroom_map': bathroom_map,
         'metadata': metadata,
     }, model_path)
 
-    return clf, (le_mood, le_activity)
+    return clf, (le_mood, le_activity, le_food, le_water, le_bathroom)
 
 def load_illness_model(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     if os.path.exists(model_path):
@@ -136,10 +214,16 @@ def load_illness_model(model_path=os.path.join(MODELS_DIR, "illness_model.pkl"))
         model = data.get('model')
         le_mood = data.get('le_mood')
         le_activity = data.get('le_activity')
+        le_food = data.get('le_food')
+        le_water = data.get('le_water')
+        le_bathroom = data.get('le_bathroom')
         mood_map = data.get('mood_map')
         act_map = data.get('act_map')
+        food_map = data.get('food_map')
+        water_map = data.get('water_map')
+        bathroom_map = data.get('bathroom_map')
         metadata = data.get('metadata')
-        return model, (le_mood, le_activity), mood_map, act_map, metadata
+        return model, (le_mood, le_activity, le_food, le_water, le_bathroom), mood_map, act_map, food_map, water_map, bathroom_map, metadata
     return None, None
 
 def is_illness_model_trained(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
