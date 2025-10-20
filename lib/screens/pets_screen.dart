@@ -134,9 +134,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String? _bodyTemperature; // "Normal", "Fever", "Cold"
   String? _appetiteBehavior; // "Eager", "Normal", "Reluctant", "Refuses"
 
-  // Latest mood from behavior logs for display in health status
-  String? _latestMood;
-
   // illness risk returned by backend (high/low/null)
   String? _illnessRisk;
   // numeric sleep forecast (7 days) returned by backend
@@ -225,15 +222,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // map of date -> list of event markers (used by TableCalendar)
   Map<DateTime, List<String>> _events = {};
 
-  // emoji mappings for mood & activity
-  final Map<String, String> _moodEmojis = {
-    'Happy': '😄',
-    'Anxious': '😟',
-    'Aggressive': '😠',
-    'Calm': '😌',
-    'Lethargic': '😴',
-  };
-
+  // emoji mappings for activity
   final Map<String, String> _activityEmojis = {
     'High': '🐕',
     'Medium': '🐾',
@@ -464,43 +453,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       });
     }
 
-    // Fetch latest mood from behavior logs
-    await _fetchLatestMood();
-
     // also refresh calendar markers
     await _fetchBehaviorDates();
-  }
-
-  // Fetch the latest mood from behavior logs
-  Future<void> _fetchLatestMood() async {
-    if (_selectedPet == null) return;
-    try {
-      final petId = _selectedPet!['id'];
-      final response = await Supabase.instance.client
-          .from('behavior_logs')
-          .select('mood')
-          .eq('pet_id', petId)
-          .not('mood', 'is', null)
-          .order('log_date', ascending: false)
-          .limit(1);
-
-      final data = response as List?;
-      if (data != null && data.isNotEmpty) {
-        final latestLog = data.first as Map<String, dynamic>;
-        setState(() {
-          _latestMood = latestLog['mood']?.toString();
-        });
-      } else {
-        setState(() {
-          _latestMood = null;
-        });
-      }
-    } catch (e) {
-      // Error fetching latest mood
-      setState(() {
-        _latestMood = null;
-      });
-    }
   }
 
   // fetch behavior log dates for the selected pet and populate _events with a marker
@@ -4960,11 +4914,12 @@ void _disconnectDevice() async {
       ));
     }
 
-    // Symptoms insights
-    if (symptoms.isNotEmpty) {
+    // Symptoms insights - filter out "None of the Above"
+    final actualSymptoms = symptoms.where((s) => s.toLowerCase() != "none of the above").toList();
+    if (actualSymptoms.isNotEmpty) {
       insights.add(_buildInsightItem(
         'Symptoms Reported',
-        'Please monitor these symptoms and consult a vet if they persist or worsen.',
+        '${actualSymptoms.length} symptom(s) detected. Please monitor and consult a vet if they persist or worsen.',
         Icons.medical_services,
         Colors.red,
       ));
@@ -7843,42 +7798,28 @@ void _disconnectDevice() async {
                                       color: Colors.transparent,
                                       child: InkWell(
                                         onTap: () {
-                                          setModalState(() {
-                                            if (isNone) {
-                                              // If "None" is selected, clear all other symptoms
-                                              if (isSelected) {
-                                                _selectedSymptoms.remove(symptom);
-                                              } else {
-                                                _selectedSymptoms.clear();
-                                                _selectedSymptoms.add(symptom);
-                                              }
+                                          // Update state only once to avoid duplicates
+                                          if (isNone) {
+                                            // If "None" is selected, clear all other symptoms
+                                            if (isSelected) {
+                                              _selectedSymptoms.remove(symptom);
                                             } else {
-                                              // If any other symptom is selected, remove "None"
-                                              if (isSelected) {
-                                                _selectedSymptoms.remove(symptom);
-                                              } else {
-                                                _selectedSymptoms.remove("None of the Above");
-                                                _selectedSymptoms.add(symptom);
-                                              }
+                                              _selectedSymptoms.clear();
+                                              _selectedSymptoms.add(symptom);
                                             }
-                                          });
-                                          setState(() {
-                                            if (isNone) {
-                                              if (isSelected) {
-                                                _selectedSymptoms.remove(symptom);
-                                              } else {
-                                                _selectedSymptoms.clear();
-                                                _selectedSymptoms.add(symptom);
-                                              }
+                                          } else {
+                                            // If any other symptom is selected, remove "None"
+                                            if (isSelected) {
+                                              _selectedSymptoms.remove(symptom);
                                             } else {
-                                              if (isSelected) {
-                                                _selectedSymptoms.remove(symptom);
-                                              } else {
-                                                _selectedSymptoms.remove("None of the Above");
-                                                _selectedSymptoms.add(symptom);
-                                              }
+                                              _selectedSymptoms.remove("None of the Above");
+                                              _selectedSymptoms.add(symptom);
                                             }
-                                          });
+                                          }
+                                          
+                                          // Update both UI states after modification
+                                          setModalState(() {});
+                                          setState(() {});
                                           HapticFeedback.selectionClick();
                                         },
                                         borderRadius: BorderRadius.circular(8),
@@ -7947,7 +7888,7 @@ void _disconnectDevice() async {
                                         SizedBox(width: 8),
                                         Expanded(
                                           child: Text(
-                                            "${_selectedSymptoms.length} symptom(s) selected. Consider consulting a vet if symptoms persist.",
+                                            "${_selectedSymptoms.where((s) => s != "None of the Above").length} symptom(s) selected. Consider consulting a vet if symptoms persist.",
                                             style: TextStyle(
                                               color: Colors.orange.shade900,
                                               fontSize: 11,
@@ -8045,7 +7986,6 @@ void _disconnectDevice() async {
                               // Refresh data
                               await _fetchBehaviorDates();
                               await _fetchAnalyzeFromBackend();
-                              await _fetchLatestMood(); // Refresh latest mood for health status
 
                               // Show success feedback
                               if (mounted) {
@@ -8321,22 +8261,6 @@ void _disconnectDevice() async {
                       title: 'Status',
                       value: _selectedPet!['is_missing'] == true ? 'Missing' : 'Safe',
                       color: _selectedPet!['is_missing'] == true ? deepRed : Colors.green,
-                    ),
-                  ),
-                  SizedBox(width: 6),
-                  Expanded(
-                    child: _buildCompactStatCard(
-                      icon: Icons.mood,
-                      title: 'Mood',
-                      value: _latestMood != null ? 
-                        '${_moodEmojis[_latestMood!] ?? ''} $_latestMood' : 'Unknown',
-                      color: _latestMood != null ? 
-                        (_latestMood == 'Happy' ? Colors.green :
-                         _latestMood == 'Anxious' ? Colors.orange :
-                         _latestMood == 'Aggressive' ? Colors.red :
-                         _latestMood == 'Calm' ? Colors.blue :
-                         _latestMood == 'Lethargic' ? Colors.grey :
-                         Colors.orange) : Colors.grey,
                     ),
                   ),
                 ],

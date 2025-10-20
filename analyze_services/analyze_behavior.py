@@ -77,10 +77,10 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         try:
             import json
             symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
-            # Filter out "None of the Above"
-            filtered = [s for s in symptoms if s != "None of the Above"]
+            # Filter out "None of the Above" - case insensitive and handle variations
+            filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
             return len(filtered)
-        except:
+        except Exception:
             return 0
     
     df['symptom_count'] = df['symptoms'].apply(count_symptoms)
