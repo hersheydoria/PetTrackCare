@@ -4439,12 +4439,37 @@ void _disconnectDevice() async {
 
   // Read-only modal showing existing behavior with Edit/Delete
   void _showExistingBehaviorModal(BuildContext context, Map<String, dynamic> log) {
-    final mood = (log['mood'] ?? '').toString();
     final activity = (log['activity_level'] ?? '').toString();
     final sleep = (log['sleep_hours'] ?? '').toString();
     final notes = (log['notes'] ?? '').toString();
+    final foodIntake = (log['food_intake'] ?? '').toString();
+    final waterIntake = (log['water_intake'] ?? '').toString();
+    final bathroomHabits = (log['bathroom_habits'] ?? '').toString();
+    final bodyTemperature = (log['body_temperature'] ?? '').toString();
+    final appetiteBehavior = (log['appetite_behavior'] ?? '').toString();
     final rawDate = (log['log_date'] ?? '').toString();
     final createdAt = log['created_at']?.toString();
+    
+    // Parse symptoms
+    List<String> symptoms = [];
+    final symptomsData = log['symptoms'];
+    if (symptomsData != null) {
+      if (symptomsData is List) {
+        symptoms = List<String>.from(symptomsData);
+      } else if (symptomsData is String) {
+        try {
+          final decoded = json.decode(symptomsData);
+          if (decoded is List) {
+            symptoms = List<String>.from(decoded);
+          } else {
+            symptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+          }
+        } catch (_) {
+          symptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        }
+      }
+    }
+    
     DateTime date;
     try {
       date = DateTime.parse(rawDate);
@@ -4569,14 +4594,24 @@ void _disconnectDevice() async {
                   padding: EdgeInsets.symmetric(horizontal: 20),
                   child: Column(
                     children: [
-                      // Mood Section
+                      // Food Intake Section
                       _buildDetailCard(
-                        title: 'Mood',
-                        icon: Icons.mood,
+                        title: 'Food Intake',
+                        icon: Icons.restaurant,
                         iconColor: Colors.orange,
-                        value: mood.isEmpty ? 'Not recorded' : mood,
-                        emoji: mood.isNotEmpty ? _moodEmojis[mood] : null,
-                        isEmpty: mood.isEmpty,
+                        value: foodIntake.isEmpty ? 'Not recorded' : foodIntake,
+                        isEmpty: foodIntake.isEmpty,
+                      ),
+
+                      SizedBox(height: 16),
+
+                      // Water Intake Section
+                      _buildDetailCard(
+                        title: 'Water Intake',
+                        icon: Icons.water_drop,
+                        iconColor: Colors.blue,
+                        value: waterIntake.isEmpty ? 'Not recorded' : waterIntake,
+                        isEmpty: waterIntake.isEmpty,
                       ),
 
                       SizedBox(height: 16),
@@ -4597,7 +4632,7 @@ void _disconnectDevice() async {
                       _buildDetailCard(
                         title: 'Sleep Hours',
                         icon: Icons.bedtime,
-                        iconColor: Colors.blue,
+                        iconColor: Colors.purple,
                         value: sleep.isEmpty ? 'Not recorded' : '${sleep} hours',
                         subtitle: sleep.isNotEmpty ? _getSleepFeedback(double.tryParse(sleep) ?? 0) : null,
                         isEmpty: sleep.isEmpty,
@@ -4605,12 +4640,59 @@ void _disconnectDevice() async {
 
                       SizedBox(height: 16),
 
+                      // Bathroom Habits Section
+                      _buildDetailCard(
+                        title: 'Bathroom Habits',
+                        icon: Icons.health_and_safety,
+                        iconColor: Colors.teal,
+                        value: bathroomHabits.isEmpty ? 'Not recorded' : bathroomHabits,
+                        isEmpty: bathroomHabits.isEmpty,
+                      ),
+
+                      SizedBox(height: 16),
+
+                      // Body Temperature Section
+                      if (bodyTemperature.isNotEmpty) ...[
+                        _buildDetailCard(
+                          title: 'Body Temperature',
+                          icon: Icons.thermostat,
+                          iconColor: Colors.red,
+                          value: bodyTemperature,
+                          isEmpty: false,
+                        ),
+                        SizedBox(height: 16),
+                      ],
+
+                      // Appetite Behavior Section
+                      if (appetiteBehavior.isNotEmpty) ...[
+                        _buildDetailCard(
+                          title: 'Appetite Behavior',
+                          icon: Icons.emoji_food_beverage,
+                          iconColor: Colors.amber,
+                          value: appetiteBehavior,
+                          isEmpty: false,
+                        ),
+                        SizedBox(height: 16),
+                      ],
+
+                      // Symptoms Section
+                      if (symptoms.isNotEmpty) ...[
+                        _buildDetailCard(
+                          title: 'Symptoms',
+                          icon: Icons.medical_services,
+                          iconColor: Colors.red,
+                          value: symptoms.join(', '),
+                          isEmpty: false,
+                        ),
+                        SizedBox(height: 16),
+                      ],
+
                       // Notes Section
                       if (notes.isNotEmpty) ...[
                         _buildDetailCard(
                           title: 'Notes',
                           icon: Icons.note_alt,
-                          iconColor: Colors.purple,
+                          iconColor: Colors.indigo,
                           value: notes,
                           isNote: true,
                           isEmpty: false,
@@ -4619,7 +4701,7 @@ void _disconnectDevice() async {
                       ],
 
                       // Health Insights
-                      _buildHealthInsights(mood, activity, sleep),
+                      _buildHealthInsights(activity, sleep, foodIntake, waterIntake, bathroomHabits, symptoms),
 
                       SizedBox(height: 20),
                     ],
@@ -4662,15 +4744,6 @@ void _disconnectDevice() async {
                           ),
                           onPressed: () {
                             Navigator.pop(context); // close details
-                            // preload form state then open edit modal
-                            setState(() {
-                              _selectedDate = date;
-                              _selectedMood = mood.isNotEmpty ? mood : null;
-                              _activityLevel = activity.isNotEmpty ? activity : null;
-                              _sleepHours = double.tryParse(sleep);
-                              _sleepController.text = _sleepHours?.toString() ?? '';
-                              _notes = notes.isNotEmpty ? notes : null;
-                            });
                             _showBehaviorModal(context, date, existing: log);
                           },
                         ),
@@ -4803,52 +4876,96 @@ void _disconnectDevice() async {
   }
 
   // Health insights widget
-  Widget _buildHealthInsights(String mood, String activity, String sleep) {
+  Widget _buildHealthInsights(String activity, String sleep, String foodIntake, String waterIntake, String bathroomHabits, List<String> symptoms) {
     List<Widget> insights = [];
     
-    // Sleep insights
+    // Sleep insights - Updated: 12+ hours is normal for dogs and cats
     final sleepHours = double.tryParse(sleep);
     if (sleepHours != null) {
-      if (sleepHours < 6) {
+      if (sleepHours < 12) {
         insights.add(_buildInsightItem(
           'Low Sleep Detected',
-          'Monitor for signs of fatigue or health issues.',
+          'Dogs and cats typically need 12-14 hours of sleep. Monitor for signs of fatigue or health issues.',
           Icons.warning,
-          Colors.red,
+          Colors.orange,
         ));
-      } else if (sleepHours > 16) {
+      } else if (sleepHours > 18) {
         insights.add(_buildInsightItem(
           'High Sleep Duration',
-          'Consider checking for illness or stress factors.',
+          'Excessive sleep may indicate illness or stress. Consider consulting a vet.',
           Icons.info,
-          Colors.orange,
+          Colors.red,
+        ));
+      } else {
+        insights.add(_buildInsightItem(
+          'Good Sleep Pattern',
+          'Sleep duration is within the normal range for pets.',
+          Icons.check_circle,
+          Colors.green,
         ));
       }
     }
 
-    // Activity insights
-    if (activity == 'Low' && mood == 'Lethargic') {
+    // Food intake insights
+    if (foodIntake == 'Not Eating' || foodIntake == 'Eating Less') {
       insights.add(_buildInsightItem(
-        'Low Energy Pattern',
-        'Consider encouraging more activity or consult a vet.',
+        'Food Intake Concern',
+        'Reduced appetite may indicate health issues. Monitor closely.',
+        Icons.warning,
+        Colors.red,
+      ));
+    }
+
+    // Water intake insights
+    if (waterIntake == 'Not Drinking' || waterIntake == 'Drinking Less') {
+      insights.add(_buildInsightItem(
+        'Hydration Concern',
+        'Reduced water intake needs attention. Ensure fresh water is available.',
+        Icons.warning,
+        Colors.red,
+      ));
+    } else if (waterIntake == 'Drinking More') {
+      insights.add(_buildInsightItem(
+        'Increased Thirst',
+        'Excessive drinking may indicate diabetes or kidney issues. Consider a vet visit.',
+        Icons.info,
+        Colors.orange,
+      ));
+    }
+
+    // Bathroom habits insights
+    if (bathroomHabits == 'Diarrhea' || bathroomHabits == 'Constipation') {
+      insights.add(_buildInsightItem(
+        'Digestive Issue Detected',
+        'Monitor closely and consider consulting a veterinarian if it persists.',
+        Icons.warning,
+        Colors.red,
+      ));
+    }
+
+    // Activity insights
+    if (activity == 'Low') {
+      insights.add(_buildInsightItem(
+        'Low Activity Level',
+        'Consider encouraging more exercise or check for health issues.',
         Icons.trending_down,
         Colors.orange,
       ));
-    } else if (activity == 'High' && mood == 'Happy') {
+    } else if (activity == 'High') {
       insights.add(_buildInsightItem(
-        'Great Energy Balance',
-        'Your pet seems to be in excellent spirits!',
+        'High Energy',
+        'Great! Your pet is active and energetic.',
         Icons.trending_up,
         Colors.green,
       ));
     }
 
-    // Mood insights
-    if (mood == 'Anxious' || mood == 'Aggressive') {
+    // Symptoms insights
+    if (symptoms.isNotEmpty) {
       insights.add(_buildInsightItem(
-        'Mood Concern',
-        'Monitor behavior patterns and consider environmental factors.',
-        Icons.psychology,
+        'Symptoms Reported',
+        'Please monitor these symptoms and consult a vet if they persist or worsen.',
+        Icons.medical_services,
         Colors.red,
       ));
     }
@@ -4856,7 +4973,7 @@ void _disconnectDevice() async {
     if (insights.isEmpty) {
       insights.add(_buildInsightItem(
         'Normal Patterns',
-        'All logged behaviors appear within normal ranges.',
+        'All logged health data appears within normal ranges.',
         Icons.check_circle,
         Colors.green,
       ));
@@ -5317,28 +5434,6 @@ void _disconnectDevice() async {
                 child: _loadingAnalysisData
                     ? _buildChartLoadingSkeleton()
                     : _buildEnhancedSleepChart(),
-              ),
-            ],
-
-            // Enhanced Mood and Activity Analytics
-            if ((_moodProb.isNotEmpty || _activityProb.isNotEmpty) || _loadingAnalysisData) ...[
-              SizedBox(height: 16),
-              Container(
-                margin: EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    )
-                  ],
-                ),
-                child: _loadingAnalysisData
-                    ? _buildDistributionLoadingSkeleton()
-                    : _buildEnhancedMoodActivityAnalytics(),
               ),
             ],
 
@@ -5914,7 +6009,7 @@ void _disconnectDevice() async {
                     ElevatedButton.icon(
                       onPressed: () => _showBehaviorModal(context, DateTime.now()),
                       icon: Icon(Icons.add),
-                      label: Text('Log Behavior'),
+                      label: Text('Log Pet Health Data'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: deepRed,
                         foregroundColor: Colors.white,
@@ -6909,17 +7004,6 @@ void _disconnectDevice() async {
             onPressed: () => Navigator.pop(context),
             child: Text('Close'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showVetContactOptions();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: deepRed,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('Find Vet'),
-          ),
         ],
       ),
     );
@@ -6937,269 +7021,6 @@ void _disconnectDevice() async {
       default:
         return 'Unable to determine risk level. Continue regular health monitoring.';
     }
-  }
-
-  // Show veterinarian contact options
-  void _showVetContactOptions() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.local_hospital, color: deepRed, size: 24),
-            SizedBox(width: 8),
-            Text('Find Veterinary Care'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(Icons.emergency, color: Colors.red),
-              title: Text('Emergency Veterinary Clinics'),
-              subtitle: Text('24/7 emergency care'),
-              onTap: () {
-                Navigator.pop(context);
-                _showEmergencyVetInfo();
-              },
-            ),
-            Divider(),
-            ListTile(
-              leading: Icon(Icons.schedule, color: Colors.blue),
-              title: Text('Regular Veterinary Clinics'),
-              subtitle: Text('Schedule an appointment'),
-              onTap: () {
-                Navigator.pop(context);
-                _showRegularVetInfo();
-              },
-            ),
-            Divider(),
-            ListTile(
-              leading: Icon(Icons.phone, color: Colors.green),
-              title: Text('Veterinary Hotline'),
-              subtitle: Text('Professional advice over phone'),
-              onTap: () {
-                Navigator.pop(context);
-                _showVetHotlineInfo();
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showEmergencyVetInfo() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Emergency vet feature coming soon! Call your local emergency vet clinic.'),
-        backgroundColor: Colors.red,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-  void _showRegularVetInfo() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Vet appointment booking feature coming soon!'),
-        backgroundColor: Colors.blue,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-  void _showVetHotlineInfo() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Vet hotline feature coming soon!'),
-        backgroundColor: Colors.green,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-  // Enhanced mood and activity analytics
-  Widget _buildEnhancedMoodActivityAnalytics() {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.purple.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.psychology, color: Colors.purple.shade700, size: 20),
-              ),
-              SizedBox(width: 12),
-              Text(
-                "Behavior Analytics",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                  color: Colors.purple.shade700,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 16),
-          
-          // Mood Distribution
-          if (_moodProb.isNotEmpty) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.mood, color: Colors.orange.shade700, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        "Mood Distribution",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.orange.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _moodProb.entries.map((entry) {
-                      // Case-insensitive emoji lookup
-                      String emoji = '😐'; // default fallback
-                      _moodEmojis.forEach((key, value) {
-                        if (key.toLowerCase() == entry.key.toLowerCase()) {
-                          emoji = value;
-                        }
-                      });
-                      
-                      final percentage = (entry.value * 100).round();
-                      return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.orange.shade200),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(emoji, style: TextStyle(fontSize: 16)),
-                            SizedBox(width: 6),
-                            Text(
-                              '${entry.key}: $percentage%',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(height: 12),
-          ],
-          
-          // Activity Distribution
-          if (_activityProb.isNotEmpty) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green.withOpacity(0.3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.pets, color: Colors.green.shade700, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        "Activity Distribution",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.green.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _activityProb.entries.map((entry) {
-                      // Case-insensitive emoji lookup
-                      String emoji = '🚶'; // default fallback
-                      _activityEmojis.forEach((key, value) {
-                        if (key.toLowerCase() == entry.key.toLowerCase()) {
-                          emoji = value;
-                        }
-                      });
-                      
-                      final percentage = (entry.value * 100).round();
-                      return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.green.shade200),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(emoji, style: TextStyle(fontSize: 16)),
-                            SizedBox(width: 6),
-                            Text(
-                              '${entry.key}: $percentage%',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
   }
 
   // Loading skeleton for analysis section
@@ -7262,35 +7083,6 @@ void _disconnectDevice() async {
             decoration: BoxDecoration(
               color: Colors.grey.shade300,
               borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Loading skeleton for distribution section
-  Widget _buildDistributionLoadingSkeleton() {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 20,
-            width: 140,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          SizedBox(height: 12),
-          Container(
-            height: 16,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(4),
             ),
           ),
         ],
@@ -8389,14 +8181,12 @@ void _disconnectDevice() async {
 
   // Helper method to provide sleep feedback
   String _getSleepFeedback(double hours) {
-    if (hours < 6) {
-      return "This seems low for most pets. Consider monitoring.";
-    } else if (hours >= 6 && hours <= 14) {
-      return "Normal sleep range for most pets.";
-    } else if (hours > 14 && hours <= 18) {
-      return "A bit high but normal for some pets.";
+    if (hours < 12) {
+      return "Below normal. Dogs and cats typically need 12-14 hours of sleep daily.";
+    } else if (hours >= 12 && hours <= 18) {
+      return "Normal sleep range for dogs and cats.";
     } else {
-      return "This seems quite high. Monitor for any changes.";
+      return "Quite high. Monitor for signs of illness or lethargy.";
     }
   }
 
