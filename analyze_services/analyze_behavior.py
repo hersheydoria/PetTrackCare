@@ -341,7 +341,7 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
     """
     Compute illness risk from recent logs based on behavioral patterns.
     Only uses activity level, food intake, water intake, and bathroom habits.
-    Mood field was removed from the system.
+    Distinguishes between serious issues (not eating/drinking) and minor issues (eating/drinking less).
     """
     if df is None or df.empty:
         print(f"[CONTEXTUAL-RISK] No data provided, returning 'low'")
@@ -354,36 +354,40 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         print(f"[CONTEXTUAL-RISK] Analyzing {len(recent)} recent logs")
         print(f"[CONTEXTUAL-RISK] Recent logs:\n{recent[['log_date', 'activity_level', 'food_intake', 'water_intake', 'bathroom_habits']].to_string()}")
 
-        # Count problematic behaviors
+        # Count SERIOUS problematic behaviors (not eating/drinking, bathroom issues)
         low_activity_count = (recent['activity_level'].str.lower() == 'low').sum()
-        not_eating_count = recent['food_intake'].str.lower().isin(['not eating', 'eating less']).sum()
-        not_drinking_count = recent['water_intake'].str.lower().isin(['not drinking', 'drinking less']).sum()
+        not_eating_count = recent['food_intake'].str.lower().isin(['not eating']).sum()  # SERIOUS
+        eating_less_count = recent['food_intake'].str.lower().isin(['eating less']).sum()  # MINOR
+        not_drinking_count = recent['water_intake'].str.lower().isin(['not drinking']).sum()  # SERIOUS
+        drinking_less_count = recent['water_intake'].str.lower().isin(['drinking less']).sum()  # MINOR
         bad_bathroom_count = recent['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination']).sum()
         
         total_logs = len(recent)
         
         p_low_act = low_activity_count / total_logs if total_logs > 0 else 0
-        p_bad_food = not_eating_count / total_logs if total_logs > 0 else 0
-        p_bad_water = not_drinking_count / total_logs if total_logs > 0 else 0
+        p_not_eating = not_eating_count / total_logs if total_logs > 0 else 0  # SERIOUS
+        p_eating_less = eating_less_count / total_logs if total_logs > 0 else 0  # MINOR
+        p_not_drinking = not_drinking_count / total_logs if total_logs > 0 else 0  # SERIOUS
+        p_drinking_less = drinking_less_count / total_logs if total_logs > 0 else 0  # MINOR
         p_bad_bathroom = bad_bathroom_count / total_logs if total_logs > 0 else 0
 
-        print(f"[CONTEXTUAL-RISK] Patterns: Low activity={p_low_act:.2f} ({low_activity_count}/{total_logs}), Not eating={p_bad_food:.2f} ({not_eating_count}/{total_logs}), Not drinking={p_bad_water:.2f} ({not_drinking_count}/{total_logs}), Bad bathroom={p_bad_bathroom:.2f} ({bad_bathroom_count}/{total_logs})")
+        print(f"[CONTEXTUAL-RISK] Patterns: Low activity={p_low_act:.2f}, NOT eating={p_not_eating:.2f} (serious), eating less={p_eating_less:.2f} (minor), NOT drinking={p_not_drinking:.2f} (serious), drinking less={p_drinking_less:.2f} (minor), Bad bathroom={p_bad_bathroom:.2f}")
 
         risk = "low"
         
-        # High risk: multiple serious problems
-        if (p_bad_food > 0.5 or p_bad_water > 0.5) and (low_activity_count >= 2):
-            print(f"[CONTEXTUAL-RISK] → HIGH (multiple serious issues: food={p_bad_food:.2f}>0.5 or water={p_bad_water:.2f}>0.5, AND low_activity_count={low_activity_count}>=2)")
+        # High risk: serious issues (not eating/drinking) combined with other problems
+        if (p_not_eating > 0.5 or p_not_drinking > 0.5) and (low_activity_count >= 2 or p_bad_bathroom > 0.3):
+            print(f"[CONTEXTUAL-RISK] → HIGH (serious issues: NOT eating={p_not_eating:.2f}>0.5 or NOT drinking={p_not_drinking:.2f}>0.5, combined with low activity or bathroom issues)")
             risk = "high"
-        # Medium risk: single clear problem persisting
-        elif (p_low_act > 0.7) or (p_bad_food > 0.5) or (p_bad_water > 0.5) or (p_bad_bathroom > 0.5):
+        # Medium risk: single serious issue persisting, or multiple minor issues
+        elif (p_low_act > 0.7) or (p_not_eating > 0.3) or (p_not_drinking > 0.3) or (p_bad_bathroom > 0.5):
             if p_low_act > 0.7:
                 print(f"[CONTEXTUAL-RISK] → MEDIUM (low activity {p_low_act:.2f} > 0.7)")
-            elif p_bad_food > 0.5:
-                print(f"[CONTEXTUAL-RISK] → MEDIUM (not eating {p_bad_food:.2f} > 0.5)")
-            elif p_bad_water > 0.5:
-                print(f"[CONTEXTUAL-RISK] → MEDIUM (not drinking {p_bad_water:.2f} > 0.5)")
-            else:
+            elif p_not_eating > 0.3:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (serious: not eating {p_not_eating:.2f} > 0.3)")
+            elif p_not_drinking > 0.3:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (serious: not drinking {p_not_drinking:.2f} > 0.3)")
+            elif p_bad_bathroom > 0.5:
                 print(f"[CONTEXTUAL-RISK] → MEDIUM (bad bathroom {p_bad_bathroom:.2f} > 0.5)")
             risk = "medium"
 
@@ -1255,15 +1259,24 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
 
     print(f"[ML-PREDICT] Input: activity={activity_in}, food={food_in}, water={water_in}, bathroom={bathroom_in}, symptoms={symptom_in}")
 
-    # Rule-based fallback - indicates health concern
-    rule_flag = (
-        food_in in ["not eating", "eating less"] or
-        water_in in ["not drinking", "drinking less"] or
+    # Rule-based fallback - distinguishes between serious and minor concerns
+    # SERIOUS issues: not eating/drinking, bathroom problems, 2+ symptoms, low activity
+    # MINOR issues: eating/drinking less (yellow flag but not immediate danger)
+    serious_flag = (
+        food_in == "not eating" or
+        water_in == "not drinking" or
         bathroom_in in ["diarrhea", "constipation", "frequent urination"] or
         symptom_in >= 2 or
         activity_in == "low"
     )
-    print(f"[ML-PREDICT] Rule-based flag: {rule_flag}")
+    
+    minor_flag = (
+        food_in == "eating less" or
+        water_in == "drinking less"
+    )
+    
+    rule_flag = serious_flag or (minor_flag and activity_in == "low")  # Only flag "eating less" if also low activity
+    print(f"[ML-PREDICT] Rule-based: serious={serious_flag}, minor={minor_flag}, combined_flag={rule_flag}")
 
     loaded = load_illness_model(model_path)
     if not loaded or loaded[0] is None:
