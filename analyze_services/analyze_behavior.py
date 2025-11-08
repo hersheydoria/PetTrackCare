@@ -31,6 +31,26 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+# Clean up old incompatible models on startup (sklearn version mismatch issue)
+def cleanup_incompatible_models():
+    """Delete old model files to force retraining with current sklearn version."""
+    try:
+        if os.path.exists(MODELS_DIR):
+            model_files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.pkl')]
+            if model_files:
+                print(f"[STARTUP] Cleaning up {len(model_files)} old model files due to sklearn version mismatch...")
+                for f in model_files:
+                    try:
+                        os.remove(os.path.join(MODELS_DIR, f))
+                        print(f"[STARTUP] Deleted: {f}")
+                    except Exception as e:
+                        print(f"[STARTUP] Failed to delete {f}: {e}")
+    except Exception as e:
+        print(f"[STARTUP] Error during model cleanup: {e}")
+
+# Run cleanup on startup
+cleanup_incompatible_models()
+
 # ------------------- Data Fetch & Model Logic -------------------
 
 def fetch_logs_df(pet_id, limit=200):
@@ -385,8 +405,9 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
 def compute_contextual_risk(df: pd.DataFrame) -> str:
     """
     Compute a smoothed illness risk ('low'/'medium'/'high') from recent logs
-    by combining mood/activity proportions and recent sleep averages.
-    De-escalates if the last few days look healthy.
+    by analyzing mood/activity patterns.
+    Only escalates for CLEAR problems, not borderline cases.
+    Sleep analysis removed due to insufficient data issues with single logs.
     """
     if df is None or df.empty:
         return "low"
@@ -398,11 +419,7 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         mood_counts = recent['mood'].str.lower().value_counts(normalize=True)
         act_counts = recent['activity_level'].str.lower().value_counts(normalize=True)
 
-        last7 = recent.tail(7)
         last3 = recent.tail(3)
-
-        avg_sleep7 = float(last7['sleep_hours'].mean()) if not last7.empty else float(recent['sleep_hours'].mean())
-        avg_sleep3 = float(last3['sleep_hours'].mean()) if not last3.empty else avg_sleep7
 
         p_aggr = float(mood_counts.get('aggressive', 0))
         p_leth = float(mood_counts.get('lethargic', 0))
@@ -413,19 +430,19 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         happy_calm_count = sum(1 for m in last3_moods if m in ('happy', 'calm'))
 
         risk = "low"
-        # Strong signals -> high (Updated: <12 hours is low sleep)
-        if (avg_sleep7 < 12.0) or (avg_sleep3 < 12.0) or (p_aggr > 0.25):
+        # Strong signals -> high (ONLY clear problems)
+        if (p_aggr > 0.4):
             risk = "high"
-        # Moderate signals -> medium
-        elif (p_leth > 0.35) or (p_anx > 0.35) or (p_low_act > 0.6) or (avg_sleep7 < 14.0):
+        # Moderate signals -> medium (only if clear negative pattern)
+        elif (p_leth > 0.5) or (p_anx > 0.5) or (p_low_act > 0.7):
             risk = "medium"
 
         # De-escalation: if most recent days are healthy, dial back
         if risk == "high":
-            if (happy_calm_count >= 2) and (avg_sleep3 >= 12.0) and (p_aggr <= 0.25):
+            if (happy_calm_count >= 2) and (p_aggr <= 0.25):
                 risk = "medium"
         if risk == "medium":
-            if (happy_calm_count >= 2) and (avg_sleep3 >= 12.0) and (p_low_act <= 0.6) and (p_leth <= 0.35) and (p_anx <= 0.35):
+            if (happy_calm_count >= 2) and (p_low_act <= 0.5) and (p_leth <= 0.35) and (p_anx <= 0.35):
                 risk = "low"
 
         return risk
@@ -500,16 +517,6 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
         recommendation += " Pet is very active."
     elif activity_prob.get('medium', 0) > 0.5:
         recommendation += " Activity level is moderate."
-
-    # Sleep trend analysis
-    avg_sleep = df["sleep_hours"].mean()
-    if avg_sleep < 12:
-        trend += " Possible sleep deprivation."
-        risk_level = "high"
-        recommendation += " Ensure your pet gets enough rest."
-    elif avg_sleep > 18:
-        trend += " Pet may be oversleeping."
-        recommendation += " Monitor for signs of illness."
 
     # Determine prediction_date to store (default to today)
     pred_date = (pd.to_datetime(prediction_date).date().isoformat()
@@ -636,46 +643,48 @@ def analyze_endpoint():
     if not pet_id:
         return jsonify({"error": "pet_id required"}), 400
 
+    print(f"\n[ANALYZE-START] ========== Analyzing pet {pet_id} ==========")
+    
     # CONTINUOUS MODEL TRAINING: Fetch all logs for this specific pet and train/retrain the model
     df = fetch_logs_df(pet_id)
     print(f"[ANALYZE] Pet {pet_id}: Fetched {len(df)} logs for continuous training")
     
-    # Train model on this pet's data (will be saved per-pet)
+    # Only train if we have sufficient data
     if not df.empty and len(df) >= 5:
         try:
             trained_clf, encoders = train_illness_model(df)
             if trained_clf is not None:
-                print(f"[ANALYZE] Pet {pet_id}: Model trained successfully with {len(df)} samples")
+                print(f"[ANALYZE] Pet {pet_id}: ✓ Model trained successfully with {len(df)} samples")
             else:
-                print(f"[ANALYZE] Pet {pet_id}: Model training returned None (insufficient quality data or class imbalance)")
+                print(f"[ANALYZE] Pet {pet_id}: Model training returned None (class imbalance or insufficient quality)")
         except Exception as e:
-            print(f"[ANALYZE] Pet {pet_id}: Model training error: {e}")
+            print(f"[ANALYZE] Pet {pet_id}: ⚠ Model training error: {e}")
     else:
-        print(f"[ANALYZE] Pet {pet_id}: Insufficient data for training ({len(df)} logs)")
+        print(f"[ANALYZE] Pet {pet_id}: ⚠ Insufficient data for training ({len(df)} logs, need ≥5)")
 
     # Core analysis (trend/recommendation/summaries) based on logs
     result = analyze_pet(pet_id)
 
-    # ML illness_risk on latest log (or fallback)
-    illness_risk_ml = None
+    # ML illness_risk on latest log (or "low" if insufficient data)
+    illness_risk_ml = "low"
     try:
         if not df.empty:
             latest = df.sort_values("log_date", ascending=False).iloc[0]
-            mood = str(latest.get("mood", "") or "")
+            mood = str(latest.get("mood", "") or "Unknown").lower()
             sleep_hours = float(latest.get("sleep_hours") or 0.0)
-            activity_level = str(latest.get("activity_level", "") or "")
-            # Use the trained model for this pet
-            illness_risk_ml = predict_illness_risk(mood, sleep_hours, activity_level)
-            print(f"[ANALYZE] Pet {pet_id}: ML prediction = {illness_risk_ml}")
+            activity_level = str(latest.get("activity_level", "") or "Unknown").lower()
+            
+            # ONLY use ML prediction if we have clear problem indicators
+            predicted_risk = predict_illness_risk(mood, sleep_hours, activity_level)
+            if predicted_risk and predicted_risk != "low":
+                illness_risk_ml = predicted_risk
+                print(f"[ANALYZE] Pet {pet_id}: ML prediction = {illness_risk_ml}")
+            else:
+                illness_risk_ml = "low"
+                print(f"[ANALYZE] Pet {pet_id}: ML prediction = low (no clear problems)")
     except Exception as e:
-        print(f"[ANALYZE] Pet {pet_id}: ML prediction error: {e}")
-        illness_risk_ml = None
-
-    # fallback to latest stored prediction or "low"
-    if illness_risk_ml is None:
-        latest_pred_risk = get_latest_prediction_risk(pet_id)
-        illness_risk_ml = latest_pred_risk if latest_pred_risk in ("high", "medium", "low") else "low"
-        print(f"[ANALYZE] Pet {pet_id}: Using fallback risk = {illness_risk_ml}")
+        print(f"[ANALYZE] Pet {pet_id}: ⚠ ML prediction error: {e}")
+        illness_risk_ml = "low"
 
     # Contextual risk from recent logs
     contextual_risk = compute_contextual_risk(df)
@@ -689,6 +698,7 @@ def analyze_endpoint():
     illness_model_trained = is_illness_model_trained()
     is_unhealthy = isinstance(illness_risk_final, str) and illness_risk_final.lower() in ("high", "medium")
     health_status = "unhealthy" if is_unhealthy else "healthy"
+    print(f"[ANALYZE] Pet {pet_id}: Health status = {health_status}")
 
     # Care tips based on blended risk
     avg_sleep_val = float(df["sleep_hours"].mean()) if not df.empty else 12.0
@@ -714,6 +724,8 @@ def analyze_endpoint():
     merged["care_recommendations"] = tips
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
+    
+    print(f"[ANALYZE-END] ========== Analysis complete for pet {pet_id} ==========\n")
     return jsonify(merged)
 
 @app.route("/predict", methods=["POST"])

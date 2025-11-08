@@ -121,7 +121,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // 🔹 Moved from local scope to state variables
   String? _selectedMood;
   String? _activityLevel;
-  double? _sleepHours;
   String? _notes;
 
   // New health tracking fields
@@ -224,8 +223,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     'Medium': '🐾',
     'Low': '🐶',
   };
-
-  late TextEditingController _sleepController;
 
   Future<Map<String, dynamic>?> _fetchLatestPet() async {
     final ownerId = user?.id;
@@ -484,8 +481,38 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             final foodIntake = log['food_intake']?.toString().toLowerCase() ?? '';
             final waterIntake = log['water_intake']?.toString().toLowerCase() ?? '';
             final bathroomHabits = log['bathroom_habits']?.toString().toLowerCase() ?? '';
-            final symptoms = (log['symptoms'] as List?)?.cast<String>() ?? [];
-            final sleepHours = double.tryParse(log['sleep_hours']?.toString() ?? '0') ?? 0;
+            
+            // Parse symptoms - handle both List and String formats
+            List<String> symptoms = [];
+            final symptomsData = log['symptoms'];
+            if (symptomsData != null) {
+              try {
+                if (symptomsData is List) {
+                  symptoms = List<String>.from(symptomsData);
+                } else if (symptomsData is String) {
+                  // Try to parse as JSON array
+                  try {
+                    final decoded = json.decode(symptomsData);
+                    if (decoded is List) {
+                      symptoms = List<String>.from(decoded);
+                    } else {
+                      symptoms = [];
+                    }
+                  } catch (_) {
+                    symptoms = [];
+                  }
+                }
+              } catch (e) {
+                print('DEBUG: Error parsing symptoms: $e');
+                symptoms = [];
+              }
+            }
+            
+            // Filter out "None of the Above" - it's not a real symptom
+            symptoms = symptoms
+                .where((s) => s.toLowerCase() != "none of the above" && s.trim().isNotEmpty)
+                .toList();
+            
             final mood = log['mood']?.toString().toLowerCase() ?? '';
             final activity = log['activity_level']?.toString().toLowerCase() ?? '';
             
@@ -500,9 +527,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             }
             if (bathroomHabits.contains('diarrhea') || bathroomHabits.contains('constipation')) {
               problems.add('Digestive Issues');
-            }
-            if (sleepHours < 12 || sleepHours > 18) {
-              problems.add('Abnormal Sleep Pattern');
             }
             if (mood.contains('lethargic') || mood.contains('aggressive') || mood.contains('anxious')) {
               problems.add('Mood Changes');
@@ -550,14 +574,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               'Bathroom habit changes detected. Monitor for patterns.',
               Icons.warning,
               Colors.red,
-            ));
-          }
-          if (uniqueProblems.contains('Abnormal Sleep Pattern')) {
-            insights.add(_buildInsightItem(
-              'Sleep Concerns',
-              'Sleep hours outside normal range (12-14h for pets). Track patterns.',
-              Icons.warning,
-              Colors.orange,
             ));
           }
           if (uniqueProblems.contains('Mood Changes')) {
@@ -1003,13 +1019,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _sleepController = TextEditingController();
     _fetchPets();
   }
 
   @override
   void dispose() {
-    _sleepController.dispose();
     _emergencyContactController.dispose();
     _rewardAmountController.dispose();
     _customMessageController.dispose();
@@ -4515,7 +4529,6 @@ void _disconnectDevice() async {
     setState(() {
       _selectedMood = null;
       _activityLevel = null;
-      _sleepHours = null;
       _notes = null;
       _foodIntake = null;
       _waterIntake = null;
@@ -4523,14 +4536,12 @@ void _disconnectDevice() async {
       _selectedSymptoms = [];
       _bodyTemperature = null;
       _appetiteBehavior = null;
-      _sleepController.text = '';
     });
   }
 
   // Read-only modal showing existing behavior with Edit/Delete
   void _showExistingBehaviorModal(BuildContext context, Map<String, dynamic> log) {
     final activity = (log['activity_level'] ?? '').toString();
-    final sleep = (log['sleep_hours'] ?? '').toString();
     final notes = (log['notes'] ?? '').toString();
     final foodIntake = (log['food_intake'] ?? '').toString();
     final waterIntake = (log['water_intake'] ?? '').toString();
@@ -4718,18 +4729,6 @@ void _disconnectDevice() async {
 
                       SizedBox(height: 16),
 
-                      // Sleep Section
-                      _buildDetailCard(
-                        title: 'Sleep Hours',
-                        icon: Icons.bedtime,
-                        iconColor: Colors.purple,
-                        value: sleep.isEmpty ? 'Not recorded' : '${sleep} hours',
-                        subtitle: sleep.isNotEmpty ? _getSleepFeedback(double.tryParse(sleep) ?? 0) : null,
-                        isEmpty: sleep.isEmpty,
-                      ),
-
-                      SizedBox(height: 16),
-
                       // Bathroom Habits Section
                       _buildDetailCard(
                         title: 'Bathroom Habits',
@@ -4791,7 +4790,7 @@ void _disconnectDevice() async {
                       ],
 
                       // Health Insights
-                      _buildHealthInsights(activity, sleep, foodIntake, waterIntake, bathroomHabits, symptoms),
+                      _buildHealthInsights(activity, foodIntake, waterIntake, bathroomHabits, symptoms),
 
                       SizedBox(height: 20),
                     ],
@@ -4966,36 +4965,9 @@ void _disconnectDevice() async {
   }
 
   // Health insights widget
-  Widget _buildHealthInsights(String activity, String sleep, String foodIntake, String waterIntake, String bathroomHabits, List<String> symptoms) {
+  Widget _buildHealthInsights(String activity, String foodIntake, String waterIntake, String bathroomHabits, List<String> symptoms) {
     List<Widget> insights = [];
     
-    // Sleep insights - Updated: 12+ hours is normal for dogs and cats
-    final sleepHours = double.tryParse(sleep);
-    if (sleepHours != null) {
-      if (sleepHours < 12) {
-        insights.add(_buildInsightItem(
-          'Low Sleep Detected',
-          'Dogs and cats typically need 12-14 hours of sleep. Monitor for signs of fatigue or health issues.',
-          Icons.warning,
-          Colors.orange,
-        ));
-      } else if (sleepHours > 18) {
-        insights.add(_buildInsightItem(
-          'High Sleep Duration',
-          'Excessive sleep may indicate illness or stress. Consider consulting a vet.',
-          Icons.info,
-          Colors.red,
-        ));
-      } else {
-        insights.add(_buildInsightItem(
-          'Good Sleep Pattern',
-          'Sleep duration is within the normal range for pets.',
-          Icons.check_circle,
-          Colors.green,
-        ));
-      }
-    }
-
     // Food intake insights
     if (foodIntake == 'Not Eating' || foodIntake == 'Eating Less') {
       insights.add(_buildInsightItem(
@@ -5996,7 +5968,6 @@ void _disconnectDevice() async {
     if (existing != null) {
       _selectedMood = existing['mood']?.toString();
       _activityLevel = existing['activity_level']?.toString();
-      _sleepHours = double.tryParse(existing['sleep_hours']?.toString() ?? '');
       _notes = existing['notes']?.toString();
       _foodIntake = existing['food_intake']?.toString();
       _waterIntake = existing['water_intake']?.toString();
@@ -6024,8 +5995,6 @@ void _disconnectDevice() async {
           }
         }
       }
-      
-      _sleepController.text = _sleepHours?.toString() ?? '';
     } else {
       // Clear form for new entry
       _clearBehaviorForm();
@@ -6047,9 +6016,6 @@ void _disconnectDevice() async {
               return _foodIntake != null && 
                      _waterIntake != null && 
                      _activityLevel != null && 
-                     _sleepHours != null && 
-                     _sleepHours! >= 0 && 
-                     _sleepHours! <= 24 &&
                      _bathroomHabits != null;
             }
 
@@ -6558,163 +6524,6 @@ void _disconnectDevice() async {
 
                           SizedBox(height: 16),
 
-                          // Sleep Hours Section
-                          _buildFormSection(
-                            title: "Sleep Hours (Last 24 Hours)",
-                            icon: Icons.bedtime,
-                            iconColor: Colors.indigo,
-                            child: Column(
-                              children: [
-                                SizedBox(height: 8),
-                                Container(
-                                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Colors.grey.shade300,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextFormField(
-                                          controller: _sleepController,
-                                          keyboardType: TextInputType.numberWithOptions(decimal: true),
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                            color: Colors.indigo,
-                                          ),
-                                          decoration: InputDecoration(
-                                            border: InputBorder.none,
-                                            hintText: "Enter hours",
-                                            hintStyle: TextStyle(
-                                              color: Colors.grey.shade400,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.normal,
-                                            ),
-                                            suffixIcon: Padding(
-                                              padding: EdgeInsets.only(top: 8),
-                                              child: Text(
-                                                "hrs",
-                                                style: TextStyle(
-                                                  color: Colors.grey.shade600,
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                            ),
-                                            contentPadding: EdgeInsets.symmetric(vertical: 4),
-                                          ),
-                                          onChanged: (value) {
-                                            final parsed = double.tryParse(value);
-                                            setModalState(() {
-                                              if (parsed == null || parsed < 0) {
-                                                _sleepHours = null;
-                                              } else if (parsed > 24) {
-                                                _sleepHours = 24;
-                                                _sleepController.text = "24";
-                                                _sleepController.selection = TextSelection.fromPosition(
-                                                  TextPosition(offset: _sleepController.text.length)
-                                                );
-                                              } else {
-                                                _sleepHours = parsed;
-                                              }
-                                            });
-                                            setState(() {
-                                              if (parsed == null || parsed < 0) {
-                                                _sleepHours = null;
-                                              } else if (parsed > 24) {
-                                                _sleepHours = 24;
-                                              } else {
-                                                _sleepHours = parsed;
-                                              }
-                                            });
-                                          },
-                                        ),
-                                      ),
-                                      SizedBox(width: 10),
-                                      Column(
-                                        children: [
-                                          _buildSleepButton(
-                                            icon: Icons.add,
-                                            onPressed: () {
-                                              final current = _sleepHours ?? 
-                                                double.tryParse(_sleepController.text) ?? 0.0;
-                                              final next = (current + 0.5).clamp(0.0, 24.0);
-                                              setModalState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              setState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              HapticFeedback.lightImpact();
-                                            },
-                                          ),
-                                          SizedBox(height: 4),
-                                          _buildSleepButton(
-                                            icon: Icons.remove,
-                                            onPressed: () {
-                                              final current = _sleepHours ?? 
-                                                double.tryParse(_sleepController.text) ?? 0.0;
-                                              final next = (current - 0.5).clamp(0.0, 24.0);
-                                              setModalState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              setState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              HapticFeedback.lightImpact();
-                                            },
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (_sleepHours != null && _sleepHours! > 0) ...[
-                                  SizedBox(height: 6),
-                                  Container(
-                                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.indigo.withOpacity(0.08),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: Colors.indigo.withOpacity(0.2),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.lightbulb_outline,
-                                          color: Colors.indigo.shade600,
-                                          size: 14,
-                                        ),
-                                        SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            _getSleepFeedback(_sleepHours!),
-                                            style: TextStyle(
-                                              color: Colors.indigo.shade800,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-
-                          SizedBox(height: 16),
-
                           // Symptoms Section (replaces notes)
                           _buildFormSection(
                             title: "Health Symptoms",
@@ -6903,7 +6712,6 @@ void _disconnectDevice() async {
                                 'log_date': DateFormat('yyyy-MM-dd').format(selectedDate),
                                 'notes': _notes,
                                 'mood': _selectedMood,
-                                'sleep_hours': _sleepHours,
                                 'activity_level': _activityLevel,
                                 // New health tracking fields
                                 'food_intake': _foodIntake,
@@ -7046,36 +6854,6 @@ void _disconnectDevice() async {
   }
 
   // Helper widget for sleep adjustment buttons
-  Widget _buildSleepButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.blue.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.blue.withOpacity(0.3)),
-      ),
-      child: IconButton(
-        icon: Icon(icon, color: Colors.blue, size: 16),
-        onPressed: onPressed,
-        padding: EdgeInsets.all(4),
-        constraints: BoxConstraints(minWidth: 32, minHeight: 32),
-      ),
-    );
-  }
-
-  // Helper method to provide sleep feedback
-  String _getSleepFeedback(double hours) {
-    if (hours < 12) {
-      return "Below normal. Dogs and cats typically need 12-14 hours of sleep daily.";
-    } else if (hours >= 12 && hours <= 18) {
-      return "Normal sleep range for dogs and cats.";
-    } else {
-      return "Quite high. Monitor for signs of illness or lethargy.";
-    }
-  }
-
   // Enhanced Pet Profile Header
   Widget _buildPetProfileHeader() {
     return Container(
