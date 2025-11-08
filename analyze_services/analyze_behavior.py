@@ -342,6 +342,7 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
     Compute illness risk from recent logs based on behavioral patterns.
     Only uses activity level, food intake, water intake, and bathroom habits.
     Distinguishes between serious issues (not eating/drinking) and minor issues (eating/drinking less).
+    Also detects sudden changes from baseline behavior.
     """
     if df is None or df.empty:
         print(f"[CONTEXTUAL-RISK] No data provided, returning 'low'")
@@ -373,15 +374,41 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
 
         print(f"[CONTEXTUAL-RISK] Patterns: Low activity={p_low_act:.2f}, NOT eating={p_not_eating:.2f} (serious), eating less={p_eating_less:.2f} (minor), NOT drinking={p_not_drinking:.2f} (serious), drinking less={p_drinking_less:.2f} (minor), Bad bathroom={p_bad_bathroom:.2f}")
 
+        # CHANGE DETECTION: Alert if latest log shows deterioration from baseline
+        change_detected = False
+        if len(recent) >= 2:
+            latest_log = recent.iloc[-1]  # Most recent
+            earlier_logs = recent.iloc[:-1]  # Previous logs
+            
+            # Check if latest food intake is worse than earlier pattern
+            latest_food = str(latest_log['food_intake']).lower()
+            earlier_food = earlier_logs['food_intake'].str.lower()
+            normal_food_baseline = (earlier_food == 'normal').sum() > len(earlier_logs) * 0.5  # Was mostly normal
+            
+            if normal_food_baseline and latest_food in ['eating less', 'not eating']:
+                print(f"[CONTEXTUAL-RISK] ⚠️ CHANGE DETECTED: Food intake changed from normal to '{latest_food}'")
+                change_detected = True
+            
+            # Similar check for water intake
+            latest_water = str(latest_log['water_intake']).lower()
+            earlier_water = earlier_logs['water_intake'].str.lower()
+            normal_water_baseline = (earlier_water == 'normal').sum() > len(earlier_logs) * 0.5
+            
+            if normal_water_baseline and latest_water in ['drinking less', 'not drinking']:
+                print(f"[CONTEXTUAL-RISK] ⚠️ CHANGE DETECTED: Water intake changed from normal to '{latest_water}'")
+                change_detected = True
+
         risk = "low"
         
         # High risk: serious issues (not eating/drinking) combined with other problems
         if (p_not_eating > 0.5 or p_not_drinking > 0.5) and (low_activity_count >= 2 or p_bad_bathroom > 0.3):
             print(f"[CONTEXTUAL-RISK] → HIGH (serious issues: NOT eating={p_not_eating:.2f}>0.5 or NOT drinking={p_not_drinking:.2f}>0.5, combined with low activity or bathroom issues)")
             risk = "high"
-        # Medium risk: single serious issue persisting, or multiple minor issues
-        elif (p_low_act > 0.7) or (p_not_eating > 0.3) or (p_not_drinking > 0.3) or (p_bad_bathroom > 0.5):
-            if p_low_act > 0.7:
+        # Medium risk: single serious issue persisting, multiple minor issues, or detected changes
+        elif (p_low_act > 0.7) or (p_not_eating > 0.3) or (p_not_drinking > 0.3) or (p_bad_bathroom > 0.5) or change_detected:
+            if change_detected:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (sudden change in behavior detected from baseline)")
+            elif p_low_act > 0.7:
                 print(f"[CONTEXTUAL-RISK] → MEDIUM (low activity {p_low_act:.2f} > 0.7)")
             elif p_not_eating > 0.3:
                 print(f"[CONTEXTUAL-RISK] → MEDIUM (serious: not eating {p_not_eating:.2f} > 0.3)")
@@ -685,6 +712,36 @@ def analyze_endpoint():
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
     
+    # Add data sufficiency notice for user
+    if len(df) < 5:
+        merged["data_notice"] = {
+            "status": "insufficient_data",
+            "message": f"Only {len(df)} logs available. Log at least {5 - len(df)} more health entries for more accurate analysis.",
+            "details": "The system learns patterns from historical data. With more logs, it can better detect trends, baseline behaviors, and unusual changes. Current analysis is based on limited data.",
+            "recommendation": "Continue logging daily to improve accuracy of health predictions.",
+            "logs_needed": 5 - len(df)
+        }
+    else:
+        merged["data_notice"] = {
+            "status": "sufficient_data",
+            "message": f"Analysis based on {len(df)} logs. Pattern detection is active.",
+            "details": "The system has enough data to detect meaningful patterns and changes from baseline behavior."
+        }
+    
+    # If model is not trained, add notice about rule-based analysis
+    if not illness_model_trained:
+        merged["model_notice"] = {
+            "status": "no_model_trained",
+            "message": "Using rule-based analysis (not machine learning)",
+            "details": "Once you have 5+ logs, the system will train a machine learning model for more nuanced predictions.",
+            "when_available": "After logging at least 5 health entries"
+        }
+    else:
+        merged["model_notice"] = {
+            "status": "model_trained",
+            "message": "Using trained machine learning model + pattern analysis"
+        }
+    
     print(f"[ANALYZE-END] ========== Analysis complete for pet {pet_id} ==========\n")
     return jsonify(merged)
 
@@ -711,6 +768,29 @@ def predict_endpoint():
     activity_prob = {str(activity_level).lower(): 1.0}
     tips = build_care_recommendations(illness_risk, {}, activity_prob, 12.0, None)
 
+    # Add user messaging about analysis method
+    try:
+        df = load_behavioral_data(pet_id)
+        num_logs = len(df) if df is not None and len(df) > 0 else 0
+        
+        model_notice = {}
+        if not illness_model_trained:
+            model_notice = {
+                "status": "no_model_trained",
+                "message": "Using rule-based analysis (not ML)",
+                "details": "ML model trains after 5+ logs.",
+                "when_available": "After 5+ health entries"
+            }
+        else:
+            model_notice = {
+                "status": "model_trained",
+                "message": "Using ML model for predictions",
+                "details": f"Based on {num_logs} historical logs.",
+                "confidence": "high" if num_logs >= 20 else "medium"
+            }
+    except:
+        model_notice = {"status": "error", "message": "Could not determine analysis method"}
+
     return jsonify({
         "illness_risk": illness_risk,
         "illness_model_trained": illness_model_trained,
@@ -719,7 +799,8 @@ def predict_endpoint():
         "illness_prediction": illness_risk,
         "is_unhealthy": is_unhealthy,
         "illness_status_text": "Unhealthy" if is_unhealthy else "Healthy",
-        "care_recommendations": tips
+        "care_recommendations": tips,
+        "model_notice": model_notice
     })
 
 # ------------------- Public pet info page -------------------
