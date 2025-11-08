@@ -6703,6 +6703,7 @@ void _disconnectDevice() async {
                           ),
                           onPressed: !_isFormValid() ? null : () async {
                             try {
+                              debugPrint('[SAVE_HEALTH_LOG] Button pressed - starting save process');
                               // Show loading state
                               setModalState(() {});
                               
@@ -6710,16 +6711,13 @@ void _disconnectDevice() async {
                                 'pet_id': _selectedPet!['id'],
                                 'user_id': user?.id ?? '',
                                 'log_date': DateFormat('yyyy-MM-dd').format(selectedDate),
-                                'notes': _notes,
-                                'mood': _selectedMood,
                                 'activity_level': _activityLevel,
-                                // New health tracking fields
+                                // Health tracking fields - ONLY include columns that exist in the database schema
                                 'food_intake': _foodIntake,
                                 'water_intake': _waterIntake,
                                 'bathroom_habits': _bathroomHabits,
                                 'symptoms': json.encode(_selectedSymptoms), // Store as JSON string
-                                'body_temperature': _bodyTemperature,
-                                'appetite_behavior': _appetiteBehavior,
+                                // NOTE: 'notes', 'mood', 'body_temperature', 'appetite_behavior' columns do not exist in Supabase
                               };
                               
                               if (isEdit) {

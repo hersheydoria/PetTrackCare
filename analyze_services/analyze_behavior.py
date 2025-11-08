@@ -344,11 +344,15 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
     Mood field was removed from the system.
     """
     if df is None or df.empty:
+        print(f"[CONTEXTUAL-RISK] No data provided, returning 'low'")
         return "low"
     try:
         recent = df.copy()
         recent['log_date'] = pd.to_datetime(recent['log_date'])
         recent = recent.sort_values('log_date').tail(14)
+        
+        print(f"[CONTEXTUAL-RISK] Analyzing {len(recent)} recent logs")
+        print(f"[CONTEXTUAL-RISK] Recent logs:\n{recent[['log_date', 'activity_level', 'food_intake', 'water_intake', 'bathroom_habits']].to_string()}")
 
         # Count problematic behaviors
         low_activity_count = (recent['activity_level'].str.lower() == 'low').sum()
@@ -363,13 +367,13 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         p_bad_water = not_drinking_count / total_logs if total_logs > 0 else 0
         p_bad_bathroom = bad_bathroom_count / total_logs if total_logs > 0 else 0
 
-        print(f"[CONTEXTUAL-RISK] Patterns: Low activity={p_low_act:.2f}, Not eating={p_bad_food:.2f}, Not drinking={p_bad_water:.2f}, Bad bathroom={p_bad_bathroom:.2f}")
+        print(f"[CONTEXTUAL-RISK] Patterns: Low activity={p_low_act:.2f} ({low_activity_count}/{total_logs}), Not eating={p_bad_food:.2f} ({not_eating_count}/{total_logs}), Not drinking={p_bad_water:.2f} ({not_drinking_count}/{total_logs}), Bad bathroom={p_bad_bathroom:.2f} ({bad_bathroom_count}/{total_logs})")
 
         risk = "low"
         
         # High risk: multiple serious problems
         if (p_bad_food > 0.5 or p_bad_water > 0.5) and (low_activity_count >= 2):
-            print(f"[CONTEXTUAL-RISK] → HIGH (multiple serious issues)")
+            print(f"[CONTEXTUAL-RISK] → HIGH (multiple serious issues: food={p_bad_food:.2f}>0.5 or water={p_bad_water:.2f}>0.5, AND low_activity_count={low_activity_count}>=2)")
             risk = "high"
         # Medium risk: single clear problem persisting
         elif (p_low_act > 0.7) or (p_bad_food > 0.5) or (p_bad_water > 0.5) or (p_bad_bathroom > 0.5):
@@ -387,6 +391,8 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         return risk
     except Exception as e:
         print(f"[CONTEXTUAL-RISK] Exception: {e}")
+        import traceback
+        traceback.print_exc()
         return "low"
 
 def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
