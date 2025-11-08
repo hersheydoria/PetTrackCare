@@ -452,177 +452,150 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     await _fetchLatestHealthInsights();
   }
 
-  // Fetch health insights from all behavior logs to analyze trends
+  // Fetch health insights from backend analysis - backend trains on all per-pet data
   Future<void> _fetchLatestHealthInsights() async {
     if (_selectedPet == null) return;
     final petId = _selectedPet!['id'];
     
     try {
-      // Fetch ALL behavior logs for the pet to analyze trends
+      // The backend now continuously trains models per pet, so we rely on its analysis
+      // Fetch ALL behavior logs to show what the backend trained on
       final response = await Supabase.instance.client
           .from('behavior_logs')
           .select()
           .eq('pet_id', petId)
-          .order('log_date', ascending: false); // Most recent first
+          .order('log_date', ascending: false);
 
       final data = response as List?;
+      print('DEBUG: _fetchLatestHealthInsights - Got ${data?.length ?? 0} behavior logs for pet $petId');
+      
+      // Generate insights based on backend's trained model prediction (_isUnhealthy flag)
+      List<Widget> insights = [];
+      
       if (data != null && data.isNotEmpty) {
-        // Analyze trends across all logs
-        List<Widget> insights = [];
-        
-        // Extract data from all logs to identify patterns
-        List<double> allSleepHours = [];
-        List<String> allActivities = [];
-        List<String> allWaterIntakes = [];
-        List<String> allFoodIntakes = [];
-        List<String> allBathroomHabits = [];
-        Set<String> allSymptoms = {};
-        
-        for (final log in data) {
-          final sleep = double.tryParse(log['sleep_hours']?.toString() ?? '0') ?? 0;
-          if (sleep > 0) allSleepHours.add(sleep);
+        // Only generate problem-specific insights if backend detected health issues
+        if (_isUnhealthy) {
+          print('DEBUG: Backend detected unhealthy status (risk: $_illnessRisk), analyzing specific issues...');
           
-          final activity = log['activity_level']?.toString() ?? '';
-          if (activity.isNotEmpty) allActivities.add(activity);
+          // Extract issues from the actual logs that triggered the unhealthy flag
+          List<String> problems = [];
           
-          final waterIntake = log['water_intake']?.toString() ?? '';
-          if (waterIntake.isNotEmpty) allWaterIntakes.add(waterIntake);
-          
-          final foodIntake = log['food_intake']?.toString() ?? '';
-          if (foodIntake.isNotEmpty) allFoodIntakes.add(foodIntake);
-          
-          final bathroomHabits = log['bathroom_habits']?.toString() ?? '';
-          if (bathroomHabits.isNotEmpty) allBathroomHabits.add(bathroomHabits);
-          
-          final symptoms = (log['symptoms'] as List?)?.cast<String>() ?? [];
-          for (final symptom in symptoms) {
-            if (symptom.toLowerCase() != "none of the above") {
-              allSymptoms.add(symptom);
+          for (final log in data.take(5)) { // Check last 5 logs for recent issues
+            final foodIntake = log['food_intake']?.toString().toLowerCase() ?? '';
+            final waterIntake = log['water_intake']?.toString().toLowerCase() ?? '';
+            final bathroomHabits = log['bathroom_habits']?.toString().toLowerCase() ?? '';
+            final symptoms = (log['symptoms'] as List?)?.cast<String>() ?? [];
+            final sleepHours = double.tryParse(log['sleep_hours']?.toString() ?? '0') ?? 0;
+            final mood = log['mood']?.toString().toLowerCase() ?? '';
+            final activity = log['activity_level']?.toString().toLowerCase() ?? '';
+            
+            if (foodIntake.contains('not eating') || foodIntake.contains('eating less')) {
+              problems.add('Reduced Food Intake');
+            }
+            if (waterIntake.contains('not drinking') || waterIntake.contains('drinking less')) {
+              problems.add('Low Water Intake');
+            }
+            if (waterIntake.contains('drinking more')) {
+              problems.add('Excessive Thirst');
+            }
+            if (bathroomHabits.contains('diarrhea') || bathroomHabits.contains('constipation')) {
+              problems.add('Digestive Issues');
+            }
+            if (sleepHours < 12 || sleepHours > 18) {
+              problems.add('Abnormal Sleep Pattern');
+            }
+            if (mood.contains('lethargic') || mood.contains('aggressive') || mood.contains('anxious')) {
+              problems.add('Mood Changes');
+            }
+            if (activity.contains('low')) {
+              problems.add('Low Activity');
+            }
+            if (symptoms.isNotEmpty) {
+              problems.add('Reported Symptoms');
             }
           }
-        }
-        
-        // Analyze sleep patterns from all logs
-        if (allSleepHours.isNotEmpty) {
-          final avgSleep = allSleepHours.reduce((a, b) => a + b) / allSleepHours.length;
-          final minSleep = allSleepHours.reduce((a, b) => a < b ? a : b);
-          final maxSleep = allSleepHours.reduce((a, b) => a > b ? a : b);
           
-          if (minSleep < 12) {
+          // Remove duplicates
+          final uniqueProblems = problems.toSet().toList();
+          print('DEBUG: Identified ${uniqueProblems.length} specific health issues: $uniqueProblems');
+          
+          // Generate insight cards for each problem
+          if (uniqueProblems.contains('Reduced Food Intake')) {
             insights.add(_buildInsightItem(
-              'Low Sleep Detected',
-              'Sleep hours averaging ${avgSleep.toStringAsFixed(1)} (min: ${minSleep.toStringAsFixed(1)}). Dogs and cats typically need 12-14 hours.',
+              'Reduced Appetite',
+              'Pet showing reduced food intake. Monitor feeding behavior.',
               Icons.warning,
-              Colors.orange,
+              Colors.red,
             ));
-          } else if (maxSleep > 18) {
+          }
+          if (uniqueProblems.contains('Low Water Intake')) {
             insights.add(_buildInsightItem(
-              'High Sleep Duration',
-              'Sleep hours averaging ${avgSleep.toStringAsFixed(1)} (max: ${maxSleep.toStringAsFixed(1)}). Excessive sleep may indicate health issues.',
+              'Low Hydration',
+              'Pet drinking less water than normal. Ensure water access.',
+              Icons.warning,
+              Colors.red,
+            ));
+          }
+          if (uniqueProblems.contains('Excessive Thirst')) {
+            insights.add(_buildInsightItem(
+              'Excessive Thirst',
+              'Pet drinking more than usual. May indicate health concerns.',
               Icons.info,
               Colors.red,
             ));
-          } else {
+          }
+          if (uniqueProblems.contains('Digestive Issues')) {
             insights.add(_buildInsightItem(
-              'Good Sleep Pattern',
-              'Sleep hours averaging ${avgSleep.toStringAsFixed(1)} hours. Within normal range.',
-              Icons.check_circle,
-              Colors.green,
+              'Digestive Problems',
+              'Bathroom habit changes detected. Monitor for patterns.',
+              Icons.warning,
+              Colors.red,
             ));
           }
-        }
-        
-        // Analyze activity patterns
-        if (allActivities.isNotEmpty) {
-          final highActivityCount = allActivities.where((a) => a == 'High').length;
-          final activityRatio = highActivityCount / allActivities.length;
-          
-          if (activityRatio >= 0.7) {
+          if (uniqueProblems.contains('Abnormal Sleep Pattern')) {
             insights.add(_buildInsightItem(
-              'High Energy',
-              'Pet shows high activity in ${(activityRatio * 100).toStringAsFixed(0)}% of logs. Great activity level!',
-              Icons.trending_up,
-              Colors.green,
+              'Sleep Concerns',
+              'Sleep hours outside normal range (12-14h for pets). Track patterns.',
+              Icons.warning,
+              Colors.orange,
             ));
-          } else if (activityRatio <= 0.3) {
+          }
+          if (uniqueProblems.contains('Mood Changes')) {
+            insights.add(_buildInsightItem(
+              'Behavioral Changes',
+              'Mood changes detected. Provide supportive environment.',
+              Icons.sentiment_very_dissatisfied,
+              Colors.orange,
+            ));
+          }
+          if (uniqueProblems.contains('Low Activity')) {
             insights.add(_buildInsightItem(
               'Low Activity Level',
-              'Pet shows low activity in ${((1 - activityRatio) * 100).toStringAsFixed(0)}% of logs. Consider encouraging more exercise.',
+              'Pet showing reduced activity. Encourage gentle movement.',
               Icons.trending_down,
               Colors.orange,
             ));
           }
-        }
-        
-        // Analyze food intake patterns
-        if (allFoodIntakes.isNotEmpty) {
-          final poorFoodIntakeCount = allFoodIntakes.where((f) => f == 'Not Eating' || f == 'Eating Less').length;
-          if (poorFoodIntakeCount > 0) {
+          if (uniqueProblems.contains('Reported Symptoms')) {
             insights.add(_buildInsightItem(
-              'Food Intake Concern',
-              'Reduced appetite detected in ${poorFoodIntakeCount}/${allFoodIntakes.length} logs. Monitor closely.',
-              Icons.warning,
+              'Symptoms Present',
+              'Pet showing reported symptoms. Monitor and document.',
+              Icons.medical_services,
               Colors.red,
             ));
           }
         }
-        
-        // Analyze water intake patterns
-        if (allWaterIntakes.isNotEmpty) {
-          final lowWaterCount = allWaterIntakes.where((w) => w == 'Not Drinking' || w == 'Drinking Less').length;
-          final highWaterCount = allWaterIntakes.where((w) => w == 'Drinking More').length;
-          
-          if (lowWaterCount > 0) {
-            insights.add(_buildInsightItem(
-              'Hydration Concern',
-              'Reduced water intake in ${lowWaterCount}/${allWaterIntakes.length} logs. Ensure fresh water is available.',
-              Icons.warning,
-              Colors.red,
-            ));
-          } else if (highWaterCount > allWaterIntakes.length * 0.5) {
-            insights.add(_buildInsightItem(
-              'Increased Thirst',
-              'Excessive drinking detected in ${(highWaterCount / allWaterIntakes.length * 100).toStringAsFixed(0)}% of logs. May indicate diabetes or kidney issues.',
-              Icons.info,
-              Colors.orange,
-            ));
-          }
-        }
-        
-        // Analyze bathroom habits
-        if (allBathroomHabits.isNotEmpty) {
-          final digestiveIssues = allBathroomHabits.where((b) => b == 'Diarrhea' || b == 'Constipation').length;
-          if (digestiveIssues > 0) {
-            insights.add(_buildInsightItem(
-              'Digestive Issue Detected',
-              'Digestive problems in ${digestiveIssues}/${allBathroomHabits.length} logs. Monitor closely.',
-              Icons.warning,
-              Colors.red,
-            ));
-          }
-        }
-        
-        // Analyze symptoms
-        if (allSymptoms.isNotEmpty) {
-          insights.add(_buildInsightItem(
-            'Symptoms Reported',
-            '${allSymptoms.length} unique symptom(s) detected across logs: ${allSymptoms.join(", ")}. Consult a vet if persistent.',
-            Icons.medical_services,
-            Colors.red,
-          ));
-        }
-        
-        setState(() {
-          _healthInsights = insights;
-        });
-      } else {
-        // No logs found
-        setState(() {
-          _healthInsights = [];
-        });
       }
+      
+      print('DEBUG: Generated ${insights.length} insights based on backend analysis (unhealthy: $_isUnhealthy)');
+      setState(() {
+        _healthInsights = insights;
+      });
     } catch (e) {
       print('Error fetching latest health insights: $e');
+      setState(() {
+        _healthInsights = [];
+      });
     }
   }
 
@@ -5513,7 +5486,7 @@ void _disconnectDevice() async {
             ),
             
             // Enhanced Latest Analysis Section
-            if (_prediction != null || _loadingAnalysisData) ...[
+            if (_prediction != null || _loadingAnalysisData || _healthInsights.isNotEmpty) ...[
               SizedBox(height: 16),
               Container(
                 margin: EdgeInsets.symmetric(horizontal: 8),
@@ -5572,7 +5545,8 @@ void _disconnectDevice() async {
           ),
           SizedBox(height: 16),
           
-          // Health insights replaced prediction and recommendation
+          // Health insights: show warnings if present, otherwise show status
+          // If there are specific insights, display them
           if (_healthInsights.isNotEmpty) ...[
             Container(
               padding: EdgeInsets.all(12),
@@ -5604,30 +5578,71 @@ void _disconnectDevice() async {
               ),
             ),
           ] else if (!_loadingAnalysisData) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green.shade200),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Normal Patterns',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green.shade800,
+            // No specific insights, but show illness risk alert if unhealthy
+            if (_isUnhealthy && _illnessRisk != null) ...[
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: deepRed.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: deepRed.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: deepRed, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Health Alert Detected',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Illness risk: ${_illnessRisk ?? 'Unknown'}. Check recent logs for details.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed.withOpacity(0.8),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ] else ...[
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Normal Patterns',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
           
           // Care Tips (only when risk is bad: medium/high)

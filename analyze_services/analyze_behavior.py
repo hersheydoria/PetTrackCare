@@ -636,11 +636,25 @@ def analyze_endpoint():
     if not pet_id:
         return jsonify({"error": "pet_id required"}), 400
 
+    # CONTINUOUS MODEL TRAINING: Fetch all logs for this specific pet and train/retrain the model
+    df = fetch_logs_df(pet_id)
+    print(f"[ANALYZE] Pet {pet_id}: Fetched {len(df)} logs for continuous training")
+    
+    # Train model on this pet's data (will be saved per-pet)
+    if not df.empty and len(df) >= 5:
+        try:
+            trained_clf, encoders = train_illness_model(df)
+            if trained_clf is not None:
+                print(f"[ANALYZE] Pet {pet_id}: Model trained successfully with {len(df)} samples")
+            else:
+                print(f"[ANALYZE] Pet {pet_id}: Model training returned None (insufficient quality data or class imbalance)")
+        except Exception as e:
+            print(f"[ANALYZE] Pet {pet_id}: Model training error: {e}")
+    else:
+        print(f"[ANALYZE] Pet {pet_id}: Insufficient data for training ({len(df)} logs)")
+
     # Core analysis (trend/recommendation/summaries) based on logs
     result = analyze_pet(pet_id)
-
-    # Also provide a numeric 7-day sleep forecast (if possible) and an illness risk
-    df = fetch_logs_df(pet_id)
 
     # ML illness_risk on latest log (or fallback)
     illness_risk_ml = None
@@ -650,20 +664,26 @@ def analyze_endpoint():
             mood = str(latest.get("mood", "") or "")
             sleep_hours = float(latest.get("sleep_hours") or 0.0)
             activity_level = str(latest.get("activity_level", "") or "")
+            # Use the trained model for this pet
             illness_risk_ml = predict_illness_risk(mood, sleep_hours, activity_level)
-    except Exception:
+            print(f"[ANALYZE] Pet {pet_id}: ML prediction = {illness_risk_ml}")
+    except Exception as e:
+        print(f"[ANALYZE] Pet {pet_id}: ML prediction error: {e}")
         illness_risk_ml = None
 
     # fallback to latest stored prediction or "low"
     if illness_risk_ml is None:
         latest_pred_risk = get_latest_prediction_risk(pet_id)
         illness_risk_ml = latest_pred_risk if latest_pred_risk in ("high", "medium", "low") else "low"
+        print(f"[ANALYZE] Pet {pet_id}: Using fallback risk = {illness_risk_ml}")
 
     # Contextual risk from recent logs
     contextual_risk = compute_contextual_risk(df)
+    print(f"[ANALYZE] Pet {pet_id}: Contextual risk = {contextual_risk}")
 
     # Blend: choose higher severity so spikes are not hidden
     illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
+    print(f"[ANALYZE] Pet {pet_id}: Final blended risk = {illness_risk_final}")
 
     # model status and derived health status (based on blended risk)
     illness_model_trained = is_illness_model_trained()
@@ -692,6 +712,8 @@ def analyze_endpoint():
     merged["is_unhealthy"] = is_unhealthy
     merged["illness_status_text"] = "Unhealthy" if is_unhealthy else "Healthy"
     merged["care_recommendations"] = tips
+    merged["pet_id"] = pet_id  # Include pet_id in response for clarity
+    merged["log_count"] = len(df)  # Include count of logs analyzed
     return jsonify(merged)
 
 @app.route("/predict", methods=["POST"])
