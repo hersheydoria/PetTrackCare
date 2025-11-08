@@ -418,11 +418,10 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
     df = df.copy()
     df['log_date'] = pd.to_datetime(df['log_date'])
 
-    # Calculate mood/activity probabilities
-    mood_counts = df['mood'].str.lower().value_counts(normalize=True).to_dict()
-    mood_prob = {m: round(p, 2) for m, p in mood_counts.items()}
+    # Calculate activity probabilities (mood no longer available in database)
     activity_counts = df['activity_level'].str.lower().value_counts(normalize=True).to_dict()
     activity_prob = {a: round(p, 2) for a, p in activity_counts.items()}
+    mood_prob = {}  # Mood field removed from system
 
     # Trend and risk logic (same as before)
     trend = "Pet is doing well overall."
@@ -658,14 +657,13 @@ def analyze_endpoint():
     health_status = "unhealthy" if is_unhealthy else "healthy"
     print(f"[ANALYZE] Pet {pet_id}: Health status = {health_status}")
 
-    # Care tips based on blended risk
-    avg_sleep_val = float(df["sleep_hours"].mean()) if not df.empty else 12.0
+    # Care tips based on blended risk (sleep_hours no longer collected)
     tips = build_care_recommendations(
         illness_risk_final,
         result.get("mood_probabilities") or result.get("mood_prob"),
         result.get("activity_probabilities") or result.get("activity_prob"),
-        avg_sleep_val,
-        result.get("sleep_trend"),
+        0.0,  # avg_sleep_val - sleep tracking removed from system
+        None,  # sleep_trend - sleep tracking removed from system
     )
 
     # Merge into response
@@ -859,13 +857,14 @@ def public_pet_page(pet_id):
         df_recent = fetch_logs_df(pet_id, limit=60)
         if df_recent.empty:
             mood_prob_recent, activity_prob_recent = {}, {}
-            avg_sleep_recent = 12.0
-            sleep_trend_recent = ""
+            avg_sleep_recent = 0.0
+            sleep_trend_recent = None
         else:
-            mood_prob_recent = df_recent['mood'].str.lower().value_counts(normalize=True).to_dict()
+            # Mood and sleep hours no longer collected - use defaults
+            mood_prob_recent = {}
             activity_prob_recent = df_recent['activity_level'].str.lower().value_counts(normalize=True).to_dict()
-            avg_sleep_recent = float(df_recent["sleep_hours"].mean())
-            sleep_trend_recent = ""
+            avg_sleep_recent = 0.0
+            sleep_trend_recent = None
 
         care_tips = build_care_recommendations(
             latest_risk or "low",
@@ -1205,14 +1204,8 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
                     logs_resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).lte("log_date", pred_date.isoformat()).order("log_date", desc=False).limit(10000).execute()
                     logs = logs_resp.data or []
                     df_logs = pd.DataFrame(logs) if logs else pd.DataFrame()
-                    if not df_logs.empty:
-                        df_logs['log_date'] = pd.to_datetime(df_logs['log_date']).dt.date
-                        df_logs['sleep_hours'] = pd.to_numeric(df_logs.get('sleep_hours', 0), errors='coerce').fillna(0.0)
-                        sleep_series = df_logs['sleep_hours'].tolist()
-                    else:
-                        sleep_series = []
-
-                    # Sleep forecast has been removed
+                    
+                    # Sleep forecast has been removed (sleep tracking no longer collected)
                     forecasts_json = json.dumps([])
 
                     if dry_run:
@@ -1400,8 +1393,7 @@ def train_endpoint():
                 return jsonify({"status":"no_data","message":"No behavior_logs found"}), 200
             df_all = pd.DataFrame(logs)
             df_all['log_date'] = pd.to_datetime(df_all['log_date']).dt.date
-            df_all['sleep_hours'] = pd.to_numeric(df_all.get('sleep_hours', 0), errors='coerce').fillna(0.0)
-            df_all['mood'] = df_all['mood'].fillna('Unknown').astype(str)
+            # Sleep hours and mood no longer collected - skip these columns
             df_all['activity_level'] = df_all['activity_level'].fillna('Unknown').astype(str)
             train_illness_model(df_all)
         return jsonify({"status":"ok","message":"Models trained"}), 200
@@ -1411,53 +1403,17 @@ def train_endpoint():
 # Debug endpoint to understand sleep data and predictions
 @app.route("/debug_sleep", methods=["POST"])
 def debug_sleep_forecast():
-    """Debug endpoint to understand what sleep data is being used for predictions."""
+    """Debug endpoint - Sleep tracking has been removed from the system."""
     data = request.get_json(silent=True) or {}
     pet_id = data.get("pet_id")
     if not pet_id:
         return jsonify({"error": "pet_id required"}), 400
 
     try:
-        # Fetch the actual sleep data
-        df = fetch_logs_df(pet_id)
-        if df.empty:
-            return jsonify({
-                "pet_id": pet_id,
-                "error": "No behavior logs found for this pet",
-                "suggestion": "Log some sleep data first"
-            })
-
-        sleep_series = df["sleep_hours"].tolist()
-        sleep_dates = df["log_date"].tolist()
-        
-        # Sleep forecast has been removed
-        predictions = []
-        
-        # Calculate statistics
-        avg_sleep = np.mean(sleep_series) if sleep_series else 0
-        std_sleep = np.std(sleep_series) if len(sleep_series) > 1 else 0
-        min_sleep = min(sleep_series) if sleep_series else 0
-        max_sleep = max(sleep_series) if sleep_series else 0
-        
         return jsonify({
             "pet_id": pet_id,
-            "historical_data": {
-                "dates": [str(d) for d in sleep_dates],
-                "sleep_hours": sleep_series,
-                "count": len(sleep_series),
-                "statistics": {
-                    "average": round(avg_sleep, 2),
-                    "std_deviation": round(std_sleep, 2),
-                    "min": min_sleep,
-                    "max": max_sleep,
-                    "variation_level": "low" if std_sleep < 0.5 else "normal" if std_sleep < 1.5 else "high"
-                }
-            },
-            "predictions": {
-                "next_7_days": [round(p, 2) for p in predictions],
-                "prediction_method": "linear_regression" if len(sleep_series) < 8 else "neural_network",
-                "explanation": "Predictions based on historical sleep patterns. Low variation in data may result in flat forecasts."
-            }
+            "message": "Sleep tracking has been removed from the system",
+            "note": "The system now focuses on activity_level, food_intake, water_intake, bathroom_habits, and symptoms for health analysis"
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
