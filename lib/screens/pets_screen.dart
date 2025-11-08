@@ -116,6 +116,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   DateTime? _selectedDate = DateTime.now();
   String? _prediction;
   String? _recommendation;
+  List<Widget> _healthInsights = []; // Health insights from latest log
 
   // 🔹 Moved from local scope to state variables
   String? _selectedMood;
@@ -392,6 +393,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         _fetchBehaviorDates();
         _fetchAnalyzeFromBackend();
         _fetchLatestAnalysis();
+        _fetchLatestHealthInsights(); // <-- fetch health insights for today's log
         _fetchLatestLocationForPet(); // <-- fetch latest GPS/device location
       } else {
         // no pets found
@@ -445,6 +447,183 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
     // also refresh calendar markers
     await _fetchBehaviorDates();
+
+    // Fetch latest health insights from latest log
+    await _fetchLatestHealthInsights();
+  }
+
+  // Fetch health insights from all behavior logs to analyze trends
+  Future<void> _fetchLatestHealthInsights() async {
+    if (_selectedPet == null) return;
+    final petId = _selectedPet!['id'];
+    
+    try {
+      // Fetch ALL behavior logs for the pet to analyze trends
+      final response = await Supabase.instance.client
+          .from('behavior_logs')
+          .select()
+          .eq('pet_id', petId)
+          .order('log_date', ascending: false); // Most recent first
+
+      final data = response as List?;
+      if (data != null && data.isNotEmpty) {
+        // Analyze trends across all logs
+        List<Widget> insights = [];
+        
+        // Extract data from all logs to identify patterns
+        List<double> allSleepHours = [];
+        List<String> allActivities = [];
+        List<String> allWaterIntakes = [];
+        List<String> allFoodIntakes = [];
+        List<String> allBathroomHabits = [];
+        Set<String> allSymptoms = {};
+        
+        for (final log in data) {
+          final sleep = double.tryParse(log['sleep_hours']?.toString() ?? '0') ?? 0;
+          if (sleep > 0) allSleepHours.add(sleep);
+          
+          final activity = log['activity_level']?.toString() ?? '';
+          if (activity.isNotEmpty) allActivities.add(activity);
+          
+          final waterIntake = log['water_intake']?.toString() ?? '';
+          if (waterIntake.isNotEmpty) allWaterIntakes.add(waterIntake);
+          
+          final foodIntake = log['food_intake']?.toString() ?? '';
+          if (foodIntake.isNotEmpty) allFoodIntakes.add(foodIntake);
+          
+          final bathroomHabits = log['bathroom_habits']?.toString() ?? '';
+          if (bathroomHabits.isNotEmpty) allBathroomHabits.add(bathroomHabits);
+          
+          final symptoms = (log['symptoms'] as List?)?.cast<String>() ?? [];
+          for (final symptom in symptoms) {
+            if (symptom.toLowerCase() != "none of the above") {
+              allSymptoms.add(symptom);
+            }
+          }
+        }
+        
+        // Analyze sleep patterns from all logs
+        if (allSleepHours.isNotEmpty) {
+          final avgSleep = allSleepHours.reduce((a, b) => a + b) / allSleepHours.length;
+          final minSleep = allSleepHours.reduce((a, b) => a < b ? a : b);
+          final maxSleep = allSleepHours.reduce((a, b) => a > b ? a : b);
+          
+          if (minSleep < 12) {
+            insights.add(_buildInsightItem(
+              'Low Sleep Detected',
+              'Sleep hours averaging ${avgSleep.toStringAsFixed(1)} (min: ${minSleep.toStringAsFixed(1)}). Dogs and cats typically need 12-14 hours.',
+              Icons.warning,
+              Colors.orange,
+            ));
+          } else if (maxSleep > 18) {
+            insights.add(_buildInsightItem(
+              'High Sleep Duration',
+              'Sleep hours averaging ${avgSleep.toStringAsFixed(1)} (max: ${maxSleep.toStringAsFixed(1)}). Excessive sleep may indicate health issues.',
+              Icons.info,
+              Colors.red,
+            ));
+          } else {
+            insights.add(_buildInsightItem(
+              'Good Sleep Pattern',
+              'Sleep hours averaging ${avgSleep.toStringAsFixed(1)} hours. Within normal range.',
+              Icons.check_circle,
+              Colors.green,
+            ));
+          }
+        }
+        
+        // Analyze activity patterns
+        if (allActivities.isNotEmpty) {
+          final highActivityCount = allActivities.where((a) => a == 'High').length;
+          final activityRatio = highActivityCount / allActivities.length;
+          
+          if (activityRatio >= 0.7) {
+            insights.add(_buildInsightItem(
+              'High Energy',
+              'Pet shows high activity in ${(activityRatio * 100).toStringAsFixed(0)}% of logs. Great activity level!',
+              Icons.trending_up,
+              Colors.green,
+            ));
+          } else if (activityRatio <= 0.3) {
+            insights.add(_buildInsightItem(
+              'Low Activity Level',
+              'Pet shows low activity in ${((1 - activityRatio) * 100).toStringAsFixed(0)}% of logs. Consider encouraging more exercise.',
+              Icons.trending_down,
+              Colors.orange,
+            ));
+          }
+        }
+        
+        // Analyze food intake patterns
+        if (allFoodIntakes.isNotEmpty) {
+          final poorFoodIntakeCount = allFoodIntakes.where((f) => f == 'Not Eating' || f == 'Eating Less').length;
+          if (poorFoodIntakeCount > 0) {
+            insights.add(_buildInsightItem(
+              'Food Intake Concern',
+              'Reduced appetite detected in ${poorFoodIntakeCount}/${allFoodIntakes.length} logs. Monitor closely.',
+              Icons.warning,
+              Colors.red,
+            ));
+          }
+        }
+        
+        // Analyze water intake patterns
+        if (allWaterIntakes.isNotEmpty) {
+          final lowWaterCount = allWaterIntakes.where((w) => w == 'Not Drinking' || w == 'Drinking Less').length;
+          final highWaterCount = allWaterIntakes.where((w) => w == 'Drinking More').length;
+          
+          if (lowWaterCount > 0) {
+            insights.add(_buildInsightItem(
+              'Hydration Concern',
+              'Reduced water intake in ${lowWaterCount}/${allWaterIntakes.length} logs. Ensure fresh water is available.',
+              Icons.warning,
+              Colors.red,
+            ));
+          } else if (highWaterCount > allWaterIntakes.length * 0.5) {
+            insights.add(_buildInsightItem(
+              'Increased Thirst',
+              'Excessive drinking detected in ${(highWaterCount / allWaterIntakes.length * 100).toStringAsFixed(0)}% of logs. May indicate diabetes or kidney issues.',
+              Icons.info,
+              Colors.orange,
+            ));
+          }
+        }
+        
+        // Analyze bathroom habits
+        if (allBathroomHabits.isNotEmpty) {
+          final digestiveIssues = allBathroomHabits.where((b) => b == 'Diarrhea' || b == 'Constipation').length;
+          if (digestiveIssues > 0) {
+            insights.add(_buildInsightItem(
+              'Digestive Issue Detected',
+              'Digestive problems in ${digestiveIssues}/${allBathroomHabits.length} logs. Monitor closely.',
+              Icons.warning,
+              Colors.red,
+            ));
+          }
+        }
+        
+        // Analyze symptoms
+        if (allSymptoms.isNotEmpty) {
+          insights.add(_buildInsightItem(
+            'Symptoms Reported',
+            '${allSymptoms.length} unique symptom(s) detected across logs: ${allSymptoms.join(", ")}. Consult a vet if persistent.',
+            Icons.medical_services,
+            Colors.red,
+          ));
+        }
+        
+        setState(() {
+          _healthInsights = insights;
+        });
+      } else {
+        // No logs found
+        setState(() {
+          _healthInsights = [];
+        });
+      }
+    } catch (e) {
+      print('Error fetching latest health insights: $e');
+    }
   }
 
   // fetch behavior log dates for the selected pet and populate _events with a marker
@@ -4949,6 +5128,7 @@ void _disconnectDevice() async {
     );
   }
 
+  // Build health insights as a list of widgets (for state-based rendering)
   Widget _buildInsightItem(String title, String description, IconData icon, Color color) {
     return Padding(
       padding: EdgeInsets.only(bottom: 8),
@@ -5392,24 +5572,62 @@ void _disconnectDevice() async {
           ),
           SizedBox(height: 16),
           
-          if (_prediction != null) ...[
-            _buildAnalysisCard(
-              icon: Icons.trending_up,
-              title: "Prediction",
-              content: _prediction!,
-              color: Colors.blue,
+          // Health insights replaced prediction and recommendation
+          if (_healthInsights.isNotEmpty) ...[
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.insights, color: Colors.blue.shade700, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Health Insights',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue.shade800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 12),
+                  ..._healthInsights,
+                ],
+              ),
             ),
-            SizedBox(height: 12),
-          ],
-          
-          if (_recommendation != null) ...[
-            _buildAnalysisCard(
-              icon: Icons.lightbulb,
-              title: "Recommendation",
-              content: _recommendation!,
-              color: Colors.orange,
+          ] else if (!_loadingAnalysisData) ...[
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Normal Patterns',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            SizedBox(height: 12),
           ],
           
           // Care Tips (only when risk is bad: medium/high)
@@ -6698,6 +6916,7 @@ void _disconnectDevice() async {
                               // Refresh data
                               await _fetchBehaviorDates();
                               await _fetchAnalyzeFromBackend();
+                              await _fetchLatestHealthInsights(); // <-- refresh health insights with new data
 
                               // Show success feedback
                               if (mounted) {
