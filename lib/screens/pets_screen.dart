@@ -136,6 +136,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   bool _isUnhealthy = false;
   List<String> _careActions = [];
   List<String> _careExpectations = [];
+  
+  // Backend messaging about analysis quality and data sufficiency
+  Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
+  Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
 
   // New: latest GPS/device location for selected pet
   LatLng? _latestDeviceLocation;
@@ -689,6 +693,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               _careExpectations = e.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
             }
           }
+          
+          // Parse data_notice and model_notice from backend response
+          _dataNotice = body['data_notice'] as Map<String, dynamic>?;
+          _modelNotice = body['model_notice'] as Map<String, dynamic>?;
         });
       } else {
         // non-200 response: ignore for now
@@ -5517,6 +5525,18 @@ void _disconnectDevice() async {
           ),
           SizedBox(height: 16),
           
+          // Display data sufficiency notice if present
+          if (_dataNotice != null) ...[
+            _buildDataNoticeCard(_dataNotice!),
+            SizedBox(height: 12),
+          ],
+          
+          // Display model/analysis method notice if present
+          if (_modelNotice != null) ...[
+            _buildModelNoticeCard(_modelNotice!),
+            SizedBox(height: 12),
+          ],
+          
           // Health insights: show warnings if present, otherwise show status
           // If there are specific insights, display them
           if (_healthInsights.isNotEmpty) ...[
@@ -5724,6 +5744,134 @@ void _disconnectDevice() async {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+  
+  // Build data sufficiency notice card
+  Widget _buildDataNoticeCard(Map<String, dynamic> notice) {
+    final status = notice['status']?.toString() ?? 'unknown';
+    final message = notice['message']?.toString() ?? '';
+    final logsNeeded = notice['logs_needed'] as int?;
+    
+    // Determine color based on status
+    Color cardColor;
+    IconData iconData;
+    
+    if (status == 'insufficient_data') {
+      cardColor = Colors.orange;
+      iconData = Icons.info;
+    } else {
+      cardColor = Colors.green;
+      iconData = Icons.check_circle;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cardColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconData, color: cardColor, size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cardColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (logsNeeded != null && logsNeeded > 0) ...[
+            SizedBox(height: 8),
+            Padding(
+              padding: EdgeInsets.only(left: 28),
+              child: Text(
+                '💡 Log $logsNeeded more entries for accurate analysis',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: cardColor.withOpacity(0.8),
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+  
+  // Build model/analysis method notice card
+  Widget _buildModelNoticeCard(Map<String, dynamic> notice) {
+    final status = notice['status']?.toString() ?? 'unknown';
+    final message = notice['message']?.toString() ?? '';
+    final details = notice['details']?.toString();
+    
+    // Determine color based on status
+    Color cardColor;
+    IconData iconData;
+    
+    if (status == 'no_model_trained') {
+      cardColor = Colors.blue;
+      iconData = Icons.auto_awesome;
+    } else if (status == 'model_trained') {
+      cardColor = Colors.green;
+      iconData = Icons.done_all;
+    } else {
+      cardColor = Colors.grey;
+      iconData = Icons.info;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cardColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconData, color: cardColor, size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cardColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (details != null && details.isNotEmpty) ...[
+            SizedBox(height: 8),
+            Padding(
+              padding: EdgeInsets.only(left: 28),
+              child: Text(
+                details,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: cardColor.withOpacity(0.8),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
