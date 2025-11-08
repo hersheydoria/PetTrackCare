@@ -60,17 +60,13 @@ def fetch_logs_df(pet_id, limit=200):
         return pd.DataFrame()
     df = pd.DataFrame(data)
     df['log_date'] = pd.to_datetime(df['log_date']).dt.date
-    df['sleep_hours'] = pd.to_numeric(df['sleep_hours'], errors='coerce').fillna(0.0)
-    df['mood'] = df['mood'].fillna('Unknown').astype(str)
-    df['activity_level'] = df['activity_level'].fillna('Unknown').astype(str)
+    df['activity_level'] = df.get('activity_level', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     
-    # Handle new health tracking columns
+    # Core health tracking columns
     df['food_intake'] = df.get('food_intake', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     df['water_intake'] = df.get('water_intake', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     df['bathroom_habits'] = df.get('bathroom_habits', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     df['symptoms'] = df.get('symptoms', pd.Series(['[]'] * len(df))).fillna('[]').astype(str)
-    df['body_temperature'] = df.get('body_temperature', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
-    df['appetite_behavior'] = df.get('appetite_behavior', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     
     return df
 
@@ -79,14 +75,12 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         return None, None
     
     # Prepare label encoders for categorical features
-    le_mood = LabelEncoder()
     le_activity = LabelEncoder()
     le_food = LabelEncoder()
     le_water = LabelEncoder()
     le_bathroom = LabelEncoder()
     
-    # Encode categorical features
-    df['mood_enc'] = le_mood.fit_transform(df['mood'])
+    # Encode categorical features (activity, food, water, bathroom only)
     df['act_enc'] = le_activity.fit_transform(df['activity_level'])
     df['food_enc'] = le_food.fit_transform(df['food_intake'])
     df['water_enc'] = le_water.fit_transform(df['water_intake'])
@@ -105,10 +99,10 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
     
     df['symptom_count'] = df['symptoms'].apply(count_symptoms)
     
-    # Build feature matrix with health indicators
-    X = df[['mood_enc', 'sleep_hours', 'act_enc', 'food_enc', 'water_enc', 'bathroom_enc', 'symptom_count']].values
+    # Build feature matrix with health indicators (activity, food, water, bathroom, symptoms only)
+    X = df[['act_enc', 'food_enc', 'water_enc', 'bathroom_enc', 'symptom_count']].values
     
-    # Enhanced illness indicator based on comprehensive health data
+    # Illness indicator based on health data (without mood or sleep)
     y = (
         # Food intake issues
         (df['food_intake'].str.lower().isin(['not eating', 'eating less'])) |
@@ -116,14 +110,10 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         (df['water_intake'].str.lower().isin(['not drinking', 'drinking less'])) |
         # Bathroom issues
         (df['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination'])) |
-        # Multiple symptoms
+        # Multiple symptoms (2 or more real symptoms)
         (df['symptom_count'] >= 2) |
-        # Sleep issues - Updated: 12+ hours is normal for dogs and cats
-        (df['sleep_hours'] < 12) | (df['sleep_hours'] > 18) |
-        # Activity issues
-        (df['activity_level'].str.lower() == 'low') |
-        # Mood issues (kept for backward compatibility)
-        (df['mood'].str.lower().isin(['lethargic', 'aggressive']))
+        # Low activity level
+        (df['activity_level'].str.lower() == 'low')
     ).astype(int).values
 
     # Guard: need both classes to train a classifier
@@ -165,23 +155,17 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         return None, None
 
     # Build mapping dictionaries to handle unseen labels at prediction time
-    mood_map = {v: i for i, v in enumerate(getattr(le_mood, 'classes_', []))}
     act_map = {v: i for i, v in enumerate(getattr(le_activity, 'classes_', []))}
     food_map = {v: i for i, v in enumerate(getattr(le_food, 'classes_', []))}
     water_map = {v: i for i, v in enumerate(getattr(le_water, 'classes_', []))}
     bathroom_map = {v: i for i, v in enumerate(getattr(le_bathroom, 'classes_', []))}
 
     # Determine most common classes seen during training for safe fallback
-    mood_most_common = None
     act_most_common = None
     food_most_common = None
     water_most_common = None
     bathroom_most_common = None
     
-    try:
-        mood_most_common = df['mood'].mode().iloc[0] if not df['mood'].mode().empty else None
-    except Exception:
-        mood_most_common = None
     try:
         act_most_common = df['activity_level'].mode().iloc[0] if not df['activity_level'].mode().empty else None
     except Exception:
@@ -204,7 +188,6 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         'n_samples': int(len(y)),
         'pos_rate': float(np.mean(y)),
         'auc': auc_score,
-        'mood_most_common': (mood_most_common or '').lower() if mood_most_common else None,
         'act_most_common': (act_most_common or '').lower() if act_most_common else None,
         'food_most_common': (food_most_common or '').lower() if food_most_common else None,
         'water_most_common': (water_most_common or '').lower() if water_most_common else None,
@@ -213,12 +196,10 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
 
     joblib.dump({
         'model': clf,
-        'le_mood': le_mood,
         'le_activity': le_activity,
         'le_food': le_food,
         'le_water': le_water,
         'le_bathroom': le_bathroom,
-        'mood_map': mood_map,
         'act_map': act_map,
         'food_map': food_map,
         'water_map': water_map,
@@ -226,24 +207,22 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         'metadata': metadata,
     }, model_path)
 
-    return clf, (le_mood, le_activity, le_food, le_water, le_bathroom)
+    return clf, (le_activity, le_food, le_water, le_bathroom)
 
 def load_illness_model(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     if os.path.exists(model_path):
         data = joblib.load(model_path)
         model = data.get('model')
-        le_mood = data.get('le_mood')
         le_activity = data.get('le_activity')
         le_food = data.get('le_food')
         le_water = data.get('le_water')
         le_bathroom = data.get('le_bathroom')
-        mood_map = data.get('mood_map')
         act_map = data.get('act_map')
         food_map = data.get('food_map')
         water_map = data.get('water_map')
         bathroom_map = data.get('bathroom_map')
         metadata = data.get('metadata')
-        return model, (le_mood, le_activity, le_food, le_water, le_bathroom), mood_map, act_map, food_map, water_map, bathroom_map, metadata
+        return model, (le_activity, le_food, le_water, le_bathroom), act_map, food_map, water_map, bathroom_map, metadata
     return None, None
 
 def is_illness_model_trained(model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
@@ -252,7 +231,7 @@ def is_illness_model_trained(model_path=os.path.join(MODELS_DIR, "illness_model.
         if not os.path.exists(model_path):
             return False
         data = joblib.load(model_path)
-        return bool(data and data.get("model") and data.get("le_mood") and data.get("le_activity"))
+        return bool(data and data.get("model") and data.get("le_activity"))
     except Exception:
         return False
 
@@ -272,12 +251,10 @@ def get_latest_prediction_risk(pet_id: str):
     return None
 
 def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep, sleep_trend):
-    """Return structured care tips: actions to take and what to expect."""
+    """Return structured care tips: actions to take and what to expect. 
+    Note: mood_prob, avg_sleep, and sleep_trend parameters are deprecated (no longer used)."""
     risk = (str(illness_risk or "low")).lower()
-    mood_prob = mood_prob or {}
     activity_prob = activity_prob or {}
-    avg_sleep = float(avg_sleep) if avg_sleep is not None else 12.0
-    s_trend = (sleep_trend or "").lower()
 
     actions, expectations = [], []
 
@@ -298,7 +275,7 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
             "Prioritize calm enrichment (sniff walks, puzzle feeders)."
         ]
         expectations += [
-            "Minor mood/activity changes may persist for a few days."
+            "Minor activity changes may persist for a few days."
         ]
     else:
         actions += [
@@ -308,39 +285,15 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
             "Normal behavior; continue routine monitoring."
         ]
 
-    # Mood-focused tips
-    top_mood = max(mood_prob, key=mood_prob.get) if mood_prob else None
-    if top_mood == "lethargic":
+    # Activity-focused tips
+    top_activity = max(activity_prob, key=activity_prob.get) if activity_prob else None
+    if top_activity == "low":
         actions += [
             "Offer short, low‑impact play sessions (2–3× for 10–15 min).",
             "Encourage hydration and balanced meals."
         ]
         expectations += [
-            "Lower play interest; energy should improve with rest and routine."
-        ]
-    elif top_mood == "aggressive":
-        actions += [
-            "Avoid triggers and high‑arousal games; use calm routines.",
-            "Consult a trainer/behavior professional if aggression persists."
-        ]
-        expectations += [
-            "Irritability around stressors; consistency reduces incidents."
-        ]
-    elif top_mood == "anxious":
-        actions += [
-            "Create a safe space (crate/quiet room) and predictable schedule.",
-            "Use gradual exposure to stressors; avoid flooding."
-        ]
-        expectations += [
-            "Anxiety may spike with change; tends to settle with routine."
-        ]
-    elif top_mood == "sad":
-        actions += [
-            "Increase engagement (gentle play, short training, sniff walks).",
-            "Provide social time and novel but low‑stress enrichment."
-        ]
-        expectations += [
-            "Mood should lift with stimulation and consistent interaction."
+            "Lower activity is normal with rest; energy should improve with routine."
         ]
 
     # Activity level tips
@@ -360,29 +313,11 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
             "Temporary restlessness can settle with a consistent routine."
         ]
 
-    # Sleep tips - Updated: 12-18 hours is normal for dogs and cats
-    if avg_sleep < 12 or ("depriv" in s_trend):
-        actions += [
-            "Set a consistent sleep routine; avoid late‑night stimulation.",
-            "Dogs and cats typically need 12-14 hours of sleep daily."
-        ]
-        expectations += [
-            "Sleep should normalize within 2–3 nights with routine."
-        ]
-    elif avg_sleep > 18 or ("oversleep" in s_trend):
-        actions += [
-            "Break up long naps with gentle activity and enrichment.",
-            "Excessive sleep (>18 hours) may indicate illness."
-        ]
-        expectations += [
-            "Oversleeping often eases with more engaging daytime activity."
-        ]
-
     # General best practices
     actions += [
         "Keep fresh water available at all times.",
         "Use puzzle feeders or sniff walks for mental enrichment.",
-        "Continue logging mood, activity, and sleep daily."
+        "Continue logging activity, food, and water intake daily."
     ]
     if risk == "high":
         actions += ["Contact your vet immediately if symptoms worsen."]
@@ -404,10 +339,9 @@ def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep
 
 def compute_contextual_risk(df: pd.DataFrame) -> str:
     """
-    Compute a smoothed illness risk ('low'/'medium'/'high') from recent logs
-    by analyzing mood/activity patterns.
-    Only escalates for CLEAR problems, not borderline cases.
-    Sleep analysis removed due to insufficient data issues with single logs.
+    Compute illness risk from recent logs based on behavioral patterns.
+    Only uses activity level, food intake, water intake, and bathroom habits.
+    Mood field was removed from the system.
     """
     if df is None or df.empty:
         return "low"
@@ -416,37 +350,43 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         recent['log_date'] = pd.to_datetime(recent['log_date'])
         recent = recent.sort_values('log_date').tail(14)
 
-        mood_counts = recent['mood'].str.lower().value_counts(normalize=True)
-        act_counts = recent['activity_level'].str.lower().value_counts(normalize=True)
+        # Count problematic behaviors
+        low_activity_count = (recent['activity_level'].str.lower() == 'low').sum()
+        not_eating_count = recent['food_intake'].str.lower().isin(['not eating', 'eating less']).sum()
+        not_drinking_count = recent['water_intake'].str.lower().isin(['not drinking', 'drinking less']).sum()
+        bad_bathroom_count = recent['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination']).sum()
+        
+        total_logs = len(recent)
+        
+        p_low_act = low_activity_count / total_logs if total_logs > 0 else 0
+        p_bad_food = not_eating_count / total_logs if total_logs > 0 else 0
+        p_bad_water = not_drinking_count / total_logs if total_logs > 0 else 0
+        p_bad_bathroom = bad_bathroom_count / total_logs if total_logs > 0 else 0
 
-        last3 = recent.tail(3)
-
-        p_aggr = float(mood_counts.get('aggressive', 0))
-        p_leth = float(mood_counts.get('lethargic', 0))
-        p_anx  = float(mood_counts.get('anxious', 0))
-        p_low_act = float(act_counts.get('low', 0))
-
-        last3_moods = [str(m).lower() for m in last3['mood'].tolist()]
-        happy_calm_count = sum(1 for m in last3_moods if m in ('happy', 'calm'))
+        print(f"[CONTEXTUAL-RISK] Patterns: Low activity={p_low_act:.2f}, Not eating={p_bad_food:.2f}, Not drinking={p_bad_water:.2f}, Bad bathroom={p_bad_bathroom:.2f}")
 
         risk = "low"
-        # Strong signals -> high (ONLY clear problems)
-        if (p_aggr > 0.4):
+        
+        # High risk: multiple serious problems
+        if (p_bad_food > 0.5 or p_bad_water > 0.5) and (low_activity_count >= 2):
+            print(f"[CONTEXTUAL-RISK] → HIGH (multiple serious issues)")
             risk = "high"
-        # Moderate signals -> medium (only if clear negative pattern)
-        elif (p_leth > 0.5) or (p_anx > 0.5) or (p_low_act > 0.7):
+        # Medium risk: single clear problem persisting
+        elif (p_low_act > 0.7) or (p_bad_food > 0.5) or (p_bad_water > 0.5) or (p_bad_bathroom > 0.5):
+            if p_low_act > 0.7:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (low activity {p_low_act:.2f} > 0.7)")
+            elif p_bad_food > 0.5:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (not eating {p_bad_food:.2f} > 0.5)")
+            elif p_bad_water > 0.5:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (not drinking {p_bad_water:.2f} > 0.5)")
+            else:
+                print(f"[CONTEXTUAL-RISK] → MEDIUM (bad bathroom {p_bad_bathroom:.2f} > 0.5)")
             risk = "medium"
 
-        # De-escalation: if most recent days are healthy, dial back
-        if risk == "high":
-            if (happy_calm_count >= 2) and (p_aggr <= 0.25):
-                risk = "medium"
-        if risk == "medium":
-            if (happy_calm_count >= 2) and (p_low_act <= 0.5) and (p_leth <= 0.35) and (p_anx <= 0.35):
-                risk = "low"
-
+        print(f"[CONTEXTUAL-RISK] Final contextual risk: {risk}")
         return risk
-    except Exception:
+    except Exception as e:
+        print(f"[CONTEXTUAL-RISK] Exception: {e}")
         return "low"
 
 def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
@@ -670,12 +610,24 @@ def analyze_endpoint():
     try:
         if not df.empty:
             latest = df.sort_values("log_date", ascending=False).iloc[0]
-            mood = str(latest.get("mood", "") or "Unknown").lower()
-            sleep_hours = float(latest.get("sleep_hours") or 0.0)
             activity_level = str(latest.get("activity_level", "") or "Unknown").lower()
+            food_intake = str(latest.get("food_intake", "") or "Unknown").lower()
+            water_intake = str(latest.get("water_intake", "") or "Unknown").lower()
+            bathroom_habits = str(latest.get("bathroom_habits", "") or "Unknown").lower()
+            
+            # Count symptoms from latest log
+            symptom_count = 0
+            try:
+                import json
+                symptoms_str = str(latest.get("symptoms", "[]") or "[]")
+                symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+                filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
+                symptom_count = len(filtered)
+            except:
+                symptom_count = 0
             
             # ONLY use ML prediction if we have clear problem indicators
-            predicted_risk = predict_illness_risk(mood, sleep_hours, activity_level)
+            predicted_risk = predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count)
             if predicted_risk and predicted_risk != "low":
                 illness_risk_ml = predicted_risk
                 print(f"[ANALYZE] Pet {pet_id}: ML prediction = {illness_risk_ml}")
@@ -732,23 +684,24 @@ def analyze_endpoint():
 def predict_endpoint():
     data = request.get_json()
     pet_id = data.get("pet_id")
-    mood = data.get("mood")
-    sleep_hours = data.get("sleep_hours")
     activity_level = data.get("activity_level")
-    if not all([pet_id, mood, sleep_hours, activity_level]):
+    food_intake = data.get("food_intake")
+    water_intake = data.get("water_intake")
+    bathroom_habits = data.get("bathroom_habits")
+    symptom_count = data.get("symptom_count", 0)
+    
+    if not all([pet_id, activity_level, food_intake, water_intake, bathroom_habits]):
         return jsonify({"error": "Missing fields"}), 400
 
     # Illness risk prediction
-    illness_risk = predict_illness_risk(mood, sleep_hours, activity_level)
+    illness_risk = predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count)
     illness_model_trained = is_illness_model_trained()
     is_unhealthy = isinstance(illness_risk, str) and illness_risk.lower() in ("high", "medium")
     health_status = "unhealthy" if is_unhealthy else "healthy"
 
     # Build pseudo-probabilities from input to drive tips
-    mood_prob = {str(mood).lower(): 1.0}
     activity_prob = {str(activity_level).lower(): 1.0}
-    avg_sleep_val = float(sleep_hours) if sleep_hours is not None else 12.0
-    tips = build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep_val, None)
+    tips = build_care_recommendations(illness_risk, {}, activity_prob, 12.0, None)
 
     return jsonify({
         "illness_risk": illness_risk,
@@ -1288,87 +1241,138 @@ def store_prediction(pet_id, prediction, risk_level, recommendation):
         "suggestions": recommendation
     }).execute()
 
-def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
+def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count=0, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     """
-    Predict illness risk using a trained model if available. Returns 'low'/'medium'/'high'.
-    - Uses predict_proba when possible and thresholds for medium/high.
-    - Falls back to conservative rule-based logic when model or encoders are missing or when inputs are unseen.
+    Predict illness risk using activity, food intake, water intake, and bathroom habits.
+    Returns 'low'/'medium'/'high'.
+    Uses trained model if available, otherwise uses conservative rule-based logic.
     """
-    # normalize inputs
-    mood_in = str(mood or '').strip().lower()
+    # Normalize inputs
     activity_in = str(activity_level or '').strip().lower()
-    try:
-        sleep_f = float(sleep_hours)
-    except Exception:
-        sleep_f = 0.0
+    food_in = str(food_intake or '').strip().lower()
+    water_in = str(water_intake or '').strip().lower()
+    bathroom_in = str(bathroom_habits or '').strip().lower()
+    symptom_in = int(symptom_count) if symptom_count else 0
 
-    # conservative rule-based fallback (pets need 12+ hours of sleep)
-    rule_flag = (mood_in in ["lethargic", "aggressive"]) or (sleep_f < 12) or (activity_in == "low")
+    print(f"[ML-PREDICT] Input: activity={activity_in}, food={food_in}, water={water_in}, bathroom={bathroom_in}, symptoms={symptom_in}")
+
+    # Rule-based fallback - indicates health concern
+    rule_flag = (
+        food_in in ["not eating", "eating less"] or
+        water_in in ["not drinking", "drinking less"] or
+        bathroom_in in ["diarrhea", "constipation", "frequent urination"] or
+        symptom_in >= 2 or
+        activity_in == "low"
+    )
+    print(f"[ML-PREDICT] Rule-based flag: {rule_flag}")
 
     loaded = load_illness_model(model_path)
-    # load_illness_model returns (model, (le_mood, le_activity), mood_map, act_map, metadata) or (None, None)
     if not loaded or loaded[0] is None:
-        return "high" if rule_flag else "low"
+        print(f"[ML-PREDICT] No trained model found, using rule-based fallback")
+        result = "high" if rule_flag else "low"
+        print(f"[ML-PREDICT] → Rule-based result: {result}")
+        return result
 
     try:
-        model, encoders, mood_map, act_map, metadata = loaded
-    except Exception:
-        # unexpected shape, fallback
-        return "high" if rule_flag else "low"
+        model, encoders, act_map, food_map, water_map, bathroom_map, metadata = loaded
+    except Exception as e:
+        print(f"[ML-PREDICT] Failed to unpack loaded model: {e}, using rule-based fallback")
+        result = "high" if rule_flag else "low"
+        print(f"[ML-PREDICT] → Rule-based result: {result}")
+        return result
 
-    le_mood, le_activity = encoders if encoders else (None, None)
+    le_activity, le_food, le_water, le_bathroom = encoders if encoders else (None, None, None, None)
 
-    # Map or fallback for mood/activity encodings
-    mood_enc = None
+    # Encode features
     act_enc = None
-    try:
-        if mood_map and mood_in in mood_map:
-            mood_enc = int(mood_map[mood_in])
-        elif le_mood is not None and mood_in in getattr(le_mood, 'classes_', []):
-            mood_enc = int(np.where(getattr(le_mood, 'classes_', []) == mood_in)[0][0])
-        else:
-            # use most common seen during training if available
-            mc = (metadata.get('mood_most_common') if metadata else None)
-            if mc and mc in (mood_map or {}):
-                mood_enc = int((mood_map or {})[mc])
-    except Exception:
-        mood_enc = None
+    food_enc = None
+    water_enc = None
+    bathroom_enc = None
 
     try:
         if act_map and activity_in in act_map:
             act_enc = int(act_map[activity_in])
-        elif le_activity is not None and activity_in in getattr(le_activity, 'classes_', []):
+        elif le_activity and activity_in in getattr(le_activity, 'classes_', []):
             act_enc = int(np.where(getattr(le_activity, 'classes_', []) == activity_in)[0][0])
         else:
             ac = (metadata.get('act_most_common') if metadata else None)
             if ac and ac in (act_map or {}):
                 act_enc = int((act_map or {})[ac])
-    except Exception:
-        act_enc = None
+                print(f"[ML-PREDICT] Activity '{activity_in}' not in training, using '{ac}'")
+    except Exception as e:
+        print(f"[ML-PREDICT] Failed to encode activity: {e}")
 
-    # If encodings are missing, fallback to rule-based conservative decision
-    if mood_enc is None or act_enc is None:
-        return "high" if rule_flag else "low"
+    try:
+        if food_map and food_in in food_map:
+            food_enc = int(food_map[food_in])
+        elif le_food and food_in in getattr(le_food, 'classes_', []):
+            food_enc = int(np.where(getattr(le_food, 'classes_', []) == food_in)[0][0])
+        else:
+            fc = (metadata.get('food_most_common') if metadata else None)
+            if fc and fc in (food_map or {}):
+                food_enc = int((food_map or {})[fc])
+                print(f"[ML-PREDICT] Food '{food_in}' not in training, using '{fc}'")
+    except Exception as e:
+        print(f"[ML-PREDICT] Failed to encode food: {e}")
 
-    X = np.array([[mood_enc, float(sleep_f), act_enc]])
+    try:
+        if water_map and water_in in water_map:
+            water_enc = int(water_map[water_in])
+        elif le_water and water_in in getattr(le_water, 'classes_', []):
+            water_enc = int(np.where(getattr(le_water, 'classes_', []) == water_in)[0][0])
+        else:
+            wc = (metadata.get('water_most_common') if metadata else None)
+            if wc and wc in (water_map or {}):
+                water_enc = int((water_map or {})[wc])
+                print(f"[ML-PREDICT] Water '{water_in}' not in training, using '{wc}'")
+    except Exception as e:
+        print(f"[ML-PREDICT] Failed to encode water: {e}")
+
+    try:
+        if bathroom_map and bathroom_in in bathroom_map:
+            bathroom_enc = int(bathroom_map[bathroom_in])
+        elif le_bathroom and bathroom_in in getattr(le_bathroom, 'classes_', []):
+            bathroom_enc = int(np.where(getattr(le_bathroom, 'classes_', []) == bathroom_in)[0][0])
+        else:
+            bc = (metadata.get('bathroom_most_common') if metadata else None)
+            if bc and bc in (bathroom_map or {}):
+                bathroom_enc = int((bathroom_map or {})[bc])
+                print(f"[ML-PREDICT] Bathroom '{bathroom_in}' not in training, using '{bc}'")
+    except Exception as e:
+        print(f"[ML-PREDICT] Failed to encode bathroom: {e}")
+
+    # If encodings are missing, fallback
+    if act_enc is None or food_enc is None or water_enc is None or bathroom_enc is None:
+        print(f"[ML-PREDICT] Missing encodings, using rule-based fallback")
+        result = "high" if rule_flag else "low"
+        print(f"[ML-PREDICT] → Rule-based result: {result}")
+        return result
+
+    X = np.array([[act_enc, food_enc, water_enc, bathroom_enc, symptom_in]])
 
     try:
         if hasattr(model, 'predict_proba'):
             proba = model.predict_proba(X)[0]
-            # assume binary prob where index 1 is positive class
             p_pos = float(proba[1]) if len(proba) > 1 else float(proba[0])
+            print(f"[ML-PREDICT] Model proba: {p_pos:.3f}")
         else:
-            # fallback to raw prediction
             p_pos = float(model.predict(X)[0])
-    except Exception:
-        return "high" if rule_flag else "low"
+            print(f"[ML-PREDICT] Model prediction (raw): {p_pos:.3f}")
+    except Exception as e:
+        print(f"[ML-PREDICT] Model prediction failed: {e}, using rule-based fallback")
+        result = "high" if rule_flag else "low"
+        print(f"[ML-PREDICT] → Rule-based result: {result}")
+        return result
 
     # Thresholds to convert probability into low/medium/high
     if p_pos >= 0.75:
+        print(f"[ML-PREDICT] → HIGH (p_pos {p_pos:.3f} >= 0.75)")
         return "high"
     elif p_pos >= 0.40:
+        print(f"[ML-PREDICT] → MEDIUM (p_pos {p_pos:.3f} >= 0.40)")
         return "medium"
     else:
+        print(f"[ML-PREDICT] → LOW (p_pos {p_pos:.3f} < 0.40)")
         return "low"
 
 # Force-train endpoint (useful in dev)
@@ -1521,18 +1525,32 @@ def test_model_accuracy():
                 train_illness_model(train_df)
                 
                 for _, row in test_df.iterrows():
-                    mood = str(row.get("mood", ""))
-                    sleep_hours = float(row.get("sleep_hours", 0))
                     activity = str(row.get("activity_level", ""))
+                    food_intake = str(row.get("food_intake", ""))
+                    water_intake = str(row.get("water_intake", ""))
+                    bathroom_habits = str(row.get("bathroom_habits", ""))
+                    
+                    # Count symptoms
+                    symptom_count = 0
+                    try:
+                        import json
+                        symptoms_str = str(row.get("symptoms", "[]"))
+                        symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+                        filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
+                        symptom_count = len(filtered)
+                    except:
+                        symptom_count = 0
                     
                     # Predict
-                    pred_risk = predict_illness_risk(mood, sleep_hours, activity)
+                    pred_risk = predict_illness_risk(activity, food_intake, water_intake, bathroom_habits, symptom_count)
                     
-                    # Ground truth: use same logic as training (pets need 12+ hours of sleep)
+                    # Ground truth: use same logic as training
                     actual_unhealthy = (
-                        (str(mood).lower() in ['lethargic', 'aggressive']) or
-                        (sleep_hours < 12) or
-                        (str(activity).lower() == 'low')
+                        (food_intake.lower() in ['not eating', 'eating less']) or
+                        (water_intake.lower() in ['not drinking', 'drinking less']) or
+                        (bathroom_habits.lower() in ['diarrhea', 'constipation', 'frequent urination']) or
+                        (symptom_count >= 2) or
+                        (activity.lower() == 'low')
                     )
                     actual_risk = "high" if actual_unhealthy else "low"
                     
