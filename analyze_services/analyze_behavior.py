@@ -251,18 +251,6 @@ def get_latest_prediction_risk(pet_id: str):
         pass
     return None
 
-def forecast_sleep_with_tf(series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    """
-    Backward-compatible wrapper that delegates to predict_future_sleep.
-    Ensures migration and scheduler code that calls this keep working.
-    """
-    try:
-        return predict_future_sleep(series, days_ahead=days_ahead, model_path=model_path)
-    except Exception:
-        # conservative fallback (12 hours is normal for pets)
-        last = float(series[-1]) if series else 12.0
-        return [last for _ in range(days_ahead)]
-
 def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep, sleep_trend):
     """Return structured care tips: actions to take and what to expect."""
     risk = (str(illness_risk or "low")).lower()
@@ -452,19 +440,6 @@ def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
     return a if sev.get(a, 0) >= sev.get(b, 0) else b
 
 # ------------------- Core Analysis -------------------
-def forecast_sleep_trend(df):
-    # Example placeholder logic — replace with your real forecasting logic
-    if df.empty:
-        return "No sleep data available"
-
-    avg_sleep = df["sleep_hours"].mean()
-    if avg_sleep < 12:
-        return "Pet might be sleep deprived"
-    elif avg_sleep > 18:
-        return "Pet is oversleeping"
-    else:
-        return "Pet sleep is normal"
-
 def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
     """Analyze provided DataFrame of logs for pet_id and (optionally) store prediction for prediction_date."""
     if df.empty:
@@ -526,8 +501,7 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
     elif activity_prob.get('medium', 0) > 0.5:
         recommendation += " Activity level is moderate."
 
-    # Sleep trend forecast
-    sleep_trend = forecast_sleep_trend(df)
+    # Sleep trend analysis
     avg_sleep = df["sleep_hours"].mean()
     if avg_sleep < 12:
         trend += " Possible sleep deprivation."
@@ -551,28 +525,6 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
         "activity_prob": activity_prob.get("high", 0)
     }
 
-    # Include numeric sleep forecast (7-day) in stored payload so consumers can show it
-    try:
-        sleep_series = df['sleep_hours'].tolist() if not df.empty else []
-        sleep_forecast = predict_future_sleep(sleep_series, days_ahead=7)
-
-        # Ensure we always persist a 7-element numeric list. If the predictor
-        # returns a shorter list (or a non-list), pad with a reasonable default
-        # (last observed sleep or 12.0 hours - normal for pets).
-        default_val = float(sleep_series[-1]) if sleep_series else 12.0
-        if not isinstance(sleep_forecast, list):
-            sleep_forecast = [default_val for _ in range(7)]
-        if len(sleep_forecast) < 7:
-            pad = [default_val for _ in range(7 - len(sleep_forecast))]
-            sleep_forecast = list(sleep_forecast) + pad
-
-        # store as JSON string to be safe for different DB column types
-        payload["sleep_forecast"] = json.dumps([float(x) for x in sleep_forecast])
-    except Exception as e:
-        # Log the error and persist a conservative default 7-day forecast (12 hours is normal)
-        print(f"[WARN] predict_future_sleep failed for pet {pet_id}: {e}")
-        payload["sleep_forecast"] = json.dumps([12.0 for _ in range(7)])
-
     if store:
         try:
             # check existing prediction for idempotency
@@ -592,7 +544,6 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
     return {
         "trend": trend,
         "recommendation": recommendation,
-        "sleep_trend": sleep_trend,
         # keep legacy (short) keys
         "mood_prob": mood_prob,
         "activity_prob": activity_prob,
@@ -648,7 +599,6 @@ def migrate_behavior_logs_to_predictions(limit_per_pet=1000):
                 # train models on full pet logs (optional step - fine-tune)
                 try:
                     train_illness_model(subset)
-                    forecast_sleep_with_tf(subset['sleep_hours'].tolist())
                 except Exception as e:
                     print(f"Model training error for pet {pet_id} on date {d}: {e}")
 
@@ -691,14 +641,6 @@ def analyze_endpoint():
 
     # Also provide a numeric 7-day sleep forecast (if possible) and an illness risk
     df = fetch_logs_df(pet_id)
-
-    # sleep_forecast
-    try:
-        sleep_series = df["sleep_hours"].tolist() if not df.empty else []
-        sleep_forecast = predict_future_sleep(sleep_series)
-    except Exception:
-        last = sleep_series[-1] if sleep_series else 12.0
-        sleep_forecast = [last for _ in range(7)]
 
     # ML illness_risk on latest log (or fallback)
     illness_risk_ml = None
@@ -744,7 +686,6 @@ def analyze_endpoint():
     merged["illness_risk_contextual"] = contextual_risk
     merged["illness_risk_blended"] = illness_risk_final
     merged["illness_risk"] = illness_risk_final  # backward compatibility
-    merged["sleep_forecast"] = sleep_forecast
     merged["illness_model_trained"] = illness_model_trained
     merged["health_status"] = health_status
     merged["illness_prediction"] = illness_risk_final
@@ -769,11 +710,6 @@ def predict_endpoint():
     is_unhealthy = isinstance(illness_risk, str) and illness_risk.lower() in ("high", "medium")
     health_status = "unhealthy" if is_unhealthy else "healthy"
 
-    # Sleep forecast prediction
-    df = fetch_logs_df(pet_id)
-    sleep_series = df["sleep_hours"].tolist() if not df.empty else []
-    sleep_forecast = predict_future_sleep(sleep_series)
-
     # Build pseudo-probabilities from input to drive tips
     mood_prob = {str(mood).lower(): 1.0}
     activity_prob = {str(activity_level).lower(): 1.0}
@@ -782,7 +718,6 @@ def predict_endpoint():
 
     return jsonify({
         "illness_risk": illness_risk,
-        "sleep_forecast": sleep_forecast,
         "illness_model_trained": illness_model_trained,
         "health_status": health_status,
         # aliases for UI
@@ -937,7 +872,7 @@ def public_pet_page(pet_id):
             mood_prob_recent = df_recent['mood'].str.lower().value_counts(normalize=True).to_dict()
             activity_prob_recent = df_recent['activity_level'].str.lower().value_counts(normalize=True).to_dict()
             avg_sleep_recent = float(df_recent["sleep_hours"].mean())
-            sleep_trend_recent = forecast_sleep_trend(df_recent)
+            sleep_trend_recent = ""
 
         care_tips = build_care_recommendations(
             latest_risk or "low",
@@ -1127,7 +1062,6 @@ def daily_analysis_job():
         df = fetch_logs_df(pet["id"])
         if not df.empty:
             train_illness_model(df)  # retrain and persist illness model
-            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # retrain and persist sleep model
         result = analyze_pet(pet["id"])
         print(f"📊 Pet {pet['id']} analysis stored:", result)
 
@@ -1177,13 +1111,11 @@ def backfill_future_sleep_forecasts(days_ahead: int = 7):
             df['log_date'] = pd.to_datetime(df['log_date'])
             last_date = max(df['log_date']).date()
             train_df = df[df['log_date'] <= pd.to_datetime(last_date)]
-            sleep_series = train_df['sleep_hours'].tolist() if not train_df.empty else []
-            forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
 
             # Serialize full 7-day forecast once and attach to each future-date row.
             # Consumers can read the full series from any of the future prediction rows.
-            forecasts_json = json.dumps([float(x) for x in forecasts])
-            for i, val in enumerate(forecasts, start=1):
+            forecasts_json = json.dumps([])
+            for i in range(1, days_ahead + 1):
                 future_date = (last_date + timedelta(days=i)).isoformat()
                 # idempotent insert: skip if a prediction already exists for that date
                 existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", future_date).limit(1).execute()
@@ -1192,13 +1124,11 @@ def backfill_future_sleep_forecasts(days_ahead: int = 7):
                 payload = {
                     "pet_id": pet_id,
                     "prediction_date": future_date,
-                    # Keep a human-friendly single-day summary, but store the full series in sleep_forecast
-                    "prediction_text": f"Forecasted sleep: {round(float(val), 1)} hours",
+                    # Sleep forecast has been removed
+                    "prediction_text": f"Forecast for day {i}",
                     "risk_level": "low",
                     "suggestions": "",
-                    "activity_prob": 0,
-                    # store full 7-day forecast as JSON string for backward-compatible storage
-                    "sleep_forecast": forecasts_json
+                    "activity_prob": 0
                 }
                 try:
                     supabase.table("predictions").insert(payload).execute()
@@ -1289,19 +1219,8 @@ def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, 
                     else:
                         sleep_series = []
 
-                    # Compute forecast and update prediction row
-                    try:
-                        forecasts = predict_future_sleep(sleep_series, days_ahead=days_ahead)
-                        # ensure list and pad if necessary
-                        if not isinstance(forecasts, list):
-                            forecasts = [float(sleep_series[-1]) if sleep_series else 12.0 for _ in range(days_ahead)]
-                        if len(forecasts) < days_ahead:
-                            last = float(sleep_series[-1]) if sleep_series else 12.0
-                            forecasts = list(forecasts) + [last for _ in range(days_ahead - len(forecasts))]
-                        forecasts_json = json.dumps([float(x) for x in forecasts])
-                    except Exception as e:
-                        print(f"[WARN] Failed to compute forecast for prediction id={pred_id} pet={pet_id} date={pred_date}: {e}")
-                        forecasts_json = json.dumps([12.0 for _ in range(days_ahead)])
+                    # Sleep forecast has been removed
+                    forecasts_json = json.dumps([])
 
                     if dry_run:
                         print(f"[DRY] Would update prediction id={pred_id} pet={pet_id} with sleep_forecast={forecasts_json}")
@@ -1418,227 +1337,6 @@ def predict_illness_risk(mood, sleep_hours, activity_level, model_path=os.path.j
     else:
         return "low"
 
-def predict_future_sleep(sleep_series, days_ahead=7, model_path=os.path.join(MODELS_DIR, "sleep_model.keras")):
-    """Predict future sleep using improved features and ensemble approach.
-    Improvements:
-    - More lag features (7-day and 14-day patterns)
-    - Rolling statistics (mean, std, min, max)
-    - Trend analysis
-    - Better handling of weekday patterns
-    - Ensemble of RandomForest + gradient boosting
-    - Feature normalization
-    """
-    arr = np.array(sleep_series).astype(float) if (sleep_series is not None and len(sleep_series) > 0) else np.array([])
-    days_ahead = int(days_ahead or 7)
-
-    # Empty input -> sensible default (12 hours is normal for pets)
-    if arr.size == 0:
-        return [12.0 for _ in range(days_ahead)]
-
-    # Basic stats
-    recent_mean = float(np.mean(arr[-7:])) if arr.size >= 1 else 12.0
-    recent_std = float(np.std(arr[-7:])) if arr.size >= 2 else 0.5
-
-    # heuristic fallback with improved weekday modeling
-    def heuristic_preds(base_mean, n, start_index=0):
-        # Calculate weekday-specific means from history
-        weekday_means = {}
-        for i, val in enumerate(arr):
-            dow = i % 7
-            if dow not in weekday_means:
-                weekday_means[dow] = []
-            weekday_means[dow].append(val)
-        
-        # Get average for each weekday
-        weekday_avg = {}
-        for dow, vals in weekday_means.items():
-            weekday_avg[dow] = np.mean(vals) if vals else base_mean
-        
-        out = []
-        for i in range(n):
-            dow = (start_index + i) % 7
-            # Use weekday-specific average if available
-            pred = weekday_avg.get(dow, base_mean)
-            # Add small noise for realism
-            noise = float(np.random.normal(0, max(0.1, recent_std * 0.1)))
-            p = pred + noise
-            out.append(round(max(0.0, min(24.0, p)), 1))
-        return out
-
-    # If not enough history, rely on improved heuristic
-    if arr.size < 10:
-        return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
-
-    # Enhanced feature engineering
-    def create_features(arr, index):
-        """Create rich feature set for given index"""
-        features = []
-        
-        # Lag features (last 7 days)
-        for i in range(1, min(8, index + 1)):
-            if index - i >= 0:
-                features.append(arr[index - i])
-            else:
-                features.append(recent_mean)
-        
-        # Pad if less than 7 lags available
-        while len(features) < 7:
-            features.append(recent_mean)
-        
-        # Rolling statistics (last 7 days)
-        window_vals = arr[max(0, index-7):index] if index > 0 else []
-        if len(window_vals) >= 2:
-            features.append(np.mean(window_vals))  # rolling mean
-            features.append(np.std(window_vals))   # rolling std
-            features.append(np.min(window_vals))   # rolling min
-            features.append(np.max(window_vals))   # rolling max
-        else:
-            features.extend([recent_mean, recent_std, recent_mean, recent_mean])
-        
-        # Trend feature (difference between recent and older average)
-        if index >= 14:
-            recent_avg = np.mean(arr[index-7:index])
-            older_avg = np.mean(arr[index-14:index-7])
-            trend = recent_avg - older_avg
-        else:
-            trend = 0.0
-        features.append(trend)
-        
-        # Day of week (one-hot encoded would be better, but keeping simple)
-        dow = index % 7
-        features.append(dow)
-        
-        # Is weekend (binary feature)
-        is_weekend = 1.0 if dow in [5, 6] else 0.0
-        features.append(is_weekend)
-        
-        return features
-    
-    # Build supervised dataset with enhanced features
-    X_rows = []
-    y = []
-    min_samples = 10  # Need at least this many samples
-    
-    for t in range(min_samples, len(arr)):
-        feats = create_features(arr, t)
-        X_rows.append(feats)
-        y.append(arr[t])
-    
-    X = np.array(X_rows) if X_rows else np.empty((0, 0))
-    y = np.array(y) if y else np.array([])
-
-    # If we couldn't build enough supervised examples, fallback to heuristic
-    if X.shape[0] < 5:
-        return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
-
-    # Feature normalization using StandardScaler
-    try:
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.ensemble import GradientBoostingRegressor
-        from sklearn.linear_model import Ridge
-        
-        # Normalize features for better model performance
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        
-        # Train ensemble of models for better predictions
-        # RandomForest is good at capturing non-linear patterns
-        rf = RandomForestRegressor(
-            n_estimators=150,
-            max_depth=10,
-            min_samples_split=3,
-            min_samples_leaf=2,
-            random_state=42
-        )
-        
-        # Gradient Boosting for sequential pattern learning
-        gb = GradientBoostingRegressor(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=42
-        )
-        
-        # Ridge regression for linear trends
-        ridge = Ridge(alpha=1.0, random_state=42)
-        
-        # Train all models
-        rf.fit(X_scaled, y)
-        gb.fit(X_scaled, y)
-        ridge.fit(X_scaled, y)
-        
-        # Generate predictions using ensemble
-        preds = []
-        
-        # For iterative forecasting, we need to maintain state
-        # Use the full array for feature generation
-        forecast_arr = list(arr)
-        
-        for i in range(days_ahead):
-            # Create features for next prediction
-            feats = create_features(np.array(forecast_arr), len(forecast_arr))
-            feats_scaled = scaler.transform([feats])
-            
-            # Ensemble prediction (weighted average)
-            rf_pred = float(rf.predict(feats_scaled)[0])
-            gb_pred = float(gb.predict(feats_scaled)[0])
-            ridge_pred = float(ridge.predict(feats_scaled)[0])
-            
-            # Weighted ensemble: RF gets most weight, then GB, then Ridge
-            ensemble_pred = 0.5 * rf_pred + 0.3 * gb_pred + 0.2 * ridge_pred
-            
-            # Clip to valid range
-            ensemble_pred = max(0.0, min(24.0, ensemble_pred))
-            
-            preds.append(ensemble_pred)
-            
-            # Add prediction to array for next iteration
-            forecast_arr.append(ensemble_pred)
-        
-        # Post-processing: smooth extreme predictions
-        smoothed_preds = []
-        for i, pred in enumerate(preds):
-            # Calculate expected value based on weekday pattern
-            dow = (len(arr) + i) % 7
-            weekday_history = [arr[j] for j in range(len(arr)) if j % 7 == dow]
-            expected = np.mean(weekday_history) if weekday_history else recent_mean
-            
-            # If prediction deviates too much from expected, blend them
-            deviation = abs(pred - expected)
-            if deviation > 3.0:  # More than 3 hours deviation
-                # Blend: 70% prediction, 30% expected
-                pred = 0.7 * pred + 0.3 * expected
-            
-            smoothed_preds.append(round(max(0.0, min(24.0, pred)), 1))
-        
-        # Final check: if predictions are too flat, add weekday variation
-        if np.std(smoothed_preds) < 0.2:
-            # Add natural weekday variation
-            for i in range(len(smoothed_preds)):
-                dow = (len(arr) + i) % 7
-                # Weekend adjustment
-                if dow in [5, 6]:
-                    smoothed_preds[i] = round(smoothed_preds[i] + 0.3, 1)
-                else:
-                    smoothed_preds[i] = round(smoothed_preds[i] - 0.1, 1)
-                smoothed_preds[i] = max(0.0, min(24.0, smoothed_preds[i]))
-        
-        return smoothed_preds
-        
-    except Exception as e:
-        print(f"Warning: Advanced model failed ({e}), using fallback")
-        # fallback to simple approach
-        try:
-            from sklearn.linear_model import LinearRegression
-            idx = np.arange(len(arr)).reshape(-1, 1)
-            lr = LinearRegression()
-            lr.fit(idx, arr)
-            future_idx = np.arange(len(arr), len(arr) + days_ahead).reshape(-1, 1)
-            out = lr.predict(future_idx).tolist()
-            return [round(max(0.0, min(24.0, float(x))), 1) for x in out]
-        except Exception:
-            return heuristic_preds(recent_mean, days_ahead, start_index=len(arr))
-
 # Force-train endpoint (useful in dev)
 @app.route("/train", methods=["POST"])
 def train_endpoint():
@@ -1650,7 +1348,6 @@ def train_endpoint():
             if df.empty:
                 return jsonify({"status":"no_data","message":"No behavior_logs for pet_id"}), 200
             train_illness_model(df)  # saves models/models.pkl
-            forecast_sleep_with_tf(df["sleep_hours"].tolist())  # saves models/sleep_model.keras
         else:
             # train on all pets combined
             resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
@@ -1663,7 +1360,6 @@ def train_endpoint():
             df_all['mood'] = df_all['mood'].fillna('Unknown').astype(str)
             df_all['activity_level'] = df_all['activity_level'].fillna('Unknown').astype(str)
             train_illness_model(df_all)
-            forecast_sleep_with_tf(df_all["sleep_hours"].tolist())
         return jsonify({"status":"ok","message":"Models trained"}), 200
     except Exception as e:
         return jsonify({"status":"error","message":str(e)}), 500
@@ -1690,8 +1386,8 @@ def debug_sleep_forecast():
         sleep_series = df["sleep_hours"].tolist()
         sleep_dates = df["log_date"].tolist()
         
-        # Generate predictions with debug info
-        predictions = predict_future_sleep(sleep_series)
+        # Sleep forecast has been removed
+        predictions = []
         
         # Calculate statistics
         avg_sleep = np.mean(sleep_series) if sleep_series else 0
@@ -1820,29 +1516,7 @@ def test_model_accuracy():
             except Exception as e:
                 print(f"Illness test error for pet {pid}: {e}")
             
-            # --- Test Sleep Forecasting ---
-            try:
-                # Use training data to forecast
-                train_sleep_series = train_df['sleep_hours'].tolist()
-                predicted_sleep = predict_future_sleep(train_sleep_series, days_ahead=len(test_df))
-                
-                actual_sleep = test_df['sleep_hours'].tolist()
-                
-                # Only compare same length
-                min_len = min(len(predicted_sleep), len(actual_sleep))
-                sleep_y_pred.extend(predicted_sleep[:min_len])
-                sleep_y_true.extend(actual_sleep[:min_len])
-                
-                for i in range(min_len):
-                    results["sleep_forecast"]["details"].append({
-                        "pet_id": pid,
-                        "date": str(test_df.iloc[i]['log_date'].date()),
-                        "predicted": round(predicted_sleep[i], 2),
-                        "actual": round(actual_sleep[i], 2),
-                        "error": round(abs(predicted_sleep[i] - actual_sleep[i]), 2)
-                    })
-            except Exception as e:
-                print(f"Sleep test error for pet {pid}: {e}")
+            # Sleep forecast has been removed
         
         # Calculate illness prediction metrics
         if illness_y_true and illness_y_pred:
@@ -1984,7 +1658,6 @@ def add_behavior_log_and_retrain(pet_id, log_data, future_days=7):
     df = fetch_logs_df(pet_id, limit=10000)
     if not df.empty:
         train_illness_model(df)
-        forecast_sleep_with_tf(df["sleep_hours"].tolist())
         # Predict and store health and sleep for every date in the logs (refresh all predictions)
         all_dates = sorted(df['log_date'].unique())
         for d in all_dates:
