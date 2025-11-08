@@ -5793,20 +5793,6 @@ void _disconnectDevice() async {
               ),
             ],
           ),
-          if (logsNeeded != null && logsNeeded > 0) ...[
-            SizedBox(height: 8),
-            Padding(
-              padding: EdgeInsets.only(left: 28),
-              child: Text(
-                '💡 Log $logsNeeded more entries for accurate analysis',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: cardColor.withOpacity(0.8),
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -6674,7 +6660,7 @@ void _disconnectDevice() async {
 
                           // Symptoms Section (replaces notes)
                           _buildFormSection(
-                            title: "Health Symptoms",
+                            title: "Clinical Signs",
                             icon: Icons.medical_services,
                             iconColor: Colors.red,
                             child: Column(
@@ -6682,7 +6668,7 @@ void _disconnectDevice() async {
                               children: [
                                 SizedBox(height: 8),
                                 Text(
-                                  "Check any symptoms your pet is experiencing:",
+                                  "Check any signs your pet is experiencing:",
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.grey.shade600,

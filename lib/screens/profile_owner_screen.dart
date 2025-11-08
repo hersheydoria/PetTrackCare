@@ -3755,6 +3755,7 @@ class _AddPetFormState extends State<_AddPetForm> {
     'Maltese',
     'Papillon',
     'Pug',
+    'Other (e.g., Doodle mix, Terrier mix)',
   ];
 
   final List<String> catBreeds = [
@@ -3768,6 +3769,7 @@ class _AddPetFormState extends State<_AddPetForm> {
     'Sphynx',
     'American Shorthair',
     'Exotic Shorthair',
+    'Other (e.g., Tabby mix, Calico)',
   ];
 
   @override
@@ -4271,22 +4273,30 @@ class _AddPetFormState extends State<_AddPetForm> {
                   itemBuilder: (context, index) {
                     final breedOption = breeds[index];
                     final isSelected = breed == breedOption;
+                    final isOther = breedOption.startsWith('Other');
+                    
                     return InkWell(
                       onTap: () {
-                        setState(() {
-                          breed = breedOption;
-                        });
-                        Navigator.pop(context);
+                        if (isOther) {
+                          // Show custom breed input dialog
+                          Navigator.pop(context);
+                          _showCustomBreedDialog();
+                        } else {
+                          setState(() {
+                            breed = breedOption;
+                          });
+                          Navigator.pop(context);
+                        }
                       },
                       borderRadius: BorderRadius.circular(12),
                       child: Container(
                         padding: EdgeInsets.all(16),
                         margin: EdgeInsets.only(bottom: 8),
                         decoration: BoxDecoration(
-                          color: isSelected ? coral.withOpacity(0.1) : Colors.transparent,
+                          color: isSelected ? coral.withOpacity(0.1) : (isOther ? Colors.blue.shade50 : Colors.transparent),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isSelected ? coral : Colors.grey.shade200,
+                            color: isSelected ? coral : (isOther ? Colors.blue.shade200 : Colors.grey.shade200),
                           ),
                         ),
                         child: Row(
@@ -4296,8 +4306,8 @@ class _AddPetFormState extends State<_AddPetForm> {
                                 breedOption,
                                 style: TextStyle(
                                   fontSize: 16,
-                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                                  color: isSelected ? deepRed : Colors.black87,
+                                  fontWeight: isSelected ? FontWeight.w600 : (isOther ? FontWeight.w500 : FontWeight.w400),
+                                  color: isSelected ? deepRed : (isOther ? Colors.blue.shade700 : Colors.black87),
                                 ),
                               ),
                             ),
@@ -4305,6 +4315,12 @@ class _AddPetFormState extends State<_AddPetForm> {
                               Icon(
                                 Icons.check_circle,
                                 color: coral,
+                                size: 20,
+                              )
+                            else if (isOther)
+                              Icon(
+                                Icons.edit,
+                                color: Colors.blue.shade700,
                                 size: 20,
                               ),
                           ],
@@ -4319,6 +4335,185 @@ class _AddPetFormState extends State<_AddPetForm> {
           ),
         );
       },
+    );
+  }
+
+  // Show custom breed input dialog
+  void _showCustomBreedDialog() {
+    final TextEditingController customBreedController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                  border: Border(
+                    bottom: BorderSide(color: Colors.blue.shade200, width: 1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade100,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.edit,
+                        color: Colors.blue.shade700,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Enter Custom Breed',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue.shade900,
+                            ),
+                          ),
+                          Text(
+                            'Not finding your ${_species.toLowerCase()}\'s breed?',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.blue.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Content
+              Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Breed Name',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade800,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    TextField(
+                      controller: customBreedController,
+                      decoration: InputDecoration(
+                        hintText: _species == 'Dog' 
+                          ? 'e.g., Labrador Mix, Street Dog, Terrier Mix' 
+                          : 'e.g., Tabby Mix, Calico, Bengal Mix',
+                        hintStyle: TextStyle(color: Colors.grey.shade400),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.blue.shade200),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.blue.shade200),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.blue.shade700, width: 2),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        prefixIcon: Icon(Icons.pets, color: Colors.blue.shade700),
+                      ),
+                      style: TextStyle(fontSize: 16),
+                      maxLength: 50,
+                    ),
+                  ],
+                ),
+              ),
+              // Action buttons
+              Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(
+                        'Cancel',
+                        style: TextStyle(color: Colors.grey.shade600),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: () {
+                        final customBreed = customBreedController.text.trim();
+                        if (customBreed.isNotEmpty) {
+                          setState(() {
+                            breed = customBreed;
+                          });
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Breed set to: $customBreed'),
+                              backgroundColor: Colors.blue,
+                              behavior: SnackBarBehavior.floating,
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Please enter a breed name'),
+                              backgroundColor: Colors.orange,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade700,
+                        padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: Text(
+                        'Confirm',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
