@@ -235,21 +235,6 @@ def is_illness_model_trained(model_path=os.path.join(MODELS_DIR, "illness_model.
     except Exception:
         return False
 
-def get_latest_prediction_risk(pet_id: str):
-    """Read the latest risk_level from predictions table for a pet (prediction_date or created_at)."""
-    try:
-        resp = supabase.table("predictions").select("risk_level").eq("pet_id", pet_id).order("prediction_date", desc=True).limit(1).execute()
-        rows = resp.data or []
-        if not rows:
-            resp = supabase.table("predictions").select("risk_level").eq("pet_id", pet_id).order("created_at", desc=True).limit(1).execute()
-            rows = resp.data or []
-        if rows:
-            val = rows[0].get("risk_level") or rows[0].get("risk")
-            return str(val).lower() if val else None
-    except Exception:
-        pass
-    return None
-
 def build_care_recommendations(illness_risk, mood_prob, activity_prob, avg_sleep, sleep_trend):
     """Return structured care tips: actions to take and what to expect. 
     Note: mood_prob, avg_sleep, and sleep_trend parameters are deprecated (no longer used)."""
@@ -434,8 +419,8 @@ def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
     return a if sev.get(a, 0) >= sev.get(b, 0) else b
 
 # ------------------- Core Analysis -------------------
-def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
-    """Analyze provided DataFrame of logs for pet_id and (optionally) store prediction for prediction_date."""
+def analyze_pet_df(pet_id, df, prediction_date=None):
+    """Analyze provided DataFrame of logs for pet_id and return analysis results (no storage to predictions table)."""
     if df.empty:
         return {
             "trend": "No data available.",
@@ -499,30 +484,7 @@ def analyze_pet_df(pet_id, df, prediction_date=None, store=True):
                  if prediction_date is not None
                  else datetime.utcnow().date().isoformat())
 
-    payload = {
-        "pet_id": pet_id,
-        "prediction_date": pred_date,
-        "prediction_text": trend,
-        "risk_level": risk_level,
-        "suggestions": recommendation,
-        "activity_prob": activity_prob.get("high", 0)
-    }
-
-    if store:
-        try:
-            # check existing prediction for idempotency
-            existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", pred_date).execute()
-            if not (existing.data):
-                resp = supabase.table("predictions").insert(payload).execute()
-                if getattr(resp, "error", None):
-                    print(f"[ERROR] Failed to insert prediction for pet {pet_id} date {pred_date}: {resp.error}")
-                else:
-                    print(f"[INFO] Inserted prediction for pet {pet_id} date {pred_date}")
-            else:
-                # optionally update? for now skip if existing
-                print(f"[INFO] Prediction already exists for pet {pet_id} date {pred_date}; skipping insert.")
-        except Exception as e:
-            print(f"Error storing prediction for pet {pet_id} date {pred_date}: {e}")
+    # Note: predictions table storage removed - only fresh analysis is returned
 
     return {
         "trend": trend,
@@ -539,76 +501,6 @@ def analyze_pet(pet_id):
     """Backward-compatible wrapper: fetch logs then analyze & store prediction for today."""
     df = fetch_logs_df(pet_id)
     return analyze_pet_df(pet_id, df, prediction_date=datetime.utcnow().date().isoformat())
-
-# ------------------- Migration: move behavior_logs into predictions -------------------
-def migrate_behavior_logs_to_predictions(limit_per_pet=1000):
-    """
-    Fetch behavior_logs and generate/store predictions historically.
-    For each pet, for each unique log_date, analyze logs up to that date and insert prediction if missing.
-    This is IDEMPOTENT: runs every time but only processes records that don't exist in predictions table yet.
-    """
-    print("Starting idempotent migration of behavior_logs -> predictions...")
-    try:
-        resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
-        logs = resp.data or []
-        total_logs = len(logs)
-        print(f"Found {total_logs} behavior_logs records.")
-        if not logs:
-            print("No behavior_logs to migrate.")
-            return
-
-        df_all = pd.DataFrame(logs)
-        # normalize types
-        df_all['log_date'] = pd.to_datetime(df_all['log_date']).dt.date
-        df_all['sleep_hours'] = pd.to_numeric(df_all.get('sleep_hours', 0), errors='coerce').fillna(0.0)
-        df_all['mood'] = df_all['mood'].fillna('Unknown').astype(str)
-        df_all['activity_level'] = df_all['activity_level'].fillna('Unknown').astype(str)
-
-        inserted_total = 0
-        analyzed_total = 0
-        pet_count = 0
-
-        for pet_id, group in df_all.groupby('pet_id'):
-            pet_count += 1
-            # Unique sorted dates
-            dates = sorted(group['log_date'].unique())
-            print(f"Processing pet {pet_id} with {len(dates)} unique dates.")
-            for d in dates[:limit_per_pet]:
-                analyzed_total += 1
-                # build df of logs up to and including d
-                subset = group[group['log_date'] <= d].copy()
-                # convert back to expected format for analyze_pet_df
-                subset['log_date'] = pd.to_datetime(subset['log_date'])
-                # train models on full pet logs (optional step - fine-tune)
-                try:
-                    train_illness_model(subset)
-                except Exception as e:
-                    print(f"Model training error for pet {pet_id} on date {d}: {e}")
-
-                # Check if prediction already exists for this pet and date (IDEMPOTENT CHECK)
-                existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", d.isoformat()).limit(1).execute()
-                if existing.data and len(existing.data) > 0:
-                    # Prediction already exists, skip this date
-                    continue
-                
-                # analyze and store prediction for that historic date
-                try:
-                    # analyze_pet_df will attempt to store (store=True)
-                    analyze_pet_df(pet_id, subset, prediction_date=d.isoformat(), store=True)
-                    # Verify insertion
-                    verify = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", d.isoformat()).limit(1).execute()
-                    if verify.data and len(verify.data) > 0:
-                        inserted_total += 1
-                except Exception as e:
-                    print(f"Analysis error for pet {pet_id} on date {d}: {e}")
-
-        print(f"✓ Migration completed. Pets processed: {pet_count}, dates analyzed: {analyzed_total}, new predictions inserted: {inserted_total}.")
-            
-    except Exception as e:
-        print(f"Unexpected error during migration: {e}")
-
-# ------------------- Core Analysis -------------------
-# Duplicate forecast_sleep_trend removed (the original one above analyze_pet_df is kept)
 
 # ------------------- Flask API -------------------
  
@@ -898,22 +790,11 @@ def public_pet_page(pet_id):
         pet_gender = pet.get("gender") or "Unknown"
         pet_health = pet.get("health") or "Unknown"
 
-        # fetch latest prediction for illness/risk info, if present
+        # Get current illness risk from fresh analysis (predictions table deprecated)
+        # The risk will be computed in the /analyze endpoint below
         latest_prediction_text = ""
         latest_suggestions = ""
-        latest_risk = None
-        try:
-            presp = supabase.table("predictions").select("prediction_text, risk_level, suggestions, created_at").eq("pet_id", pet_id).order("created_at", desc=True).limit(1).execute()
-            prows = presp.data or []
-            if prows:
-                p0 = prows[0]
-                latest_prediction_text = p0.get("prediction_text") or p0.get("prediction") or ""
-                latest_suggestions = p0.get("suggestions") or p0.get("recommendations") or ""
-                latest_risk = (p0.get("risk_level") or p0.get("risk") or None)
-        except Exception:
-            latest_prediction_text = ""
-            latest_suggestions = ""
-            latest_risk = None
+        latest_risk = None  # Will be set from current analysis
 
         # determine a simple color for risk badge
         if latest_risk:
@@ -931,14 +812,15 @@ def public_pet_page(pet_id):
 
         illness_model_trained = is_illness_model_trained()
         status_text = "Healthy"
-        try:
-            lr = str(latest_risk).lower() if latest_risk else ""
-            if ("high" in lr) or ("medium" in lr):
-                status_text = "Unhealthy"
-        except Exception:
-            status_text = "Healthy"
+        if latest_risk:
+            try:
+                lr = str(latest_risk).lower()
+                if ("high" in lr) or ("medium" in lr):
+                    status_text = "Unhealthy"
+            except Exception:
+                status_text = "Healthy"
 
-        # Build care tips for display using recent logs + latest risk
+        # Build care tips for display using recent logs + current risk from analysis
         df_recent = fetch_logs_df(pet_id, limit=60)
         if df_recent.empty:
             mood_prob_recent, activity_prob_recent = {}, {}
@@ -1167,163 +1049,9 @@ def start_scheduler():
     scheduler.start()
 
 
-def backfill_future_sleep_forecasts(days_ahead: int = 7):
-    """Backfill per-pet future sleep forecasts into the predictions table.
-
-    For each pet, use logs up to the latest available date and compute a
-    numeric forecast for the next `days_ahead` days. Insert a prediction row
-    for each future date when no prediction exists.
-    """
-    print(f"Starting backfill of future sleep forecasts (next {days_ahead} days)...")
-    try:
-        pets_resp = supabase.table("pets").select("id").execute()
-        for pet in pets_resp.data or []:
-            pet_id = pet.get("id")
-            if not pet_id:
-                continue
-            df = fetch_logs_df(pet_id, limit=10000)
-            if df.empty:
-                continue
-            # ensure proper datetime
-            df['log_date'] = pd.to_datetime(df['log_date'])
-            last_date = max(df['log_date']).date()
-            train_df = df[df['log_date'] <= pd.to_datetime(last_date)]
-
-            # Serialize full 7-day forecast once and attach to each future-date row.
-            # Consumers can read the full series from any of the future prediction rows.
-            forecasts_json = json.dumps([])
-            for i in range(1, days_ahead + 1):
-                future_date = (last_date + timedelta(days=i)).isoformat()
-                # idempotent insert: skip if a prediction already exists for that date
-                existing = supabase.table("predictions").select("id").eq("pet_id", pet_id).eq("prediction_date", future_date).limit(1).execute()
-                if existing.data:
-                    continue
-                payload = {
-                    "pet_id": pet_id,
-                    "prediction_date": future_date,
-                    # Sleep forecast has been removed
-                    "prediction_text": f"Forecast for day {i}",
-                    "risk_level": "low",
-                    "suggestions": "",
-                    "activity_prob": 0
-                }
-                try:
-                    supabase.table("predictions").insert(payload).execute()
-                except Exception:
-                    # don't fail the whole backfill for one insert
-                    continue
-
-        print("Backfill completed.")
-    except Exception as e:
-        print(f"Backfill error: {e}")
-
-
-def migrate_legacy_sleep_forecasts(days_ahead: int = 7, batch_limit: int = 500, dry_run: bool = False):
-    """Paginated migration to update prediction rows with a full `days_ahead`-day
-    numeric `sleep_forecast` stored as a JSON string.
-
-    - IDEMPOTENT: Scans `predictions` in batches and only updates rows where
-      `sleep_forecast` is missing, empty, or shorter than `days_ahead`.
-    - For each candidate row, computes forecasts using behavior_logs up to
-      the prediction_date to avoid leakage.
-    - Runs every time but only processes records that need updating.
-    - dry_run=True will only print what would be updated.
-    """
-    print(f"Starting idempotent migration of legacy sleep_forecast to {days_ahead}-day series (batch={batch_limit}, dry_run={dry_run})...")
-    try:
-        offset = 0
-        total_checked = 0
-        total_updated = 0
-        while True:
-            resp = supabase.table("predictions").select("id, pet_id, prediction_date, sleep_forecast").order("id", asc=True).range(offset, offset + batch_limit - 1).execute()
-            rows = resp.data or []
-            if not rows:
-                break
-
-            for row in rows:
-                total_checked += 1
-                try:
-                    pred_id = row.get("id")
-                    pet_id = row.get("pet_id")
-                    pred_date_raw = row.get("prediction_date")
-                    sf = row.get("sleep_forecast")
-
-                    # Normalize prediction_date
-                    if not pred_date_raw:
-                        # skip rows without a clear prediction date
-                        continue
-                    try:
-                        pred_date = pd.to_datetime(pred_date_raw).date()
-                    except Exception:
-                        continue
-
-                    # Parse existing sleep_forecast
-                    parsed = None
-                    if sf is None:
-                        parsed = []
-                    else:
-                        # It's commonly stored as a JSON string
-                        if isinstance(sf, str):
-                            try:
-                                parsed = json.loads(sf)
-                            except Exception:
-                                # maybe a numeric string
-                                try:
-                                    parsed = [float(sf)]
-                                except Exception:
-                                    parsed = []
-                        elif isinstance(sf, (list, tuple)):
-                            parsed = list(sf)
-                        else:
-                            # numeric or unknown
-                            try:
-                                parsed = [float(sf)]
-                            except Exception:
-                                parsed = []
-
-                    # If already full-length, skip
-                    if isinstance(parsed, list) and len(parsed) >= int(days_ahead):
-                        continue
-
-                    # Build historical logs up to prediction_date to avoid leakage
-                    logs_resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).lte("log_date", pred_date.isoformat()).order("log_date", desc=False).limit(10000).execute()
-                    logs = logs_resp.data or []
-                    df_logs = pd.DataFrame(logs) if logs else pd.DataFrame()
-                    
-                    # Sleep forecast has been removed (sleep tracking no longer collected)
-                    forecasts_json = json.dumps([])
-
-                    if dry_run:
-                        print(f"[DRY] Would update prediction id={pred_id} pet={pet_id} with sleep_forecast={forecasts_json}")
-                    else:
-                        update_resp = supabase.table("predictions").update({"sleep_forecast": forecasts_json}).eq("id", pred_id).execute()
-                        if getattr(update_resp, "error", None):
-                            print(f"Failed to update prediction id={pred_id} pet={pet_id}: {getattr(update_resp, 'error', '')}")
-                        else:
-                            total_updated += 1
-                except Exception as e:
-                    print(f"Error processing prediction row {row.get('id')}: {e}")
-
-            offset += batch_limit
-
-        print(f"✓ Migration complete. Checked {total_checked} rows, updated {total_updated} rows.")
-                
-    except Exception as e:
-        print(f"Unexpected error during legacy sleep_forecast migration: {e}")
-
-# The module's CLI dispatch / startup runner is placed at the end of the file
-# to ensure all functions are defined before any task is invoked. See the
-# `if __name__ == '__main__'` block appended to the end of this file.
-
-def store_prediction(pet_id, prediction, risk_level, recommendation):
-    # kept for backward compatibility
-    supabase.table("predictions").insert({
-        "pet_id": pet_id,
-        "prediction_date": datetime.utcnow().date().isoformat(),
-        "prediction_text": prediction,
-        "risk_level": risk_level,
-        "suggestions": recommendation
-    }).execute()
+# Removed: backfill_future_sleep_forecasts() - predictions table deprecated
+# Removed: migrate_legacy_sleep_forecasts() - predictions table deprecated  
+# Removed: store_prediction() - predictions table deprecated
 
 def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count=0, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     """
@@ -1727,7 +1455,7 @@ def test_accuracy_summary():
         
         logs_resp = supabase.table("behavior_logs").select("id", count="exact").limit(1).execute()
         
-        preds_resp = supabase.table("predictions").select("id", count="exact").limit(1).execute()
+        # Removed: predictions table query - predictions table deprecated
         
         # Load illness model metadata if available
         model_metadata = None

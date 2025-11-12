@@ -10,6 +10,7 @@ import 'package:flutter/services.dart'; // for Clipboard and HapticFeedback
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:async'; 
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
 
@@ -106,6 +107,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   // loading flag to know when we've finished fetching pets
   bool _loadingPets = true;
+  
+  // Request tracking to prevent stale responses from overwriting current pet's analysis
+  String? _currentAnalysisRequestId;
 
   String backendUrl = "https://pettrackcare.onrender.com/analyze";
   Map<String, double> _moodProb = {};
@@ -270,7 +274,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       final results = await Future.wait([
         _fetchBehaviorDates(),
         _fetchAnalyzeFromBackend(),
-        _fetchLatestAnalysis(),
+        // _fetchLatestAnalysis() removed - predictions table deprecated
         _fetchLatestLocationForPet(),
       ]);
 
@@ -305,6 +309,26 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _loadingLocationData = false;
         });
       }
+    }
+  }
+
+  // Helper method to save selected pet ID to persistent storage
+  Future<void> _saveSelectedPetId(String petId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_pet_id', petId);
+    } catch (e) {
+      // Silent fail - not critical if we can't save preference
+    }
+  }
+
+  // Helper method to restore previously selected pet ID from persistent storage
+  Future<String?> _getLastSelectedPetId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('selected_pet_id');
+    } catch (e) {
+      return null;
     }
   }
 
@@ -364,17 +388,30 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       
       if (list.isNotEmpty) {
         Map<String, dynamic>? selected;
-        // prefer widget.initialPet if provided (match by id), otherwise pick first
+        
+        // Try to restore previously selected pet
+        final lastSelectedPetId = await _getLastSelectedPetId();
+        
         if (widget.initialPet != null) {
+          // Prefer widget.initialPet if provided (match by id)
           final initId = widget.initialPet!['id'];
           try {
             selected = list.firstWhere((p) => p['id'] == initId, orElse: () => widget.initialPet!);
           } catch (_) {
             selected = widget.initialPet;
           }
+        } else if (lastSelectedPetId != null) {
+          // Try to restore the last selected pet
+          try {
+            selected = list.firstWhere((p) => p['id'] == lastSelectedPetId, orElse: () => list.first);
+          } catch (_) {
+            selected = list.first;
+          }
         } else {
+          // Fallback to first pet
           selected = list.first;
         }
+        
         setState(() {
           _pets = list;
           _selectedPet = selected;
@@ -389,12 +426,18 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // stop showing loader as soon as we have pet data
           _loadingPets = false;
         });
+        
+        // Save the selected pet ID for future sessions
+        if (selected != null) {
+          _saveSelectedPetId(selected['id']);
+        }
+        
         // Trigger additional fetches in background so UI can render immediately.
         // We intentionally do NOT await these so they don't keep the loader visible
         _fetchBehaviorDates();
         _fetchAnalyzeFromBackend();
-        _fetchLatestAnalysis();
-        _fetchLatestHealthInsights(); // <-- fetch health insights for today's log
+        // _fetchLatestAnalysis() removed - predictions table deprecated
+        _fetchLatestHealthInsights(); // <-- fetch health insights for last 7 days
         _fetchLatestLocationForPet(); // <-- fetch latest GPS/device location
       } else {
         // no pets found
@@ -410,57 +453,18 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
-  Future<void> _fetchLatestAnalysis() async {
-    if (_selectedPet == null) return;
-    final petId = _selectedPet!['id'];
-    final response = await Supabase.instance.client
-        .from('predictions')
-        .select()
-        .eq('pet_id', petId)
-        .order('created_at', ascending: false)
-        .limit(1);
+  // Removed: _fetchLatestAnalysis() function - predictions table is deprecated
+  // Analysis is now fetched directly from the /analyze endpoint via _fetchHealthAnalysis()
+  // The app now calls _fetchHealthAnalysis() which gets fresh analysis from /analyze endpoint
 
-    final data = response as List?;
-    if (data != null && data.isNotEmpty) {
-      final analysis = data.first as Map<String, dynamic>;
-      // Safely read DB fields; only assign if present
-      final pred = (analysis['prediction_text'] ?? analysis['prediction'] ?? analysis['trend'])?.toString();
-      final rec = (analysis['suggestions'] ?? analysis['recommendation'])?.toString();
-      final trends = analysis['trends'] as Map<String, dynamic>?; // may be absent
-
-      setState(() {
-        if (pred != null && pred.isNotEmpty) {
-          _prediction = pred;
-        }
-        if (rec != null && rec.isNotEmpty) {
-          _recommendation = rec;
-        }
-        if (trends != null) {
-          _moodProb = (trends['mood_probabilities'] as Map?)
-                  ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
-              _moodProb;
-          _activityProb = (trends['activity_probabilities'] as Map?)
-                  ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
-              _activityProb;
-        }
-      });
-    }
-
-    // also refresh calendar markers
-    await _fetchBehaviorDates();
-
-    // Fetch latest health insights from latest log
-    await _fetchLatestHealthInsights();
-  }
-
-  // Fetch health insights from backend analysis - backend trains on all per-pet data
+  // Fetch health insights from backend analysis - only last 7 days to prevent confusion about timeframe
   Future<void> _fetchLatestHealthInsights() async {
     if (_selectedPet == null) return;
     final petId = _selectedPet!['id'];
     
     try {
       // The backend now continuously trains models per pet, so we rely on its analysis
-      // Fetch ALL behavior logs to show what the backend trained on
+      // Fetch ALL behavior logs to determine which are within last 7 days
       final response = await Supabase.instance.client
           .from('behavior_logs')
           .select()
@@ -474,14 +478,28 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       List<Widget> insights = [];
       
       if (data != null && data.isNotEmpty) {
+        // Filter logs to last 7 days only
+        final sevenDaysAgo = DateTime.now().subtract(Duration(days: 7));
+        final logsInLast7Days = data.where((log) {
+          try {
+            final logDate = DateTime.parse(log['log_date'].toString());
+            return logDate.isAfter(sevenDaysAgo);
+          } catch (e) {
+            print('DEBUG: Error parsing log date: ${log['log_date']} - $e');
+            return false;
+          }
+        }).toList();
+        
+        print('DEBUG: Filtered to ${logsInLast7Days.length} logs in last 7 days (total: ${data.length})');
+        
         // Only generate problem-specific insights if backend detected health issues
         if (_isUnhealthy) {
           print('DEBUG: Backend detected unhealthy status (risk: $_illnessRisk), analyzing specific issues...');
           
-          // Extract issues from the actual logs that triggered the unhealthy flag
+          // Extract issues from the actual logs that triggered the unhealthy flag (last 7 days only)
           List<String> problems = [];
           
-          for (final log in data.take(5)) { // Check last 5 logs for recent issues
+          for (final log in logsInLast7Days) { // Check logs from last 7 days for recent issues
             final foodIntake = log['food_intake']?.toString().toLowerCase() ?? '';
             final waterIntake = log['water_intake']?.toString().toLowerCase() ?? '';
             final bathroomHabits = log['bathroom_habits']?.toString().toLowerCase() ?? '';
@@ -653,14 +671,42 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // Call backend /analyze to get illness risk and analysis summary.
   Future<void> _fetchAnalyzeFromBackend() async {
     if (_selectedPet == null) return;
+    
+    final petId = _selectedPet!['id'];
+    // Generate unique request ID for this pet's analysis fetch
+    final requestId = '${petId}_${DateTime.now().millisecondsSinceEpoch}';
+    _currentAnalysisRequestId = requestId;
+    
     try {
       final resp = await http.post(
         Uri.parse(backendUrl),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pet_id': _selectedPet!['id']}),
+        body: jsonEncode({'pet_id': petId}),
+      ).timeout(
+        Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException('Analysis request timed out'),
       );
+      
+      // Verify this response is still relevant (pet hasn't changed or another request hasn't been sent)
+      if (_currentAnalysisRequestId != requestId) {
+        // Stale response - pet changed or new request was made
+        return;
+      }
+      
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        
+        // Double-check pet hasn't changed before updating state
+        if (_selectedPet == null || _selectedPet!['id'] != petId) {
+          return;
+        }
+        
+        // Verify response is for the correct pet
+        if (body['pet_id'] != null && body['pet_id'] != petId) {
+          print('WARNING: Backend returned analysis for wrong pet! Expected $petId, got ${body['pet_id']}');
+          return;
+        }
+        
         setState(() {
           _prediction = (body['trend'] ?? body['prediction_text'] ?? body['prediction'])?.toString();
           _recommendation = (body['recommendation'] ?? body['suggestions'])?.toString();
@@ -700,9 +746,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         });
       } else {
         // non-200 response: ignore for now
+        print('Analysis request returned status ${resp.statusCode}');
       }
+    } on TimeoutException catch (e) {
+      print('Analysis request timeout: $e');
+      // Silently fail - don't update UI
     } catch (e) {
       // ignore network errors silently or log
+      print('Analysis fetch error: $e');
     }
   }
 
@@ -2642,9 +2693,14 @@ void _disconnectDevice() async {
                 final petId = pet['id']?.toString();
                 if (petId == null) return;
                 
+                // Save pet selection for future sessions
+                _saveSelectedPetId(petId);
+                
                 // Quick UI update first for immediate response
                 setState(() {
                   _selectedPet = pet;
+                  // Reset request ID to ensure fresh analysis for new pet
+                  _currentAnalysisRequestId = null;
                   // clear any previously pinned map/device state to avoid showing other pet's info
                   _currentMapLocation = null;
                   _currentMapLabel = null;
@@ -5220,7 +5276,7 @@ void _disconnectDevice() async {
         await Future.wait([
           _fetchBehaviorDates(),
           _fetchAnalyzeFromBackend(),
-          _fetchLatestAnalysis(),
+          // _fetchLatestAnalysis() removed - predictions table deprecated
         ]);
         
         if (mounted) {
@@ -5399,69 +5455,45 @@ void _disconnectDevice() async {
                   width: 2,
                 ),
               ),
-              child: InkWell(
-                onTap: _isUnhealthy ? () => _showHealthDetailsDialog() : null,
-                borderRadius: BorderRadius.circular(16),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _isUnhealthy ? deepRed : Colors.green,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        _isUnhealthy ? Icons.warning : Icons.favorite,
-                        color: Colors.white,
-                        size: 24,
-                      ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _isUnhealthy ? deepRed : Colors.green,
+                      shape: BoxShape.circle,
                     ),
-                    SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _isUnhealthy ? "Health Alert" : "Healthy Status",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              color: _isUnhealthy ? deepRed : Colors.green.shade700,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            _isUnhealthy
-                                ? "Illness risk: ${_illnessRisk ?? 'Unknown'}"
-                                : "No illness predicted — pet appears healthy",
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: _isUnhealthy ? deepRed.withOpacity(0.8) : Colors.green.shade600,
-                            ),
-                          ),
-                          if (_isUnhealthy)
-                            Padding(
-                              padding: EdgeInsets.only(top: 4),
-                              child: Text(
-                                'Tap for details',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: deepRed.withOpacity(0.6),
-                                  fontStyle: FontStyle.italic,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                    child: Icon(
+                      _isUnhealthy ? Icons.warning : Icons.favorite,
+                      color: Colors.white,
+                      size: 24,
                     ),
-                    if (_isUnhealthy)
-                      Icon(
-                        Icons.arrow_forward_ios,
-                        color: deepRed,
-                        size: 16,
-                      ),
-                  ],
-                ),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _isUnhealthy ? "Health Alert" : "Healthy Status",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: _isUnhealthy ? deepRed : Colors.green.shade700,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          _getHealthStatusMessage(),
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: _isUnhealthy ? deepRed.withOpacity(0.8) : Colors.green.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
             
@@ -5531,12 +5563,6 @@ void _disconnectDevice() async {
             SizedBox(height: 12),
           ],
           
-          // Display model/analysis method notice if present
-          if (_modelNotice != null) ...[
-            _buildModelNoticeCard(_modelNotice!),
-            SizedBox(height: 12),
-          ],
-          
           // Health insights: show warnings if present, otherwise show status
           // If there are specific insights, display them
           if (_healthInsights.isNotEmpty) ...[
@@ -5554,13 +5580,26 @@ void _disconnectDevice() async {
                     children: [
                       Icon(Icons.insights, color: Colors.blue.shade700, size: 20),
                       SizedBox(width: 8),
-                      Text(
-                        'Health Insights',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue.shade800,
-                        ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Health Insights',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue.shade800,
+                            ),
+                          ),
+                          Text(
+                            'Last 7 days',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blue.shade600,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -5569,72 +5608,32 @@ void _disconnectDevice() async {
                 ],
               ),
             ),
-          ] else if (!_loadingAnalysisData) ...[
-            // No specific insights, but show illness risk alert if unhealthy
-            if (_isUnhealthy && _illnessRisk != null) ...[
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: deepRed.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: deepRed.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber, color: deepRed, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Health Alert Detected',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: deepRed,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Illness risk: ${_illnessRisk ?? 'Unknown'}. Check recent logs for details.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: deepRed.withOpacity(0.8),
-                            ),
-                          ),
-                        ],
+          ] else if (!_loadingAnalysisData && !_isUnhealthy) ...[
+            // Show normal status when there are no specific insights and pet is healthy
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Normal Patterns',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade800,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ] else ...[
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.green.shade200),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Normal Patterns',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green.shade800,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ],
           
           // Care Tips (only when risk is bad: medium/high)
@@ -5749,6 +5748,23 @@ void _disconnectDevice() async {
     );
   }
   
+  // Helper method to get health status message based on illness risk
+  String _getHealthStatusMessage() {
+    if (!_isUnhealthy) {
+      return "No illness predicted — pet appears healthy";
+    }
+    
+    final risk = _illnessRisk?.toLowerCase() ?? 'unknown';
+    
+    if (risk == 'high') {
+      return 'Veterinary consultation recommended. Pet may need immediate care.';
+    } else if (risk == 'medium') {
+      return 'Monitor closely. Pet may need care within 24-48 hours.';
+    } else {
+      return 'Illness risk: ${_illnessRisk ?? 'Unknown'}';
+    }
+  }
+  
   // Build data sufficiency notice card
   Widget _buildDataNoticeCard(Map<String, dynamic> notice) {
     final status = notice['status']?.toString() ?? 'unknown';
@@ -5799,6 +5815,77 @@ void _disconnectDevice() async {
   }
   
   // Build model/analysis method notice card
+  Widget _buildAnalysisResultsCard() {
+    // Determine colors and icons based on risk level
+    Color riskColor;
+    IconData riskIcon;
+    String riskDisplay;
+    String analysisText;
+    
+    final risk = _illnessRisk?.toLowerCase() ?? 'unknown';
+    
+    if (risk == 'high') {
+      riskColor = Colors.red;
+      riskIcon = Icons.warning_amber_rounded;
+      riskDisplay = 'High Risk';
+      analysisText = 'Veterinary consultation recommended. Pet may need immediate care.';
+    } else if (risk == 'medium') {
+      riskColor = Colors.orange;
+      riskIcon = Icons.info_rounded;
+      riskDisplay = 'Medium Risk';
+      analysisText = 'Monitor closely. Pet may need care within 24-48 hours.';
+    } else {
+      riskColor = Colors.green;
+      riskIcon = Icons.check_circle_rounded;
+      riskDisplay = 'Low Risk';
+      analysisText = _prediction ?? 'Pet is healthy. Continue routine care.';
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: riskColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: riskColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Risk Level Badge
+          Row(
+            children: [
+              Icon(riskIcon, color: riskColor, size: 22),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      riskDisplay,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: riskColor,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      analysisText,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildModelNoticeCard(Map<String, dynamic> notice) {
     final status = notice['status']?.toString() ?? 'unknown';
     final message = notice['message']?.toString() ?? '';
