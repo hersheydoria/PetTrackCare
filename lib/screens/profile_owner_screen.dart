@@ -435,7 +435,7 @@ Future<ImageSource?> _showImageSourceDialog() async {
                   child: Text(
                     'Cancel',
                     style: TextStyle(
-                      color: Colors.grey[600],
+                      color: Colors.red,
                       fontSize: 16,
                       fontWeight: FontWeight.w500,
                     ),
@@ -555,14 +555,14 @@ Future<bool?> _showImageConfirmationDialog(String imagePath) async {
                         padding: EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: Colors.grey.shade300),
+                          side: BorderSide(color: Colors.red),
                         ),
                       ),
                       onPressed: () => Navigator.pop(context, false),
                       child: Text(
                         'Cancel',
                         style: TextStyle(
-                          color: Colors.grey[600],
+                          color: Colors.red,
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
                         ),
@@ -573,7 +573,7 @@ Future<bool?> _showImageConfirmationDialog(String imagePath) async {
                   Expanded(
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: deepRed,
+                        backgroundColor: Colors.green,
                         foregroundColor: Colors.white,
                         padding: EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
@@ -886,9 +886,9 @@ Future<void> pickAndUploadImage() async {
         title: Text("Delete pet?"),
         content: Text("This will permanently delete the pet record."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel", style: TextStyle(color: Colors.red))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             onPressed: () => Navigator.pop(context, true),
             child: Text("Delete"),
           ),
@@ -952,10 +952,10 @@ Future<void> pickAndUploadImage() async {
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: Text('Cancel'),
+                      child: Text('Cancel', style: TextStyle(color: Colors.red)),
                     ),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                       onPressed: () => Navigator.pop(context, true),
                       child: Text('Logout'),
                     ),
@@ -1217,7 +1217,7 @@ Future<void> pickAndUploadImage() async {
                         margin: EdgeInsets.all(16),
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -1505,14 +1505,14 @@ Future<void> pickAndUploadImage() async {
                             height: 56,
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [deepRed, coral],
+                                colors: [Colors.green, Colors.green.shade600],
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: deepRed.withOpacity(0.3),
+                                  color: Colors.green.withOpacity(0.3),
                                   blurRadius: 15,
                                   offset: Offset(0, 5),
                                 ),
@@ -1634,10 +1634,10 @@ Future<void> pickAndUploadImage() async {
                                     actions: [
                                       TextButton(
                                         onPressed: () => Navigator.pop(context, false),
-                                        child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+                                        child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                       ),
                                       ElevatedButton(
-                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                                         onPressed: () => Navigator.pop(context, true),
                                         child: Text('Delete'),
                                       ),
@@ -1888,14 +1888,14 @@ Future<void> pickAndUploadImage() async {
                             height: 56,
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [deepRed, coral],
+                                colors: [Colors.green, Colors.green.shade600],
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: deepRed.withOpacity(0.3),
+                                  color: Colors.green.withOpacity(0.3),
                                   blurRadius: 15,
                                   offset: Offset(0, 5),
                                 ),
@@ -2272,14 +2272,14 @@ Future<void> pickAndUploadImage() async {
                               height: 56,
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
-                                  colors: [deepRed, coral],
+                                  colors: [Colors.green, Colors.green.shade600],
                                   begin: Alignment.centerLeft,
                                   end: Alignment.centerRight,
                                 ),
                                 borderRadius: BorderRadius.circular(16),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: deepRed.withOpacity(0.3),
+                                    color: Colors.green.withOpacity(0.3),
                                     blurRadius: 15,
                                     offset: Offset(0, 5),
                                   ),
@@ -2495,7 +2495,7 @@ Future<void> pickAndUploadImage() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Close'),
+            child: Text('Close', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -2616,7 +2616,7 @@ Future<void> pickAndUploadImage() async {
                   height: 48,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: deepRed,
+                      backgroundColor: Colors.red,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -2875,7 +2875,7 @@ Future<void> pickAndUploadImage() async {
                         flex: 2,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -4147,7 +4147,7 @@ class _AddPetFormState extends State<_AddPetForm> {
                                 );
                               },
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: deepRed,
+                                backgroundColor: Colors.green,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(10),
                                 ),
@@ -5339,7 +5339,7 @@ class _AddPetFormState extends State<_AddPetForm> {
                   ? CircularProgressIndicator(color: Colors.white)
                   : Text(widget.initialPet != null ? "Update Pet" : "Save Pet"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: deepRed,
+                backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),

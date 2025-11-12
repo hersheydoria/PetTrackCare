@@ -176,14 +176,14 @@ class PermissionService {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: Text('Cancel'),
+              child: Text('Cancel', style: TextStyle(color: Colors.red)),
             ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop(true);
                 openAppSettings();
               },
-              child: Text('Open Settings'),
+              child: Text('Open Settings', style: TextStyle(color: Colors.green)),
             ),
           ],
         );

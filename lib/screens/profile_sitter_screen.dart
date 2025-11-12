@@ -289,13 +289,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               width: double.infinity,
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   elevation: 3,
-                                  shadowColor: deepRed.withOpacity(0.3),
+                                  shadowColor: Colors.green.withOpacity(0.3),
                                 ),
                                 onPressed: isLoading ? null : () async {
                                   if (newName.trim().isEmpty) {
@@ -415,11 +415,11 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                       actions: [
                                         TextButton(
                                           onPressed: () => Navigator.pop(context, false),
-                                          child: Text('Cancel'),
+                                          child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                         ),
                                         TextButton(
                                           onPressed: () => Navigator.pop(context, true),
-                                          child: Text('Delete', style: TextStyle(color: Colors.red)),
+                                          child: Text('Delete', style: TextStyle(color: Colors.green)),
                                         ),
                                       ],
                                     ),
@@ -630,13 +630,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               width: double.infinity,
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   elevation: 3,
-                                  shadowColor: deepRed.withOpacity(0.3),
+                                  shadowColor: Colors.green.withOpacity(0.3),
                                 ),
                                 onPressed: isLoading ? null : () async {
                                   setSt(() => isLoading = true);
@@ -891,13 +891,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               width: double.infinity,
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   elevation: 3,
-                                  shadowColor: deepRed.withOpacity(0.3),
+                                  shadowColor: Colors.green.withOpacity(0.3),
                                 ),
                                 onPressed: _isLoading ? null : () async {
                                   if (_newPasswordController.text.isEmpty ||
@@ -1265,14 +1265,14 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                       padding: EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: Colors.grey.shade300),
+                        side: BorderSide(color: Colors.red.shade300),
                       ),
                     ),
                     onPressed: () => Navigator.pop(context),
                     child: Text(
                       'Close',
                       style: TextStyle(
-                        color: Colors.grey[600],
+                        color: Colors.red,
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1502,14 +1502,14 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: Colors.grey.shade300),
+                              side: BorderSide(color: Colors.red.shade300),
                             ),
                           ),
                           onPressed: () => Navigator.pop(context),
                           child: Text(
                             'Cancel',
                             style: TextStyle(
-                              color: Colors.grey[600],
+                              color: Colors.red,
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
                             ),
@@ -1521,7 +1521,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                         flex: 2,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -2808,10 +2808,10 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: Text('Cancel'),
+                      child: Text('Cancel', style: TextStyle(color: Colors.red)),
                     ),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                       onPressed: () => Navigator.pop(context, true),
                       child: Text('Logout'),
                     ),
@@ -3180,11 +3180,42 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
   final supabase = Supabase.instance.client;
   List<Map<String, dynamic>> assignedPets = [];
   bool isLoading = true;
+  RealtimeChannel? _jobsChannel;
 
   @override
   void initState() {
     super.initState();
     fetchAssignedPets();
+    _setupRealtimeListener();
+  }
+
+  @override
+  void dispose() {
+    _jobsChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  void _setupRealtimeListener() {
+    final sitterId = supabase.auth.currentUser?.id;
+    if (sitterId == null) return;
+
+    _jobsChannel = supabase
+        .channel('assigned_pets_${sitterId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'sitting_jobs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'sitter_id',
+            value: sitterId,
+          ),
+          callback: (payload) {
+            print('🔄 Real-time update for assigned pets');
+            fetchAssignedPets();
+          },
+        )
+        .subscribe();
   }
 
   // Helper method to get formatted age for pet display
@@ -3252,6 +3283,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
       final response = await supabase
       .from('sitting_jobs')
       .select('''
+        id, status, start_date, end_date,
         pets (
           id, name, breed, age, owner_id, profile_picture,
           users!owner_id (
@@ -3260,14 +3292,14 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
         )
       ''')
       .eq('sitter_id', sitterId)
-      .or('status.eq.Accepted,status.eq.Active');
+      .eq('status', 'Active');
 
       setState(() {
         assignedPets = List<Map<String, dynamic>>.from(response);
         isLoading = false;
       });
     } catch (e) {
-      print('Error fetching assigned pets: $e');
+      print('❌ Error fetching assigned pets: $e');
       setState(() => isLoading = false);
     }
   }

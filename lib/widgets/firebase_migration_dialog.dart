@@ -244,14 +244,14 @@ class _FirebaseMigrationDialogState extends State<FirebaseMigrationDialog> {
           onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
           child: Text(
             _migrationCompleted ? 'Close' : 'Cancel',
-            style: TextStyle(color: Colors.grey[600]),
+            style: TextStyle(color: Colors.red),
           ),
         ),
         if (!_migrationCompleted)
           ElevatedButton(
             onPressed: _isLoading ? null : _startMigration,
             style: ElevatedButton.styleFrom(
-              backgroundColor: coral,
+              backgroundColor: Colors.green,
               foregroundColor: Colors.white,
               disabledBackgroundColor: Colors.grey[300],
             ),

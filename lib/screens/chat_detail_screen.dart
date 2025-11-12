@@ -732,7 +732,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 _callingDialogOpen = false;
                 if (mounted) Navigator.of(context, rootNavigator: true).pop();
               },
-              child: const Text('Cancel'),
+              child: const Text('Cancel', style: TextStyle(color: Colors.red)),
             ),
           ],
         ),
@@ -1733,14 +1733,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: () => Navigator.of(context).pop('cancel'),
-                          icon: Icon(Icons.close, color: Colors.grey.shade600),
+                          icon: Icon(Icons.close, color: Colors.red),
                           label: Text(
                             'Cancel',
-                            style: TextStyle(color: Colors.grey.shade600),
+                            style: TextStyle(color: Colors.red),
                           ),
                           style: OutlinedButton.styleFrom(
                             padding: EdgeInsets.symmetric(vertical: 12),
-                            side: BorderSide(color: Colors.grey.shade300),
+                            side: BorderSide(color: Colors.red),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),

@@ -1047,8 +1047,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   child: OutlinedButton(
                                     onPressed: () => Navigator.of(context).pop(),
                                     style: OutlinedButton.styleFrom(
-                                      foregroundColor: coral,
-                                      side: BorderSide(color: coral),
+                                      foregroundColor: Colors.red,
+                                      side: BorderSide(color: Colors.red),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
                                       ),
@@ -1059,6 +1059,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       style: TextStyle(
                                         fontWeight: FontWeight.w600,
                                         fontFamily: 'Roboto',
+                                        color: Colors.red,
                                       ),
                                     ),
                                   ),
@@ -1081,7 +1082,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       await _createSittingJob(sitter['id'] as String, selectedPetId!);
                                     },
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: deepRed,
+                                      backgroundColor: Colors.green,
                                       foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
@@ -1462,7 +1463,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           child: OutlinedButton(
                             onPressed: () => Navigator.of(ctx).pop(),
                             style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: coral),
+                              side: BorderSide(color: Colors.red),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -1471,7 +1472,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             child: Text(
                               'Cancel',
                               style: TextStyle(
-                                color: coral,
+                                color: Colors.red,
                                 fontWeight: FontWeight.bold,
                                 fontFamily: 'Roboto',
                               ),
@@ -1482,7 +1483,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         Expanded(
                           child: ElevatedButton(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: deepRed,
+                              backgroundColor: Colors.green,
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -1750,16 +1751,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header with icon
+          // Header with icon - Enhanced
           Row(
             children: [
               Container(
-                padding: EdgeInsets.all(12),
+                padding: EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(colors: [deepRed, coral]),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: deepRed.withOpacity(0.3),
+                      blurRadius: 8,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
                 ),
-                child: Icon(Icons.dashboard, color: Colors.white, size: 24),
+                child: Icon(Icons.dashboard, color: Colors.white, size: 26),
               ),
               SizedBox(width: 16),
               Expanded(
@@ -1769,17 +1777,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Text(
                       'Dashboard Overview',
                       style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
                         color: deepRed,
                         fontFamily: 'Roboto',
                       ),
                     ),
                     Text(
-                      'Your pet care overview at a glance',
+                      'Your pet care summary',
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: 13,
                         color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
                         fontFamily: 'Roboto',
                       ),
                     ),
@@ -1791,36 +1800,37 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           
           SizedBox(height: 20),
           
-          // Dashboard metrics
+          // Dashboard metrics with enhanced styling
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: _buildOwnerMetricCard(
                   icon: Icons.pets,
                   title: 'My Pets',
                   value: petsCount.toString(),
-                  subtitle: 'Registered pets',
+                  subtitle: 'Registered',
                   color: deepRed,
                 ),
               ),
-              SizedBox(width: 12),
+              SizedBox(width: 14),
               Expanded(
                 child: _buildOwnerMetricCard(
                   icon: Icons.pending_actions,
                   title: 'Pending',
                   value: pendingCount.toString(),
-                  subtitle: 'Active requests',
-                  color: Colors.orange,
+                  subtitle: 'Requests',
+                  color: Colors.orange[600]!,
                 ),
               ),
-              SizedBox(width: 12),
+              SizedBox(width: 14),
               Expanded(
                 child: _buildOwnerMetricCard(
                   icon: Icons.groups,
                   title: 'Available',
                   value: availableNow.toString(),
                   subtitle: 'Sitters online',
-                  color: Colors.green,
+                  color: Colors.green[600]!,
                 ),
               ),
             ],
@@ -2080,7 +2090,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // Helper methods for enhanced owner UI
 
-  // Owner metric card helper
+  // Owner metric card helper - Enhanced
   Widget _buildOwnerMetricCard({
     required IconData icon,
     required String title,
@@ -2089,41 +2099,63 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     required Color color,
   }) {
     return Container(
-      padding: EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(vertical: 18, horizontal: 12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
+        gradient: LinearGradient(
+          colors: [Colors.white, color.withOpacity(0.08)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.25), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.12),
+            blurRadius: 8,
+            offset: Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 24),
-          SizedBox(height: 8),
+          Container(
+            padding: EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: color.withOpacity(0.2), width: 1),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          SizedBox(height: 10),
           Text(
             value,
             style: TextStyle(
               fontSize: 20,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w800,
               color: color,
               fontFamily: 'Roboto',
             ),
           ),
-          SizedBox(height: 4),
+          SizedBox(height: 6),
           Text(
             title,
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
               color: color,
+              letterSpacing: 0.3,
               fontFamily: 'Roboto',
             ),
           ),
-          SizedBox(height: 2),
+          SizedBox(height: 3),
           Text(
             subtitle,
             style: TextStyle(
-              fontSize: 10,
-              color: color.withOpacity(0.7),
+              fontSize: 11,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
               fontFamily: 'Roboto',
             ),
             textAlign: TextAlign.center,
@@ -2301,7 +2333,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           Container(
             width: double.infinity,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [deepRed, coral]),
+              gradient: LinearGradient(colors: [Colors.green, Colors.green.shade600]),
               borderRadius: BorderRadius.circular(8),
             ),
             child: ElevatedButton(
@@ -2657,7 +2689,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: pendingSitterIds.contains(sitter['id']) 
                                   ? Colors.grey 
-                                  : deepRed,
+                                  : Colors.green,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8),
@@ -3483,8 +3515,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   child: OutlinedButton(
                                     onPressed: () => Navigator.of(context).pop(),
                                     style: OutlinedButton.styleFrom(
-                                      foregroundColor: coral,
-                                      side: BorderSide(color: coral),
+                                      foregroundColor: Colors.red,
+                                      side: BorderSide(color: Colors.red),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
                                       ),
@@ -3495,6 +3527,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       style: TextStyle(
                                         fontWeight: FontWeight.w600,
                                         fontFamily: 'Roboto',
+                                        color: Colors.red,
                                       ),
                                     ),
                                   ),
@@ -3547,7 +3580,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       );
                                     },
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: deepRed,
+                                      backgroundColor: Colors.green,
                                       foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
@@ -3909,26 +3942,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return SizedBox(
       width: double.infinity,
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
             child: _buildStatCard(
               icon: Icons.star,
               label: 'Rating',
               value: avgRating > 0 ? avgRating.toStringAsFixed(1) : '0.0',
-              color: Colors.orange[600]!,
+              color: Colors.amber[600]!,
               suffix: '★',
             ),
           ),
-          SizedBox(width: 12),
+          SizedBox(width: 14),
           Expanded(
             child: _buildStatCard(
               icon: Icons.pending_actions,
               label: 'Pending',
               value: '$pendingJobsCount',
-              color: Colors.orange[700]!,
+              color: Colors.red[600]!,
             ),
           ),
-          SizedBox(width: 12),
+          SizedBox(width: 14),
           Expanded(
             child: _buildStatCard(
               icon: Icons.work,
@@ -3937,7 +3971,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               color: Colors.blue[600]!,
             ),
           ),
-          SizedBox(width: 12),
+          SizedBox(width: 14),
           Expanded(
             child: _buildStatCard(
               icon: Icons.task_alt,
@@ -3960,66 +3994,74 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     String? suffix,
   }) {
     return Container(
-      padding: EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+      padding: EdgeInsets.symmetric(vertical: 18, horizontal: 12),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.white, color.withOpacity(0.05)],
+          colors: [Colors.white, color.withOpacity(0.08)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.25), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.1),
-            blurRadius: 4,
-            offset: Offset(0, 2),
+            color: color.withOpacity(0.12),
+            blurRadius: 8,
+            offset: Offset(0, 3),
           ),
         ],
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            padding: EdgeInsets.all(8),
+            padding: EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              shape: BoxShape.circle,
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: color.withOpacity(0.2), width: 1),
             ),
-            child: Icon(icon, color: color, size: 18),
+            child: Icon(icon, color: color, size: 20),
           ),
-          SizedBox(height: 8),
+          SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
             children: [
               Text(
                 value,
                 style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
                   color: color,
                   fontFamily: 'Roboto',
                 ),
               ),
               if (suffix != null)
-                Text(
-                  suffix,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: color.withOpacity(0.8),
-                    fontFamily: 'Roboto',
+                Padding(
+                  padding: EdgeInsets.only(left: 3),
+                  child: Text(
+                    suffix,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: color.withOpacity(0.9),
+                      fontFamily: 'Roboto',
+                    ),
                   ),
                 ),
             ],
           ),
-          SizedBox(height: 2),
+          SizedBox(height: 6),
           Text(
             label,
             style: TextStyle(
-              fontSize: 10,
-              color: Colors.grey[600],
+              fontSize: 11,
+              color: Colors.grey[700],
               fontFamily: 'Roboto',
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
             ),
           ),
         ],

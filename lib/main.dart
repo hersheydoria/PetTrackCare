@@ -11,6 +11,7 @@ import 'screens/post_detail_screen.dart';
 import 'screens/pet_alert_screen.dart';
 import 'screens/profile_owner_screen.dart';
 import 'screens/profile_sitter_screen.dart';
+import 'screens/community_screen.dart';
 import 'widgets/missing_pet_alert_wrapper.dart';
 import 'widgets/call_invite_wrapper.dart';
 import 'services/notification_service.dart';
@@ -193,6 +194,13 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
           print('🚀 Route: /profile_sitter accessed - initializing MissingPetAlertWrapper');
           return MissingPetAlertWrapper(
             child: SitterProfileScreen(openSavedPosts: false),
+          );
+        },
+        '/community': (context) {
+          print('🚀 Route: /community accessed - initializing MissingPetAlertWrapper');
+          final user = Supabase.instance.client.auth.currentUser;
+          return MissingPetAlertWrapper(
+            child: CommunityScreen(userId: user?.id ?? ''),
           );
         },
       },

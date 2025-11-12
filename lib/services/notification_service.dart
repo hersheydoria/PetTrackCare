@@ -661,7 +661,7 @@ Future<void> sendJobNotification({
       'actor_id': actorId,
       'message': message,
       'type': type,
-      'job_id': jobId, // link to the specific job
+      'job_id': jobId.isNotEmpty ? jobId : null, // Only set if jobId is not empty
       'is_read': false,
       'created_at': DateTime.now().toIso8601String(),
     });

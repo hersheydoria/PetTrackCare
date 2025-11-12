@@ -390,23 +390,23 @@ class MissingPetAlertService {
             },
             child: Text(
               'Dismiss',
-              style: TextStyle(color: Colors.grey.shade600),
+              style: TextStyle(color: Colors.red),
             ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
+              backgroundColor: Colors.green,
               foregroundColor: Colors.white,
             ),
             onPressed: () {
               _dismissedAlerts.add(postId); // Also mark as dismissed
               Navigator.pop(ctx);
-              // Here you could navigate to community screen or show contact info
-              ScaffoldMessenger.of(_context!).showSnackBar(
-                SnackBar(
-                  content: Text('Check the Community tab for more details about this missing pet'),
-                  backgroundColor: Colors.blue,
-                ),
+              
+              // Navigate to community screen and scroll to the specific post
+              print('🔔 MissingPetAlertService: Navigating to community screen with post $postId');
+              Navigator.of(_context!).pushNamed(
+                '/community',
+                arguments: {'postId': postId, 'scrollToPost': true},
               );
             },
             child: Text('Help Find'),

@@ -94,32 +94,39 @@ class _MainNavigationState extends State<MainNavigation> {
                   Text(
                     'PetTrackCare',
                     style: TextStyle(
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w900,
                       color: Colors.white,
-                      fontSize: 20,
-                      letterSpacing: 0.5,
+                      fontSize: 22,
+                      letterSpacing: 0.8,
                     ),
                   ),
                 ],
               ),
               actions: [
                 Container(
-                  margin: EdgeInsets.only(right: 8),
+                  margin: EdgeInsets.only(right: 16),
                   child: IconButton(
                     icon: Container(
-                      padding: EdgeInsets.all(8),
+                      padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(14),
                         border: Border.all(
-                          color: Colors.white.withOpacity(0.3),
-                          width: 1,
+                          color: Colors.white.withOpacity(0.4),
+                          width: 1.2,
                         ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.15),
+                            blurRadius: 8,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
                       child: Icon(
                         Icons.notifications_outlined,
                         color: Colors.white,
-                        size: 20,
+                        size: 22,
                       ),
                     ),
                     onPressed: () {
@@ -141,9 +148,10 @@ class _MainNavigationState extends State<MainNavigation> {
             color: Colors.white,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 20,
-                offset: Offset(0, -5),
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 28,
+                offset: Offset(0, -8),
+                spreadRadius: 2,
               ),
             ],
           ),
@@ -152,120 +160,152 @@ class _MainNavigationState extends State<MainNavigation> {
             currentIndex: _selectedIndex,
             onTap: _onItemTapped,
             selectedItemColor: deepRed,
-            unselectedItemColor: Colors.grey[600],
+            unselectedItemColor: Colors.grey[400],
             backgroundColor: Colors.transparent,
             elevation: 0,
             selectedLabelStyle: TextStyle(
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w800,
               fontSize: 12,
+              letterSpacing: 0.3,
             ),
             unselectedLabelStyle: TextStyle(
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w600,
               fontSize: 11,
+              letterSpacing: 0.1,
             ),
             items: [
               BottomNavigationBarItem(
                 icon: Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: _selectedIndex == 0
-                      ? BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        )
-                      : null,
-                  child: Icon(Icons.home_outlined),
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.home_outlined, size: 26),
                 ),
                 activeIcon: Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: [deepRed.withOpacity(0.15), deepRed.withOpacity(0.08)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: deepRed.withOpacity(0.3), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: deepRed.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  child: Icon(Icons.home, color: deepRed),
+                  child: Icon(Icons.home, color: deepRed, size: 26),
                 ),
                 label: 'Home',
               ),
               BottomNavigationBarItem(
                 icon: Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: _selectedIndex == 1
-                      ? BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        )
-                      : null,
-                  child: Icon(Icons.pets_outlined),
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.pets, size: 26),
                 ),
                 activeIcon: Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: [deepRed.withOpacity(0.15), deepRed.withOpacity(0.08)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: deepRed.withOpacity(0.3), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: deepRed.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  child: Icon(Icons.pets, color: deepRed),
+                  child: Icon(Icons.pets, color: deepRed, size: 26),
                 ),
                 label: 'Pets',
               ),
               BottomNavigationBarItem(
                 icon: Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: _selectedIndex == 2
-                      ? BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        )
-                      : null,
-                  child: Icon(Icons.people_outline),
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.people_outline, size: 26),
                 ),
                 activeIcon: Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: [deepRed.withOpacity(0.15), deepRed.withOpacity(0.08)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: deepRed.withOpacity(0.3), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: deepRed.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  child: Icon(Icons.people, color: deepRed),
+                  child: Icon(Icons.people, color: deepRed, size: 26),
                 ),
                 label: 'Community',
               ),
               BottomNavigationBarItem(
                 icon: Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: _selectedIndex == 3
-                      ? BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        )
-                      : null,
-                  child: Icon(Icons.chat_bubble_outline),
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.chat_bubble_outline, size: 26),
                 ),
                 activeIcon: Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: [deepRed.withOpacity(0.15), deepRed.withOpacity(0.08)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: deepRed.withOpacity(0.3), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: deepRed.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  child: Icon(Icons.chat_bubble, color: deepRed),
+                  child: Icon(Icons.chat_bubble, color: deepRed, size: 26),
                 ),
                 label: 'Messages',
               ),
               BottomNavigationBarItem(
                 icon: Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: _selectedIndex == 4
-                      ? BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        )
-                      : null,
-                  child: Icon(Icons.person_outline),
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.person_outline, size: 26),
                 ),
                 activeIcon: Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: [deepRed.withOpacity(0.15), deepRed.withOpacity(0.08)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: deepRed.withOpacity(0.3), width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: deepRed.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  child: Icon(Icons.person, color: deepRed),
+                  child: Icon(Icons.person, color: deepRed, size: 26),
                 ),
                 label: 'Profile',
               ),

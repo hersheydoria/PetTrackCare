@@ -94,6 +94,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
+  RealtimeChannel? _selectedPetChannel; // Realtime listener for selected pet updates
   
   // Caching mechanism for pet data
   final Map<String, Map<String, dynamic>> _petDataCache = {};
@@ -428,6 +429,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // stop showing loader as soon as we have pet data
           _loadingPets = false;
         });
+        
+        // Setup realtime listener for pet updates (e.g., is_missing status changes)
+        _setupSelectedPetListener();
         
         // Save the selected pet ID for future sessions
         if (selected != null) {
@@ -1084,6 +1088,41 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _fetchPets();
   }
 
+  // Setup realtime listener for selected pet changes
+  void _setupSelectedPetListener() {
+    if (_selectedPet == null) return;
+    
+    final petId = _selectedPet!['id'];
+    
+    try {
+      _selectedPetChannel = Supabase.instance.client
+          .channel('selected_pet_$petId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.update,
+            schema: 'public',
+            table: 'pets',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: petId,
+            ),
+            callback: (payload) {
+              print('🔄 Real-time update for pet $petId');
+              final updated = Map<String, dynamic>.from(payload.newRecord);
+              // Update the selected pet with new data
+              if (mounted) {
+                setState(() {
+                  _selectedPet!.addAll(updated);
+                });
+              }
+            },
+          )
+          .subscribe();
+    } catch (e) {
+      print('Error setting up pet realtime listener: $e');
+    }
+  }
+
   @override
   void dispose() {
     _emergencyContactController.dispose();
@@ -1091,6 +1130,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _customMessageController.dispose();
     _specialNotesController.dispose();
     _tabController.dispose();
+    // Unsubscribe from realtime listener
+    if (_selectedPetChannel != null) {
+      _selectedPetChannel!.unsubscribe();
+    }
     super.dispose();
   }
 
@@ -1187,14 +1230,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+              child: Text('Cancel', style: TextStyle(color: Colors.red)),
             ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
                 _showConnectDeviceModal(context);
               },
-              child: Text('Change Device', style: TextStyle(color: coral)),
+              child: Text('Change Device', style: TextStyle(color: Colors.green)),
             ),
             ElevatedButton(
               onPressed: () {
@@ -1202,7 +1245,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                 _disconnectDevice();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
+                backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
               ),
               child: Text('Disconnect'),
@@ -1288,7 +1331,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+                  child: Text('Cancel', style: TextStyle(color: Colors.red)),
                 ),
                 ElevatedButton(
                   onPressed: () {
@@ -1313,7 +1356,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                     _connectToDeviceByMac(macAddress);
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: deepRed,
+                    backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
                   ),
                   child: Text('Connect Device'),
@@ -1430,10 +1473,10 @@ void _disconnectDevice() async {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false), 
-          child: Text('Cancel')
+          child: Text('Cancel', style: TextStyle(color: Colors.red))
         ),
         ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
           onPressed: () => Navigator.pop(ctx, true),
           child: Text('Disconnect'),
         ),
@@ -2374,7 +2417,7 @@ void _disconnectDevice() async {
                   ),
                   child: Text(
                     'Cancel',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.red),
                   ),
                 ),
               ),
@@ -2384,7 +2427,7 @@ void _disconnectDevice() async {
                 child: ElevatedButton(
                   onPressed: () => Navigator.pop(context, true),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isOwner ? deepRed : Colors.orange,
+                    backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
                     padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -2513,12 +2556,15 @@ void _disconnectDevice() async {
         title: Row(
           children: [
             SizedBox(width: 12),
-            Text(
-              'Pet Profile',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-                fontSize: 20,
+            Expanded(
+              child: Text(
+                'Pet Profile',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: 20,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -2978,7 +3024,7 @@ void _disconnectDevice() async {
                           icon: Icon(Icons.refresh),
                           label: Text('Refresh'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             foregroundColor: Colors.white,
                           ),
                         ),
@@ -3083,7 +3129,7 @@ void _disconnectDevice() async {
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
                           child: ElevatedButton.icon(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
+                              backgroundColor: Colors.green,
                               minimumSize: Size(double.infinity, 48),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                             ),
@@ -4236,7 +4282,7 @@ void _disconnectDevice() async {
                           icon: Icon(Icons.copy, size: 18),
                           label: Text('Copy Link'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             foregroundColor: Colors.white,
                             padding: EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -4487,11 +4533,11 @@ void _disconnectDevice() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
+            child: Text('Cancel', style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: deepRed,
+              backgroundColor: Colors.green,
               foregroundColor: Colors.white,
             ),
             onPressed: () {
@@ -4547,11 +4593,11 @@ void _disconnectDevice() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
+            child: Text('Cancel', style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: deepRed,
+              backgroundColor: Colors.green,
               foregroundColor: Colors.white,
             ),
             onPressed: () {
@@ -5252,11 +5298,11 @@ void _disconnectDevice() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel'),
+            child: Text('Cancel', style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colors.green,
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.pop(ctx, true),
@@ -6127,7 +6173,7 @@ void _disconnectDevice() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Close'),
+            child: Text('Close', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -6906,7 +6952,7 @@ void _disconnectDevice() async {
                         width: double.infinity,
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _isFormValid() ? deepRed : Colors.grey.shade300,
+                            backgroundColor: _isFormValid() ? Colors.green : Colors.grey.shade300,
                             foregroundColor: Colors.white,
                             padding: EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
