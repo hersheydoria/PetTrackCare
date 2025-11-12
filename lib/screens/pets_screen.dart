@@ -270,13 +270,15 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // Background data fetching with caching
   Future<void> _fetchPetDataInBackground(String petId) async {
     try {
-      // Fetch all data in parallel for better performance
-      final results = await Future.wait([
+      // Fetch behavior dates and location in parallel
+      await Future.wait([
         _fetchBehaviorDates(),
-        _fetchAnalyzeFromBackend(),
-        // _fetchLatestAnalysis() removed - predictions table deprecated
         _fetchLatestLocationForPet(),
       ]);
+      
+      // Fetch analysis, then health insights (insights depend on _isUnhealthy being set)
+      await _fetchAnalyzeFromBackend();
+      await _fetchLatestHealthInsights();
 
       // Cache the results
       final dataToCache = {
@@ -435,9 +437,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         // Trigger additional fetches in background so UI can render immediately.
         // We intentionally do NOT await these so they don't keep the loader visible
         _fetchBehaviorDates();
-        _fetchAnalyzeFromBackend();
-        // _fetchLatestAnalysis() removed - predictions table deprecated
-        _fetchLatestHealthInsights(); // <-- fetch health insights for last 7 days
+        // Fetch analysis first, then health insights (insights depend on _isUnhealthy being set)
+        _fetchAnalyzeFromBackend().then((_) {
+          _fetchLatestHealthInsights(); // <-- fetch health insights for last 7 days (after analysis)
+        });
         _fetchLatestLocationForPet(); // <-- fetch latest GPS/device location
       } else {
         // no pets found
