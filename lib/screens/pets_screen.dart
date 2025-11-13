@@ -564,7 +564,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               problems.add('Low Activity');
             }
             if (symptoms.isNotEmpty) {
-              problems.add('Reported Symptoms');
+              problems.add('Reported Clinical Signs');
             }
           }
           
@@ -621,10 +621,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               Colors.orange,
             ));
           }
-          if (uniqueProblems.contains('Reported Symptoms')) {
+          if (uniqueProblems.contains('Reported Clinical Signs')) {
             insights.add(_buildInsightItem(
-              'Symptoms Present',
-              'Pet showing reported symptoms. Monitor and document.',
+              'Clinical Signs Present',
+              'Pet showing reported clinical signs. Monitor and document.',
               Icons.medical_services,
               Colors.red,
             ));
@@ -4880,7 +4880,7 @@ void _disconnectDevice() async {
                       // Symptoms Section
                       if (symptoms.isNotEmpty) ...[
                         _buildDetailCard(
-                          title: 'Symptoms',
+                          title: 'Clinical Signs',
                           icon: Icons.medical_services,
                           iconColor: Colors.red,
                           value: symptoms.join(', '),
@@ -5139,8 +5139,8 @@ void _disconnectDevice() async {
     final actualSymptoms = symptoms.where((s) => s.toLowerCase() != "none of the above").toList();
     if (actualSymptoms.isNotEmpty) {
       insights.add(_buildInsightItem(
-        'Symptoms Reported',
-        '${actualSymptoms.length} symptom(s) detected. Please monitor and consult a vet if they persist or worsen.',
+        'Clinical Signs Reported',
+        '${actualSymptoms.length} clinical sign(s) detected. Please monitor and consult a vet if they persist or worsen.',
         Icons.medical_services,
         Colors.red,
       ));
@@ -5486,66 +5486,6 @@ void _disconnectDevice() async {
             
             SizedBox(height: 16),
             
-            // Enhanced Health Status Section
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: 8),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _isUnhealthy 
-                    ? [deepRed.withOpacity(0.1), coral.withOpacity(0.1)]
-                    : [Colors.green.withOpacity(0.1), Colors.lightGreen.withOpacity(0.1)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: _isUnhealthy ? deepRed.withOpacity(0.3) : Colors.green.withOpacity(0.3),
-                  width: 2,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: _isUnhealthy ? deepRed : Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _isUnhealthy ? Icons.warning : Icons.favorite,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _isUnhealthy ? "Health Alert" : "Healthy Status",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: _isUnhealthy ? deepRed : Colors.green.shade700,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          _getHealthStatusMessage(),
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: _isUnhealthy ? deepRed.withOpacity(0.8) : Colors.green.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
             // Enhanced Latest Analysis Section
             if (_prediction != null || _loadingAnalysisData || _healthInsights.isNotEmpty) ...[
               SizedBox(height: 16),
@@ -5568,6 +5508,26 @@ void _disconnectDevice() async {
               ),
             ],
 
+            // Health Insights Section (Why It Happened) - moved after Latest Analysis
+            if (_healthInsights.isNotEmpty || (!_loadingAnalysisData && !_isUnhealthy)) ...[
+              SizedBox(height: 16),
+              Container(
+                margin: EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 8,
+                      offset: Offset(0, 2),
+                    )
+                  ],
+                ),
+                child: _buildHealthInsightsContent(),
+              ),
+            ],
+
             // Add bottom spacing
             SizedBox(height: 24),
           ],
@@ -5583,6 +5543,7 @@ void _disconnectDevice() async {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          SizedBox(height: 16),
           Row(
             children: [
               Container(
@@ -5595,7 +5556,7 @@ void _disconnectDevice() async {
               ),
               SizedBox(width: 12),
               Text(
-                "Latest Analysis",
+                "Analysis Results",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 18,
@@ -5611,9 +5572,100 @@ void _disconnectDevice() async {
             _buildDataNoticeCard(_dataNotice!),
             SizedBox(height: 12),
           ],
+          // Health Status Section (moved inside Latest Analysis)
+          Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: _isUnhealthy 
+                  ? [deepRed.withOpacity(0.1), coral.withOpacity(0.1)]
+                  : [Colors.green.withOpacity(0.1), Colors.lightGreen.withOpacity(0.1)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _isUnhealthy ? deepRed.withOpacity(0.3) : Colors.green.withOpacity(0.3),
+                width: 1.5,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: _isUnhealthy ? deepRed : Colors.green,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _isUnhealthy ? Icons.warning : Icons.favorite,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _isUnhealthy ? "Health Alert" : "Healthy Status",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          color: _isUnhealthy ? deepRed : Colors.green.shade700,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        _getHealthStatusMessage(),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _isUnhealthy ? deepRed.withOpacity(0.8) : Colors.green.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Health Insights Widget (moved after Latest Analysis)
+  Widget _buildHealthInsightsContent() {
+    return Padding(
+      padding: EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.lightbulb, color: Colors.blue.shade700, size: 20),
+              ),
+              SizedBox(width: 12),
+              Text(
+                "Why It Happened",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: Colors.blue.shade700,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
           
-          // Health insights: show warnings if present, otherwise show status
-          // If there are specific insights, display them
+          // Show insights that explain the causes/patterns
           if (_healthInsights.isNotEmpty) ...[
             Container(
               padding: EdgeInsets.all(12),
@@ -5625,32 +5677,13 @@ void _disconnectDevice() async {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Icon(Icons.insights, color: Colors.blue.shade700, size: 20),
-                      SizedBox(width: 8),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Health Insights',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue.shade800,
-                            ),
-                          ),
-                          Text(
-                            'Last 7 days',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.blue.shade600,
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                  Text(
+                    'Based on behavioral patterns from the last 7 days:',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.blue.shade600,
+                      fontStyle: FontStyle.italic,
+                    ),
                   ),
                   SizedBox(height: 12),
                   ..._healthInsights,
@@ -5658,7 +5691,7 @@ void _disconnectDevice() async {
               ),
             ),
           ] else if (!_loadingAnalysisData && !_isUnhealthy) ...[
-            // Show normal status when there are no specific insights and pet is healthy
+            // Show explanation when there are no specific insights and pet is healthy
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -5672,10 +5705,10 @@ void _disconnectDevice() async {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Normal Patterns',
+                      'All behavioral patterns are normal — no concerning indicators detected',
                       style: TextStyle(
                         fontSize: 14,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w500,
                         color: Colors.green.shade800,
                       ),
                     ),
@@ -5854,78 +5887,6 @@ void _disconnectDevice() async {
                     fontWeight: FontWeight.w600,
                     color: cardColor,
                   ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-  
-  // Build model/analysis method notice card
-  Widget _buildAnalysisResultsCard() {
-    // Determine colors and icons based on risk level
-    Color riskColor;
-    IconData riskIcon;
-    String riskDisplay;
-    String analysisText;
-    
-    final risk = _illnessRisk?.toLowerCase() ?? 'unknown';
-    
-    if (risk == 'high') {
-      riskColor = Colors.red;
-      riskIcon = Icons.warning_amber_rounded;
-      riskDisplay = 'High Risk';
-      analysisText = 'Veterinary consultation recommended. Pet may need immediate care.';
-    } else if (risk == 'medium') {
-      riskColor = Colors.orange;
-      riskIcon = Icons.info_rounded;
-      riskDisplay = 'Medium Risk';
-      analysisText = 'Monitor closely. Pet may need care within 24-48 hours.';
-    } else {
-      riskColor = Colors.green;
-      riskIcon = Icons.check_circle_rounded;
-      riskDisplay = 'Low Risk';
-      analysisText = _prediction ?? 'Pet is healthy. Continue routine care.';
-    }
-    
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: riskColor.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: riskColor.withOpacity(0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Risk Level Badge
-          Row(
-            children: [
-              Icon(riskIcon, color: riskColor, size: 22),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      riskDisplay,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: riskColor,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      analysisText,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ],
@@ -6157,7 +6118,7 @@ void _disconnectDevice() async {
                     ),
                     SizedBox(height: 8),
                     Text(
-                      'This prediction is based on behavior patterns and should not replace professional veterinary advice. If symptoms persist or worsen, please consult a veterinarian immediately.',
+                      'This prediction is based on behavior patterns and should not replace professional veterinary advice. If clinical signs persist or worsen, please consult a veterinarian immediately.',
                       style: TextStyle(
                         fontSize: 13,
                         color: Colors.grey.shade700,
@@ -6912,7 +6873,7 @@ void _disconnectDevice() async {
                                         SizedBox(width: 8),
                                         Expanded(
                                           child: Text(
-                                            "${_selectedSymptoms.where((s) => s != "None of the Above").length} symptom(s) selected. Consider consulting a vet if symptoms persist.",
+                                            "${_selectedSymptoms.where((s) => s != "None of the Above").length} clinical sign(s) selected. Consider consulting a vet if clinical signs persist.",
                                             style: TextStyle(
                                               color: Colors.orange.shade900,
                                               fontSize: 11,
