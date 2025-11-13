@@ -3,11 +3,9 @@ from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, make_response
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import cross_val_score, StratifiedKFold
-import tensorflow as tf
 from supabase import create_client
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -16,6 +14,7 @@ import joblib
 import subprocess
 import sys
 import argparse
+import traceback
 
 # Load environment variables
 load_dotenv()
