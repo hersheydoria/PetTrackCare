@@ -50,6 +50,354 @@ def cleanup_incompatible_models():
 # Run cleanup on startup
 cleanup_incompatible_models()
 
+# ------------------- Breed-Aware Personalization -------------------
+
+BREED_NORMS = {
+    # Small breeds - naturally lower activity, eat less
+    "chihuahua": {
+        "typical_activity": "medium",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "toy poodle": {
+        "typical_activity": "medium",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "yorkshire terrier": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "pomeranian": {
+        "typical_activity": "high",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "maltese": {
+        "typical_activity": "medium",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "shih tzu": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    
+    # Large/Giant breeds - naturally higher activity, more food
+    "golden retriever": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["hip dysplasia", "obesity"]
+    },
+    "labrador retriever": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["obesity", "hip dysplasia"]
+    },
+    "german shepherd": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["digestive issues", "hip dysplasia"]
+    },
+    "great dane": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["bloat", "heart disease"]
+    },
+    "boxer": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["heart disease"]
+    },
+    "doberman": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["heart disease", "hip dysplasia"]
+    },
+    
+    # Medium breeds
+    "beagle": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["obesity"]
+    },
+    "bulldog": {
+        "typical_activity": "low",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["breathing issues", "heat sensitivity"]
+    },
+    "french bulldog": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["breathing issues", "heat sensitivity"]
+    },
+    "dachshund": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["back problems"]
+    },
+    "cocker spaniel": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["ear infections", "hip dysplasia"]
+    },
+    "english springer spaniel": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["ear infections", "hip dysplasia"]
+    },
+    
+    # Cats (common breeds)
+    "persian": {
+        "typical_activity": "low",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["respiratory issues", "kidney disease", "eye discharge"]
+    },
+    "siamese": {
+        "typical_activity": "high",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": ["kidney disease", "asthma"]
+    },
+    "bengal": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["hypertrophic cardiomyopathy"]
+    },
+    "maine coon": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["hip dysplasia", "heart disease", "spinal muscular atrophy"]
+    },
+    "ragdoll": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["heart disease", "kidney disease"]
+    },
+    "british shorthair": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["obesity", "heart disease"]
+    },
+    "scottish fold": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["ear mites", "osteochondrodysplasia", "heart disease"]
+    },
+    "abyssinian": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["kidney disease", "amyloidosis"]
+    },
+    "sphynx": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["heart disease", "skin infections", "heat sensitivity"]
+    },
+    "devon rex": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["hypertrophic cardiomyopathy", "ear mites"]
+    },
+    "cornish rex": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["hypertrophic cardiomyopathy"]
+    },
+    "burmese": {
+        "typical_activity": "medium",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": ["kidney disease", "hypertrophic cardiomyopathy"]
+    },
+    "russian blue": {
+        "typical_activity": "medium",
+        "typical_food_intake": "eating less",
+        "typical_water_intake": "normal",
+        "risk_factors": ["kidney disease"]
+    },
+    "british longhair": {
+        "typical_activity": "low",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["obesity", "heart disease", "kidney disease"]
+    },
+    "exotic shorthair": {
+        "typical_activity": "low",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["respiratory issues", "kidney disease", "polycystic kidney disease"]
+    },
+    "tonkinese": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["kidney disease", "hypertrophic cardiomyopathy"]
+    },
+    "turkish van": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "high",  # Turk Vans love water
+        "risk_factors": ["hypertrophic cardiomyopathy"]
+    },
+    "norwegian forest cat": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["hip dysplasia", "glycogen storage disease"]
+    },
+    "birman": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["kidney disease", "hypertrophic cardiomyopathy"]
+    },
+    "tabby": {
+        "typical_activity": "high",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "orange cat": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": ["obesity"]
+    },
+    "calico": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "domestic longhair": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    "domestic shorthair": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    },
+    
+    # Default for unknown breeds
+    "unknown": {
+        "typical_activity": "medium",
+        "typical_food_intake": "normal",
+        "typical_water_intake": "normal",
+        "risk_factors": []
+    }
+}
+
+def get_breed_norm(breed):
+    """Get breed norms, fallback to unknown if breed not found"""
+    if not breed:
+        return BREED_NORMS["unknown"]
+    breed_lower = str(breed).lower().strip()
+    return BREED_NORMS.get(breed_lower, BREED_NORMS["unknown"])
+
+def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
+    """Adjust risk assessment based on breed-typical behaviors.
+    Returns tuple: (adjusted_risk, breed_notice_dict or None)
+    """
+    breed_norm = get_breed_norm(breed)
+    typical_food = breed_norm.get("typical_food_intake", "normal")
+    typical_activity = breed_norm.get("typical_activity", "medium")
+    
+    food_intake_lower = str(food_intake).lower()
+    activity_lower = str(activity_level).lower()
+    
+    breed_notice = None
+    
+    print(f"[BREED-ADJUST] Breed: {breed}, Norm food: {typical_food}, Actual: {food_intake_lower}, Norm activity: {typical_activity}, Actual: {activity_lower}")
+    
+    # If eating/drinking less but it's normal for THIS breed, downgrade risk
+    if food_intake_lower == "eating less" and typical_food == "eating less":
+        print(f"[BREED-ADJUST] ✓ 'Eating less' is normal for {breed} - downgrading severity")
+        breed_notice = {
+            "status": "breed_typical_behavior",
+            "message": f"Eating less is normal for {breed.title()}",
+            "details": f"Your {breed.title()} has a naturally smaller appetite compared to other breeds. This reduced food intake is typical for the breed and not a cause for concern.",
+            "behavior": "eating_less",
+            "breed": breed
+        }
+        if raw_risk == "medium":
+            return "low", breed_notice  # Downgrade from medium to low
+    
+    # If low activity but it's normal for THIS breed, downgrade risk
+    if activity_lower == "low" and typical_activity == "low":
+        print(f"[BREED-ADJUST] ✓ Low activity is normal for {breed} - downgrading severity")
+        breed_notice = {
+            "status": "breed_typical_behavior",
+            "message": f"Low activity is normal for {breed.title()}",
+            "details": f"Your {breed.title()} is naturally less active than other breeds. This calm demeanor is characteristic of the breed and perfectly healthy.",
+            "behavior": "low_activity",
+            "breed": breed
+        }
+        if raw_risk == "medium":
+            return "low", breed_notice  # Downgrade from medium to low
+    
+    # If breed is prone to specific conditions, escalate on relevant symptoms
+    risk_factors = breed_norm.get("risk_factors", [])
+    if "digestive issues" in risk_factors and food_intake_lower in ["eating less", "not eating"]:
+        print(f"[BREED-ADJUST] ⚠ {breed} prone to digestive issues + eating problem - escalating risk")
+        breed_notice = {
+            "status": "breed_prone_condition",
+            "message": f"⚠️ Watch for digestive issues in {breed.title()}",
+            "details": f"Your {breed.title()} is genetically prone to digestive problems. Combined with the current eating issues, it's worth monitoring closely.",
+            "condition": "digestive_issues",
+            "breed": breed
+        }
+        if raw_risk == "low":
+            return "medium", breed_notice
+    
+    if "bloat" in risk_factors and activity_lower == "low":
+        print(f"[BREED-ADJUST] ⚠ {breed} prone to bloat + low activity - escalating risk")
+        breed_notice = {
+            "status": "breed_prone_condition",
+            "message": f"⚠️ Watch for bloat in {breed.title()}",
+            "details": f"Your {breed.title()} is prone to bloat (gastric dilatation). Combined with low activity, ensure meal timing and monitor closely.",
+            "condition": "bloat",
+            "breed": breed
+        }
+        if raw_risk == "low":
+            return "medium", breed_notice
+    
+    return raw_risk, breed_notice
+
 # ------------------- Data Fetch & Model Logic -------------------
 
 def fetch_logs_df(pet_id, limit=200):
@@ -68,6 +416,16 @@ def fetch_logs_df(pet_id, limit=200):
     df['symptoms'] = df.get('symptoms', pd.Series(['[]'] * len(df))).fillna('[]').astype(str)
     
     return df
+
+def fetch_pet_breed(pet_id):
+    """Fetch pet breed from database"""
+    try:
+        pet_resp = supabase.table("pets").select("breed").eq("id", pet_id).limit(1).execute()
+        if pet_resp.data:
+            return pet_resp.data[0].get("breed")
+    except Exception as e:
+        print(f"[WARN] Failed to fetch breed for pet {pet_id}: {e}")
+    return None
 
 def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.pkl"), min_auc_threshold: float = 0.6):
     if df.shape[0] < 5:
@@ -512,6 +870,10 @@ def analyze_endpoint():
 
     print(f"\n[ANALYZE-START] ========== Analyzing pet {pet_id} ==========")
     
+    # FETCH PET BREED FOR PERSONALIZATION
+    pet_breed = fetch_pet_breed(pet_id)
+    print(f"[ANALYZE] Pet {pet_id}: Breed = {pet_breed}")
+    
     # CONTINUOUS MODEL TRAINING: Fetch all logs for this specific pet and train/retrain the model
     df = fetch_logs_df(pet_id)
     print(f"[ANALYZE] Pet {pet_id}: Fetched {len(df)} logs for continuous training")
@@ -532,8 +894,9 @@ def analyze_endpoint():
     # Core analysis (trend/recommendation/summaries) based on logs
     result = analyze_pet(pet_id)
 
-    # ML illness_risk on latest log (or "low" if insufficient data)
+    # ML illness_risk on latest log with BREED ADJUSTMENT
     illness_risk_ml = "low"
+    breed_notice = None  # Will hold breed-aware explanation if applicable
     try:
         if not df.empty:
             latest = df.sort_values("log_date", ascending=False).iloc[0]
@@ -555,12 +918,18 @@ def analyze_endpoint():
             
             # ONLY use ML prediction if we have clear problem indicators
             predicted_risk = predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count)
-            if predicted_risk and predicted_risk != "low":
-                illness_risk_ml = predicted_risk
-                print(f"[ANALYZE] Pet {pet_id}: ML prediction = {illness_risk_ml}")
+            
+            # NEW: Apply breed-aware adjustment and get explanatory notice
+            adjusted_risk, breed_notice = adjust_risk_by_breed(predicted_risk, food_intake, activity_level, pet_breed)
+            print(f"[ANALYZE] Pet {pet_id}: Raw ML prediction = {predicted_risk}, Breed-adjusted = {adjusted_risk}")
+            if breed_notice:
+                print(f"[ANALYZE] Pet {pet_id}: Breed notice generated: {breed_notice['message']}")
+            
+            if adjusted_risk and adjusted_risk != "low":
+                illness_risk_ml = adjusted_risk
             else:
                 illness_risk_ml = "low"
-                print(f"[ANALYZE] Pet {pet_id}: ML prediction = low (no clear problems)")
+                print(f"[ANALYZE] Pet {pet_id}: Adjusted ML prediction = low (no clear problems or breed-normalized)")
     except Exception as e:
         print(f"[ANALYZE] Pet {pet_id}: ⚠ ML prediction error: {e}")
         illness_risk_ml = "low"
@@ -571,7 +940,7 @@ def analyze_endpoint():
 
     # Blend: choose higher severity so spikes are not hidden
     illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
-    print(f"[ANALYZE] Pet {pet_id}: Final blended risk = {illness_risk_final}")
+    print(f"[ANALYZE] Pet {pet_id}: Final blended risk (breed-aware) = {illness_risk_final}")
 
     # model status and derived health status (based on blended risk)
     illness_model_trained = is_illness_model_trained()
@@ -602,6 +971,12 @@ def analyze_endpoint():
     merged["care_recommendations"] = tips
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
+    merged["breed"] = pet_breed  # Include breed for reference
+    merged["breed_norms"] = get_breed_norm(pet_breed) if pet_breed else get_breed_norm("unknown")  # Include breed behavioral norms
+    
+    # Add breed notice if breed-aware adjustment was applied
+    if breed_notice:
+        merged["breed_notice"] = breed_notice
     
     # Add data sufficiency notice for user
     if len(df) < 5:

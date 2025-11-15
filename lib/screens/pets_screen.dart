@@ -145,6 +145,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // Backend messaging about analysis quality and data sufficiency
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
+  Map<String, dynamic>? _breedNotice; // tells user about breed-specific behaviors (e.g., "Eating less is normal for Chihuahuas")
 
   // New: latest GPS/device location for selected pet
   LatLng? _latestDeviceLocation;
@@ -750,6 +751,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // Parse data_notice and model_notice from backend response
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
+          _breedNotice = body['breed_notice'] as Map<String, dynamic>?;
         });
       } else {
         // non-200 response: ignore for now
@@ -5572,6 +5574,12 @@ void _disconnectDevice() async {
             _buildDataNoticeCard(_dataNotice!),
             SizedBox(height: 12),
           ],
+          
+          // Display breed notice if breed-aware adjustment was applied
+          if (_breedNotice != null) ...[
+            _buildBreedNoticeCard(_breedNotice!),
+            SizedBox(height: 12),
+          ],
           // Health Status Section (moved inside Latest Analysis)
           Container(
             padding: EdgeInsets.all(16),
@@ -5951,6 +5959,71 @@ void _disconnectDevice() async {
                 style: TextStyle(
                   fontSize: 12,
                   color: cardColor.withOpacity(0.8),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBreedNoticeCard(Map<String, dynamic> notice) {
+    final status = notice['status']?.toString() ?? 'unknown';
+    final message = notice['message']?.toString() ?? '';
+    final details = notice['details']?.toString();
+    
+    // Determine color and icon based on status
+    Color cardColor;
+    IconData iconData;
+    
+    if (status == 'breed_typical_behavior') {
+      cardColor = Colors.purple;
+      iconData = Icons.pets;
+    } else if (status == 'breed_prone_condition') {
+      cardColor = Colors.orange;
+      iconData = Icons.warning_amber;
+    } else {
+      cardColor = Colors.grey;
+      iconData = Icons.info;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cardColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconData, color: cardColor, size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cardColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (details != null && details.isNotEmpty) ...[
+            SizedBox(height: 8),
+            Padding(
+              padding: EdgeInsets.only(left: 28),
+              child: Text(
+                details,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: cardColor.withOpacity(0.8),
+                  height: 1.4,
                 ),
               ),
             ),
