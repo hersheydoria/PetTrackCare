@@ -1113,7 +1113,15 @@ def analyze_endpoint():
     print(f"[ANALYZE] Pet {pet_id}: Contextual risk = {contextual_risk}")
 
     # Blend: choose higher severity so spikes are not hidden
-    illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
+    # BUT: if breed notice explains behavior as normal, suppress contextual risk escalation
+    if breed_notice and breed_notice.get('status') == 'breed_typical_behavior':
+        print(f"[ANALYZE] Pet {pet_id}: Breed-typical behavior detected - suppressing contextual risk escalation")
+        # Use breed-adjusted ML risk as final, ignore higher contextual risk
+        illness_risk_final = illness_risk_ml
+    else:
+        # Normal blending: choose higher severity
+        illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
+    
     print(f"[ANALYZE] Pet {pet_id}: Final blended risk (breed-aware) = {illness_risk_final}")
 
     # model status and derived health status (based on blended risk)
@@ -1121,15 +1129,6 @@ def analyze_endpoint():
     is_unhealthy = isinstance(illness_risk_final, str) and illness_risk_final.lower() in ("high", "medium")
     health_status = "unhealthy" if is_unhealthy else "healthy"
     print(f"[ANALYZE] Pet {pet_id}: Health status = {health_status}")
-
-    # Care tips based on blended risk (sleep_hours no longer collected)
-    tips = build_care_recommendations(
-        illness_risk_final,
-        result.get("mood_probabilities") or result.get("mood_prob"),
-        result.get("activity_probabilities") or result.get("activity_prob"),
-        0.0,  # avg_sleep_val - sleep tracking removed from system
-        None,  # sleep_trend - sleep tracking removed from system
-    )
 
     # Merge into response
     merged = dict(result)
@@ -1142,7 +1141,6 @@ def analyze_endpoint():
     merged["illness_prediction"] = illness_risk_final
     merged["is_unhealthy"] = is_unhealthy
     merged["illness_status_text"] = "Unhealthy" if is_unhealthy else "Healthy"
-    merged["care_recommendations"] = tips
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference

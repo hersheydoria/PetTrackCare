@@ -139,8 +139,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // illness risk returned by backend (high/low/null)
   String? _illnessRisk;
   bool _isUnhealthy = false;
-  List<String> _careActions = [];
-  List<String> _careExpectations = [];
   
   // Backend messaging about analysis quality and data sufficiency
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
@@ -292,8 +290,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         'activityProb': _activityProb,
         'illnessRisk': _illnessRisk,
         'isUnhealthy': _isUnhealthy,
-        'careActions': _careActions,
-        'careExpectations': _careExpectations,
       };
       _cachePetData(petId, dataToCache);
 
@@ -734,21 +730,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               ? unhealthyResp
               : (riskRaw == 'high' || riskRaw == 'medium');
 
-          // parse care recommendations
-          _careActions = [];
-          _careExpectations = [];
-          final care = body['care_recommendations'];
-          if (care is Map) {
-            final a = care['actions'];
-            final e = care['expectations'];
-            if (a is List) {
-              _careActions = a.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
-            }
-            if (e is List) {
-              _careExpectations = e.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
-            }
-          }
-          
           // Parse data_notice and model_notice from backend response
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
@@ -2780,8 +2761,6 @@ void _disconnectDevice() async {
                     _activityProb = cachedData['activityProb'] ?? {};
                     _illnessRisk = cachedData['illnessRisk'];
                     _isUnhealthy = cachedData['isUnhealthy'] ?? false;
-                    _careActions = cachedData['careActions'] ?? [];
-                    _careExpectations = cachedData['careExpectations'] ?? [];
                     _loadingBehaviorData = false;
                     _loadingAnalysisData = false;
                   });
@@ -5734,71 +5713,6 @@ void _disconnectDevice() async {
               ),
             ),
           ],
-          
-          // Care Tips (only when risk is bad: medium/high)
-          if (_isUnhealthy && (_careActions.isNotEmpty || _careExpectations.isNotEmpty)) ...[
-            SizedBox(height: 16),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: deepRed.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: deepRed.withOpacity(0.2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.medical_services, color: deepRed, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        "Care Tips",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: deepRed,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  
-                  if (_careActions.isNotEmpty) ...[
-                    Text("What to do", style: TextStyle(fontWeight: FontWeight.w600)),
-                    SizedBox(height: 6),
-                    ..._careActions.take(6).map((action) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.check_circle, size: 16, color: deepRed),
-                          SizedBox(width: 8),
-                          Expanded(child: Text(action, style: TextStyle(fontSize: 14))),
-                        ],
-                      ),
-                    )),
-                  ],
-                  
-                  if (_careExpectations.isNotEmpty) ...[
-                    if (_careActions.isNotEmpty) SizedBox(height: 12),
-                    Text("What to expect", style: TextStyle(fontWeight: FontWeight.w600)),
-                    SizedBox(height: 6),
-                    ..._careExpectations.take(6).map((expectation) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.info, size: 16, color: coral),
-                          SizedBox(width: 8),
-                          Expanded(child: Text(expectation, style: TextStyle(fontSize: 14))),
-                        ],
-                      ),
-                    )),
-                  ],
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -6224,88 +6138,6 @@ void _disconnectDevice() async {
               ),
               
               SizedBox(height: 16),
-              
-              // Care Actions
-              if (_careActions.isNotEmpty) ...[
-                Text(
-                  '🩺 Immediate Actions',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: deepRed,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _careActions.map((action) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.check_circle, size: 16, color: Colors.blue),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              action,
-                              style: TextStyle(fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )).toList(),
-                  ),
-                ),
-                SizedBox(height: 16),
-              ],
-              
-              // Expectations
-              if (_careExpectations.isNotEmpty) ...[
-                Text(
-                  '📋 What to Expect',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: Colors.orange.shade700,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _careExpectations.map((expectation) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.info_outline, size: 16, color: Colors.orange.shade700),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              expectation,
-                              style: TextStyle(fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )).toList(),
-                  ),
-                ),
-                SizedBox(height: 16),
-              ],
               
               // General advice
               Container(
