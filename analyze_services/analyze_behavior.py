@@ -337,12 +337,13 @@ def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
     typical_food = breed_norm.get("typical_food_intake", "normal")
     typical_activity = breed_norm.get("typical_activity", "medium")
     
-    food_intake_lower = str(food_intake).lower()
-    activity_lower = str(activity_level).lower()
+    food_intake_lower = str(food_intake).lower().strip()
+    activity_lower = str(activity_level).lower().strip()
+    breed_lower = str(breed).lower().strip() if breed else "unknown"
     
     breed_notice = None
     
-    print(f"[BREED-ADJUST] Breed: {breed}, Norm food: {typical_food}, Actual: {food_intake_lower}, Norm activity: {typical_activity}, Actual: {activity_lower}")
+    print(f"[BREED-ADJUST] Breed: '{breed_lower}', Norm food: '{typical_food}', Actual: '{food_intake_lower}', Norm activity: '{typical_activity}', Actual: '{activity_lower}'")
     
     # If eating/drinking less but it's normal for THIS breed, downgrade risk
     if food_intake_lower == "eating less" and typical_food == "eating less":
@@ -354,8 +355,8 @@ def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
             "behavior": "eating_less",
             "breed": breed
         }
-        if raw_risk == "medium":
-            return "low", breed_notice  # Downgrade from medium to low
+        adjusted_risk = "low" if raw_risk == "medium" else raw_risk
+        return adjusted_risk, breed_notice
     
     # If low activity but it's normal for THIS breed, downgrade risk
     if activity_lower == "low" and typical_activity == "low":
@@ -367,8 +368,8 @@ def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
             "behavior": "low_activity",
             "breed": breed
         }
-        if raw_risk == "medium":
-            return "low", breed_notice  # Downgrade from medium to low
+        adjusted_risk = "low" if raw_risk == "medium" else raw_risk
+        return adjusted_risk, breed_notice
     
     # If breed is prone to specific conditions, escalate on relevant symptoms
     risk_factors = breed_norm.get("risk_factors", [])
@@ -381,8 +382,8 @@ def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
             "condition": "digestive_issues",
             "breed": breed
         }
-        if raw_risk == "low":
-            return "medium", breed_notice
+        adjusted_risk = "medium" if raw_risk == "low" else raw_risk
+        return adjusted_risk, breed_notice
     
     if "bloat" in risk_factors and activity_lower == "low":
         print(f"[BREED-ADJUST] ⚠ {breed} prone to bloat + low activity - escalating risk")
@@ -393,8 +394,8 @@ def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
             "condition": "bloat",
             "breed": breed
         }
-        if raw_risk == "low":
-            return "medium", breed_notice
+        adjusted_risk = "medium" if raw_risk == "low" else raw_risk
+        return adjusted_risk, breed_notice
     
     return raw_risk, breed_notice
 
@@ -775,6 +776,179 @@ def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
     b = str(contextual_risk or "low").lower()
     return a if sev.get(a, 0) >= sev.get(b, 0) else b
 
+def detect_severe_illness_pattern(df: pd.DataFrame) -> dict or None:
+    """
+    Detect patterns in recent logs that suggest the pet might be severely sick.
+    Similar to period tracker warning "you haven't logged, might want to switch to pregnancy mode"
+    Returns a notice dict if pattern detected, else None
+    """
+    if df is None or df.empty or len(df) < 3:
+        return None
+    
+    try:
+        df = df.copy()
+        df['log_date'] = pd.to_datetime(df['log_date'])
+        
+        # Analyze last 7 days
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        recent = df[df['log_date'] >= seven_days_ago].copy()
+        
+        if len(recent) < 3:
+            return None  # Need at least 3 recent logs to detect patterns
+        
+        print(f"[SEVERE-PATTERN] Analyzing {len(recent)} logs from last 7 days for severe illness patterns")
+        
+        # Pattern 1: Escalating food refusal (not eating or eating less consistently)
+        eating_issues = recent['food_intake'].str.lower().isin(['not eating', 'eating less']).sum()
+        p_eating_issues = eating_issues / len(recent)
+        
+        # Pattern 2: Escalating water refusal
+        drinking_issues = recent['water_intake'].str.lower().isin(['not drinking', 'drinking less']).sum()
+        p_drinking_issues = drinking_issues / len(recent)
+        
+        # Pattern 3: Multiple bathroom issues
+        bathroom_issues = recent['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination']).sum()
+        p_bathroom = bathroom_issues / len(recent)
+        
+        # Pattern 4: Consistently low activity
+        low_activity = (recent['activity_level'].str.lower() == 'low').sum()
+        p_low_activity = low_activity / len(recent)
+        
+        # Pattern 5: Multiple reported symptoms
+        symptom_count = 0
+        for idx, row in recent.iterrows():
+            try:
+                symptoms_str = str(row.get('symptoms', '[]'))
+                symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+                filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
+                if len(filtered) >= 2:
+                    symptom_count += 1
+            except:
+                pass
+        p_multiple_symptoms = symptom_count / len(recent)
+        
+        print(f"[SEVERE-PATTERN] Eating issues: {p_eating_issues:.2f}, Drinking: {p_drinking_issues:.2f}, Bathroom: {p_bathroom:.2f}, Low activity: {p_low_activity:.2f}, Multi-symptoms: {p_multiple_symptoms:.2f}")
+        
+        # SEVERE PATTERN 1: Food + Water Refusal
+        # Pet is refusing both food and water = critical, needs immediate vet
+        if p_eating_issues >= 0.6 and p_drinking_issues >= 0.4:
+            print(f"[SEVERE-PATTERN] ⚠️ CRITICAL: Food AND water refusal detected ({p_eating_issues:.0%} eating issues, {p_drinking_issues:.0%} drinking issues)")
+            return {
+                "status": "severe_illness_detected",
+                "severity": "critical",
+                "message": "🚨 Critical: Immediate veterinary care recommended",
+                "pattern": "food_and_water_refusal",
+                "details": f"Your pet is refusing both food and water for {len(recent)} consecutive logs. This is a critical sign that requires immediate veterinary attention. Please contact your vet today.",
+                "actions": [
+                    "Contact your veterinarian immediately",
+                    "Monitor hydration closely - dehydration is dangerous",
+                    "Keep your pet calm and comfortable",
+                    "Prepare for possible emergency vet visit"
+                ],
+                "timeframe": "TODAY - Do not wait"
+            }
+        
+        # SEVERE PATTERN 2: Persistent eating refusal + low activity
+        # Pet won't eat and just lying around = could be serious infection/illness
+        if p_eating_issues >= 0.7 and p_low_activity >= 0.7:
+            print(f"[SEVERE-PATTERN] ⚠️ SEVERE: Food refusal + lethargy pattern ({p_eating_issues:.0%} not eating, {p_low_activity:.0%} low activity)")
+            return {
+                "status": "severe_illness_detected",
+                "severity": "severe",
+                "message": "⚠️ Severe: Loss of appetite + lethargy detected",
+                "pattern": "anorexia_lethargy",
+                "details": f"Your pet is consistently refusing food and showing very low activity levels over the past {len(recent)} logs. This combination often indicates infection, pain, or serious illness.",
+                "actions": [
+                    "Schedule a vet appointment within 24 hours",
+                    "Take your pet's temperature if possible",
+                    "Monitor for vomiting or other symptoms",
+                    "Keep food and water available but don't force"
+                ],
+                "timeframe": "Within 24 hours"
+            }
+        
+        # SEVERE PATTERN 3: Bathroom issues + low activity
+        # Pet having digestive issues and lethargic = could be gastroenteritis or infection
+        if p_bathroom >= 0.6 and p_low_activity >= 0.6:
+            print(f"[SEVERE-PATTERN] ⚠️ SEVERE: Digestive + lethargy pattern ({p_bathroom:.0%} bathroom issues, {p_low_activity:.0%} low activity)")
+            return {
+                "status": "severe_illness_detected",
+                "severity": "severe",
+                "message": "⚠️ Severe: Digestive problems + low energy",
+                "pattern": "gi_illness",
+                "details": f"Your pet is showing persistent digestive issues (diarrhea/constipation) combined with lethargy over {len(recent)} logs. This suggests possible gastroenteritis or intestinal infection.",
+                "actions": [
+                    "Contact your vet - may need stool sample",
+                    "Avoid rich foods, offer bland diet (rice + chicken)",
+                    "Ensure hydration - small frequent water breaks",
+                    "Monitor for blood in stool or extreme pain"
+                ],
+                "timeframe": "Within 24-48 hours"
+            }
+        
+        # SEVERE PATTERN 4: Multiple symptoms + eating issues
+        # Pet showing multiple clinical signs = systemic problem
+        if p_multiple_symptoms >= 0.5 and p_eating_issues >= 0.5:
+            print(f"[SEVERE-PATTERN] ⚠️ SEVERE: Multiple clinical signs + appetite loss ({p_multiple_symptoms:.0%} with symptoms, {p_eating_issues:.0%} eating issues)")
+            return {
+                "status": "severe_illness_detected",
+                "severity": "severe",
+                "message": "⚠️ Severe: Multiple clinical signs detected",
+                "pattern": "systemic_illness",
+                "details": f"Your pet is showing multiple reported symptoms combined with loss of appetite in {len(recent)} recent logs. This pattern suggests systemic infection or serious illness.",
+                "actions": [
+                    "Schedule urgent vet appointment (24-48 hours)",
+                    "Write down all symptoms for the vet",
+                    "Note when symptoms started and progression",
+                    "Check for fever (normal temp is 99-102°F for dogs, 99-102°F for cats)"
+                ],
+                "timeframe": "Within 24-48 hours"
+            }
+        
+        # PATTERN 5: Sudden change to all low values
+        # Pet suddenly went from normal to all problems = acute illness event
+        if len(recent) >= 5:
+            earliest = recent.iloc[:-4]  # First logs
+            latest = recent.iloc[-3:]     # Last 3 logs
+            
+            earliest_normal = (
+                (earliest['food_intake'].str.lower() == 'normal').sum() / len(earliest) > 0.5
+            ) and (
+                (earliest['activity_level'].str.lower() == 'medium').sum() / len(earliest) > 0.5
+            )
+            
+            latest_problems = (
+                (latest['food_intake'].str.lower().isin(['not eating', 'eating less']).sum() / len(latest) > 0.6)
+            ) and (
+                (latest['activity_level'].str.lower() == 'low').sum() / len(latest) > 0.6
+            )
+            
+            if earliest_normal and latest_problems:
+                print(f"[SEVERE-PATTERN] ⚠️ ACUTE: Sudden decline from baseline detected")
+                return {
+                    "status": "severe_illness_detected",
+                    "severity": "severe",
+                    "message": "⚠️ Alert: Sudden health decline detected",
+                    "pattern": "acute_illness",
+                    "details": f"Your pet was fine just a few days ago but has suddenly shown a sharp decline in appetite, activity, and overall health. This acute change suggests an infection or injury that needs prompt attention.",
+                    "actions": [
+                        "Contact your vet today - do not wait",
+                        "Watch for signs of pain or discomfort",
+                        "Keep the pet warm and in a quiet space",
+                        "Note exact time when you first noticed changes"
+                    ],
+                    "timeframe": "TODAY"
+                }
+        
+        print(f"[SEVERE-PATTERN] No severe illness patterns detected")
+        return None
+        
+    except Exception as e:
+        print(f"[SEVERE-PATTERN] Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 # ------------------- Core Analysis -------------------
 def analyze_pet_df(pet_id, df, prediction_date=None):
     """Analyze provided DataFrame of logs for pet_id and return analysis results (no storage to predictions table)."""
@@ -977,6 +1151,19 @@ def analyze_endpoint():
     # Add breed notice if breed-aware adjustment was applied
     if breed_notice:
         merged["breed_notice"] = breed_notice
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Adding breed_notice to response: {breed_notice.get('message')}")
+    else:
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: No breed notice generated")
+    
+    # DETECT SEVERE ILLNESS PATTERNS - like period tracker warning "you might be severely sick"
+    # Analyzes past 7 days of logs for concerning patterns that suggest serious illness
+    severe_pattern_notice = detect_severe_illness_pattern(df)
+    if severe_pattern_notice:
+        merged["severity_pattern_notice"] = severe_pattern_notice
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: ⚠️ SEVERE PATTERN DETECTED: {severe_pattern_notice.get('pattern')}")
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Message: {severe_pattern_notice.get('message')}")
+    else:
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: No severe illness patterns detected")
     
     # Add data sufficiency notice for user
     if len(df) < 5:

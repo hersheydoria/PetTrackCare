@@ -146,6 +146,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
   Map<String, dynamic>? _breedNotice; // tells user about breed-specific behaviors (e.g., "Eating less is normal for Chihuahuas")
+  Map<String, dynamic>? _severityPatternNotice; // smart warning when pet shows severe illness patterns over 7 days
 
   // New: latest GPS/device location for selected pet
   LatLng? _latestDeviceLocation;
@@ -752,6 +753,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
           _breedNotice = body['breed_notice'] as Map<String, dynamic>?;
+          _severityPatternNotice = body['severity_pattern_notice'] as Map<String, dynamic>?;
         });
       } else {
         // non-200 response: ignore for now
@@ -5580,6 +5582,13 @@ void _disconnectDevice() async {
             _buildBreedNoticeCard(_breedNotice!),
             SizedBox(height: 12),
           ],
+          
+          // Display severity pattern notice if concerning patterns detected
+          if (_severityPatternNotice != null) ...[
+            _buildSeverityPatternNoticeCard(_severityPatternNotice!),
+            SizedBox(height: 12),
+          ],
+          
           // Health Status Section (moved inside Latest Analysis)
           Container(
             padding: EdgeInsets.all(16),
@@ -6025,6 +6034,139 @@ void _disconnectDevice() async {
                   color: cardColor.withOpacity(0.8),
                   height: 1.4,
                 ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSeverityPatternNoticeCard(Map<String, dynamic> notice) {
+    final severity = notice['severity']?.toString() ?? 'severe';
+    final message = notice['message']?.toString() ?? '';
+    final details = notice['details']?.toString();
+    final timeframe = notice['timeframe']?.toString() ?? 'ASAP';
+    final actions = (notice['actions'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    
+    // Determine severity color
+    Color severityColor;
+    IconData severityIcon;
+    
+    if (severity == 'critical') {
+      severityColor = Color(0xFFD32F2F); // Deep red for critical
+      severityIcon = Icons.emergency;
+    } else {
+      severityColor = Color(0xFFF57C00); // Deep orange for severe
+      severityIcon = Icons.warning;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: severityColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: severityColor.withOpacity(0.4),
+          width: 2,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Main warning message
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(severityIcon, color: severityColor, size: 22),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      message,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: severityColor,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Timeframe: $timeframe',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: severityColor.withOpacity(0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          
+          // Pattern description
+          if (details != null && details.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.only(left: 32),
+              child: Text(
+                details,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: severityColor.withOpacity(0.85),
+                  height: 1.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+          
+          // Recommended actions
+          if (actions.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.only(left: 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Recommended Actions:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: severityColor,
+                    ),
+                  ),
+                  SizedBox(height: 6),
+                  ...actions.map((action) => Padding(
+                    padding: EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '• ',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: severityColor.withOpacity(0.8),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            action,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: severityColor.withOpacity(0.8),
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )).toList(),
+                ],
               ),
             ),
           ],
