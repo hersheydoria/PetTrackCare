@@ -144,6 +144,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
   Map<String, dynamic>? _severityPatternNotice; // smart warning when pet shows severe illness patterns over 7 days
+  Map<String, dynamic>? _healthGuidance; // evidence-based health guidance based on detected symptoms
 
   // New: latest GPS/device location for selected pet
   LatLng? _latestDeviceLocation;
@@ -748,6 +749,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
           _severityPatternNotice = body['severity_pattern_notice'] as Map<String, dynamic>?;
+          _healthGuidance = body['health_guidance'] as Map<String, dynamic>?;
         });
       } else {
         // non-200 response: ignore for now
@@ -5468,6 +5470,12 @@ void _disconnectDevice() async {
             SizedBox(height: 12),
           ],
           
+          // Display health guidance based on detected symptoms - only if pet is unhealthy
+          if (_healthGuidance != null && _isUnhealthy) ...[
+            _buildHealthGuidanceCard(_healthGuidance!),
+            SizedBox(height: 12),
+          ],
+          
           // Health Status Section (moved inside Latest Analysis)
           Container(
             padding: EdgeInsets.all(16),
@@ -5805,6 +5813,130 @@ void _disconnectDevice() async {
                           ),
                         ),
                       ],
+                    ),
+                  )).toList(),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHealthGuidanceCard(Map<String, dynamic> guidance) {
+    final urgency = guidance['urgency']?.toString() ?? 'none';
+    final detectedSymptoms = (guidance['detected_symptoms'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    final recommendations = (guidance['recommendations'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    
+    // Determine urgency color
+    Color urgencyColor;
+    IconData urgencyIcon;
+    
+    if (urgency == 'critical') {
+      urgencyColor = Color(0xFFD32F2F); // Deep red
+      urgencyIcon = Icons.emergency;
+    } else if (urgency == 'high') {
+      urgencyColor = Color(0xFFF57C00); // Orange
+      urgencyIcon = Icons.warning;
+    } else if (urgency == 'medium') {
+      urgencyColor = Color(0xFFFBC02D); // Amber
+      urgencyIcon = Icons.info;
+    } else {
+      urgencyColor = Color(0xFF388E3C); // Green
+      urgencyIcon = Icons.check_circle;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: urgencyColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: urgencyColor.withOpacity(0.3),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with icon and title
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(urgencyIcon, color: urgencyColor, size: 20),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Health Guidance',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: urgencyColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          
+          // Detected symptoms
+          if (detectedSymptoms.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Detected Symptoms:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: urgencyColor,
+                    ),
+                  ),
+                  SizedBox(height: 6),
+                  ...detectedSymptoms.take(3).map((symptom) => Padding(
+                    padding: EdgeInsets.only(bottom: 3),
+                    child: Text(
+                      '• $symptom',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: urgencyColor.withOpacity(0.85),
+                      ),
+                    ),
+                  )).toList(),
+                ],
+              ),
+            ),
+          ],
+          
+          // Recommendations
+          if (recommendations.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Recommended Actions:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: urgencyColor,
+                    ),
+                  ),
+                  SizedBox(height: 6),
+                  ...recommendations.map((rec) => Padding(
+                    padding: EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '• $rec',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: urgencyColor.withOpacity(0.85),
+                        height: 1.3,
+                      ),
                     ),
                   )).toList(),
                 ],

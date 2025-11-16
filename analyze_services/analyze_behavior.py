@@ -1032,6 +1032,18 @@ def analyze_endpoint():
     is_unhealthy = isinstance(illness_risk_final, str) and illness_risk_final.lower() in ("high", "medium")
     health_status = "unhealthy" if is_unhealthy else "healthy"
     print(f"[ANALYZE] Pet {pet_id}: Health status = {health_status}")
+    
+    # DETECT SEVERE ILLNESS PATTERNS - like period tracker warning "you might be severely sick"
+    # Analyzes past 7 days of logs for concerning patterns that suggest serious illness
+    severe_pattern_notice = detect_severe_illness_pattern(df)
+    if severe_pattern_notice:
+        merged_unhealthy_from_pattern = True
+    else:
+        merged_unhealthy_from_pattern = False
+
+    # Update health status if severe pattern detected (override ML prediction)
+    final_is_unhealthy = is_unhealthy or merged_unhealthy_from_pattern
+    final_health_status = "unhealthy" if final_is_unhealthy else "healthy"
 
     # Merge into response
     merged = dict(result)
@@ -1040,26 +1052,24 @@ def analyze_endpoint():
     merged["illness_risk_blended"] = illness_risk_final
     merged["illness_risk"] = illness_risk_final  # backward compatibility
     merged["illness_model_trained"] = illness_model_trained
-    merged["health_status"] = health_status
+    merged["health_status"] = final_health_status
     merged["illness_prediction"] = illness_risk_final
-    merged["is_unhealthy"] = is_unhealthy
-    merged["illness_status_text"] = "Unhealthy" if is_unhealthy else "Healthy"
+    merged["is_unhealthy"] = final_is_unhealthy
+    merged["illness_status_text"] = "Unhealthy" if final_is_unhealthy else "Healthy"
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
     
-    # DETECT SEVERE ILLNESS PATTERNS - like period tracker warning "you might be severely sick"
-    # Analyzes past 7 days of logs for concerning patterns that suggest serious illness
-    severe_pattern_notice = detect_severe_illness_pattern(df)
     if severe_pattern_notice:
         merged["severity_pattern_notice"] = severe_pattern_notice
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: ⚠️ SEVERE PATTERN DETECTED: {severe_pattern_notice.get('pattern')}")
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Message: {severe_pattern_notice.get('message')}")
+
     else:
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: No severe illness patterns detected")
     
-    # Generate health guidance based on detected symptoms
-    if symptoms_detected:
+    # Generate health guidance based on detected symptoms - only if pet is unhealthy
+    if final_is_unhealthy and symptoms_detected:
         health_guidance = generate_health_guidance(symptoms_detected)
         merged["health_guidance"] = health_guidance
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
