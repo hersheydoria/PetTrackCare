@@ -1368,40 +1368,72 @@ def public_pet_page(pet_id):
         # prepare pet fields for display (added gender & health)
         pet_name = pet.get("name") or "Unnamed"
         pet_breed = pet.get("breed") or "Unknown"
-        pet_age = pet.get("age") or ""
+        pet_age = pet.get("date_of_birth")  # Try new date_of_birth field first
+        
+        # If date_of_birth exists, calculate age from it
+        if pet_age:
+            try:
+                birth_date = pd.to_datetime(pet_age)
+                today = pd.to_datetime(datetime.utcnow().date())
+                years = (today - birth_date).days // 365
+                months = ((today - birth_date).days % 365) // 30
+                if years > 0:
+                    pet_age = f"{years}y {months}m" if months > 0 else f"{years}y"
+                else:
+                    pet_age = f"{months}m" if months > 0 else f"{(today - birth_date).days}d"
+            except Exception:
+                pet_age = pet.get("age") or ""
+        else:
+            # Fallback to legacy age field
+            pet_age = pet.get("age") or ""
+        
         pet_weight = pet.get("weight") or ""
         pet_gender = pet.get("gender") or "Unknown"
         pet_health = pet.get("health") or "Unknown"
 
         # Get current illness risk from fresh analysis (predictions table deprecated)
-        # The risk will be computed in the /analyze endpoint below
+        # Fetch fresh analysis from /analyze endpoint to get latest prediction
         latest_prediction_text = ""
         latest_suggestions = ""
-        latest_risk = None  # Will be set from current analysis
+        latest_risk = "low"
+        illness_model_trained = False
+        
+        try:
+            # Call /analyze endpoint internally to get current analysis
+            import requests
+            analysis_url = f"http://pettrackcare.onrender.com/analyze"
+            analysis_resp = requests.post(analysis_url, json={"pet_id": pet_id}, timeout=10)
+            if analysis_resp.status_code == 200:
+                analysis_data = analysis_resp.json()
+                latest_risk = analysis_data.get("illness_risk_blended") or analysis_data.get("illness_risk") or "low"
+                latest_prediction_text = analysis_data.get("trend") or ""
+                latest_suggestions = analysis_data.get("recommendation") or ""
+                illness_model_trained = analysis_data.get("illness_model_trained", False)
+                print(f"DEBUG: Got fresh analysis - risk: {latest_risk}, trend: {latest_prediction_text[:50]}")
+            else:
+                print(f"DEBUG: /analyze returned status {analysis_resp.status_code}")
+        except Exception as e:
+            print(f"DEBUG: Failed to fetch fresh analysis: {e}")
+            latest_risk = "low"
 
         # determine a simple color for risk badge
-        if latest_risk:
-            lr = str(latest_risk).lower()
-            if "high" in lr:
-                risk_color = "#B82132"  # deep red
-            elif "medium" in lr:
-                risk_color = "#FF8C00"  # orange
-            elif "low" in lr:
-                risk_color = "#2ECC71"  # green
-            else:
-                risk_color = "#666666"
+        lr = str(latest_risk).lower()
+        if "high" in lr:
+            risk_color = "#B82132"  # deep red
+        elif "medium" in lr:
+            risk_color = "#FF8C00"  # orange
+        elif "low" in lr:
+            risk_color = "#2ECC71"  # green
         else:
-            risk_color = "#2ECC71"  # healthy default (green)
+            risk_color = "#666666"
 
-        illness_model_trained = is_illness_model_trained()
         status_text = "Healthy"
-        if latest_risk:
-            try:
-                lr = str(latest_risk).lower()
-                if ("high" in lr) or ("medium" in lr):
-                    status_text = "Unhealthy"
-            except Exception:
-                status_text = "Healthy"
+        try:
+            lr = str(latest_risk).lower()
+            if ("high" in lr) or ("medium" in lr):
+                status_text = "Unhealthy"
+        except Exception:
+            status_text = "Healthy"
 
         # Build care tips for display using recent logs + current risk from analysis
         df_recent = fetch_logs_df(pet_id, limit=60)
@@ -1517,10 +1549,10 @@ def public_pet_page(pet_id):
                   <p><strong>Owner:</strong> {owner_name}</p>
                   <hr/>
                   <h4>Latest Analysis</h4>
-                  <p><strong>Status:</strong> {status_text}</p>
-                  <p><strong>Risk:</strong> {(latest_risk or 'None')}</p>
-                  <p><strong>Summary:</strong> {latest_prediction_text or 'No analysis available'}</p>
-                  <p><strong>Recommendation:</strong> {latest_suggestions or 'No recommendations available'}</p>
+                  <p><strong>Status:</strong> <span class="badge" style="background:{risk_color};">{status_text}</span></p>
+                  <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
+                  <p><strong>Summary:</strong> {latest_prediction_text or 'Monitoring pet health...'}</p>
+                  <p><strong>Recommendation:</strong> {latest_suggestions or 'Continue regular logging for better insights'}</p>
                   {care_tips_section}
                   {future_html}
                   <div style="margin-top:16px;text-align:right;">
