@@ -1784,14 +1784,17 @@ def train_endpoint():
 @app.route("/test_accuracy", methods=["POST"])
 def test_model_accuracy():
     """
-    Test the accuracy of illness prediction and sleep forecasting models.
+    Test the accuracy of illness prediction models.
     Uses time-series cross-validation: train on past data, test on future data.
+    ⚠️ WARNING: This endpoint can be slow on limited resources. Test with specific pet_id for speed.
     
     Request body:
     {
-        "pet_id": "optional - test specific pet or all pets if omitted",
+        "pet_id": "optional - test specific pet or first available pet if omitted",
         "test_days": 7  # how many days into future to test predictions
     }
+    
+    For faster results, provide a pet_id. Otherwise, it will test the first available pet.
     """
     data = request.get_json(silent=True) or {}
     pet_id = data.get("pet_id")
@@ -1819,12 +1822,19 @@ def test_model_accuracy():
             }
         }
         
-        # Get pets to test
+        # Get pets to test - limit to 1 by default for speed on limited resources
         if pet_id:
             pet_ids = [pet_id]
         else:
-            pets_resp = supabase.table("pets").select("id").limit(50).execute()
-            pet_ids = [p["id"] for p in (pets_resp.data or [])]
+            # Default: test only the first pet (instead of 50) for faster response
+            try:
+                pets_resp = supabase.table("pets").select("id").limit(1).execute()
+                pet_ids = [p["id"] for p in (pets_resp.data or [])]
+            except:
+                return jsonify({"error": "Could not fetch pets", "note": "Please provide pet_id parameter for faster results"}), 400
+        
+        if not pet_ids:
+            return jsonify({"warning": "No pets found", "recommendation": "Log behavior data for pets first"}), 200
         
         illness_y_true, illness_y_pred = [], []
         sleep_y_true, sleep_y_pred = [], []
@@ -1989,13 +1999,22 @@ def test_accuracy_summary():
         # Check if illness model is trained
         illness_trained = is_illness_model_trained()
         
-        # Get counts
-        pets_resp = supabase.table("pets").select("id", count="exact").execute()
-        pets_count = len(pets_resp.data or [])
+        # Get counts with timeout protection
+        pets_count = 0
+        logs_count = 0
         
-        logs_resp = supabase.table("behavior_logs").select("id", count="exact").limit(1).execute()
+        try:
+            pets_resp = supabase.table("pets").select("id", count="exact").execute()
+            pets_count = len(pets_resp.data or [])
+        except:
+            pets_count = 0
         
-        # Removed: predictions table query - predictions table deprecated
+        try:
+            logs_resp = supabase.table("behavior_logs").select("id", count="exact").limit(1).execute()
+            # Try to get count from response
+            logs_count = getattr(logs_resp, 'count', None) or len(logs_resp.data or [])
+        except:
+            logs_count = 0
         
         # Load illness model metadata if available
         model_metadata = None
@@ -2015,7 +2034,7 @@ def test_accuracy_summary():
             },
             "data_overview": {
                 "total_pets": pets_count,
-                "behavior_logs_available": logs_resp.count if hasattr(logs_resp, 'count') else "unknown"
+                "behavior_logs_available": logs_count
             },
             "recommendation": (
                 "Model is trained and ready for accuracy testing. Use POST /test_accuracy to run detailed tests."
