@@ -25,6 +25,241 @@ BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Flask(__name__)
 
+# ------------------- Health & Behavior Analysis Guide -------------------
+# Based on veterinary research and AAHA guidelines for early detection of health issues
+
+HEALTH_SYMPTOMS_REFERENCE = {
+    # Weight-related concerns
+    "weight_loss": {
+        "description": "Unexplained weight loss",
+        "possible_causes": ["hyperthyroidism", "diabetes", "cancer", "digestive issues", "parasites"],
+        "urgency": "medium",
+        "action": "Schedule vet visit within 1-2 weeks"
+    },
+    "weight_gain": {
+        "description": "Unexplained weight gain",
+        "possible_causes": ["obesity", "fluid retention", "hypothyroidism", "hormonal imbalance"],
+        "urgency": "low",
+        "action": "Discuss diet and exercise during next vet visit"
+    },
+    
+    # Gastrointestinal issues
+    "vomiting": {
+        "description": "Vomiting or regurgitation",
+        "possible_causes": ["infection", "toxins", "GI issues", "food intolerance", "pancreatitis"],
+        "urgency": "high" if "repeated" else "low",
+        "action": "Monitor; if repeated (2+ times in 24h), contact vet immediately"
+    },
+    "diarrhea": {
+        "description": "Diarrhea or loose stools",
+        "possible_causes": ["infection", "food change", "allergies", "parasites", "IBD"],
+        "urgency": "high" if "bloody" else "medium",
+        "action": "If bloody or persistent, seek vet care within 24 hours"
+    },
+    "bloody_stool": {
+        "description": "Blood in stool",
+        "possible_causes": ["infection", "parasites", "GI ulcers", "inflammatory bowel disease"],
+        "urgency": "high",
+        "action": "Contact vet same day"
+    },
+    
+    # Respiratory issues
+    "labored_breathing": {
+        "description": "Labored breathing or respiratory distress",
+        "possible_causes": ["respiratory infection", "heart disease", "asthma", "airway obstruction"],
+        "urgency": "critical",
+        "action": "EMERGENCY - Seek immediate veterinary care"
+    },
+    "coughing": {
+        "description": "Persistent coughing",
+        "possible_causes": ["respiratory infection", "heart disease", "asthma", "allergies"],
+        "urgency": "medium",
+        "action": "Schedule vet visit within 1 week"
+    },
+    "excessive_panting": {
+        "description": "Excessive panting not related to exercise/heat",
+        "possible_causes": ["heart disease", "anxiety", "pain", "fever"],
+        "urgency": "high",
+        "action": "Contact vet within 24 hours"
+    },
+    
+    # Skin and grooming
+    "excessive_grooming": {
+        "description": "Excessive licking, chewing, or scratching",
+        "possible_causes": ["allergies", "skin infection", "fleas", "anxiety", "pain"],
+        "urgency": "medium",
+        "action": "Schedule vet appointment within 1-2 weeks"
+    },
+    "hair_loss": {
+        "description": "Hair loss or bald spots",
+        "possible_causes": ["allergies", "infection", "parasites", "hormonal imbalance"],
+        "urgency": "medium",
+        "action": "Get veterinary skin evaluation"
+    },
+    "skin_redness": {
+        "description": "Red or irritated skin",
+        "possible_causes": ["infection", "allergies", "parasites", "inflammation"],
+        "urgency": "medium",
+        "action": "Prevent further irritation; schedule vet visit"
+    },
+    "hot_spots": {
+        "description": "Hot spots or localized skin inflammation",
+        "possible_causes": ["infection", "allergies", "over-grooming"],
+        "urgency": "medium",
+        "action": "Keep area clean; seek vet care to prevent worsening"
+    },
+    
+    # Urinary issues
+    "straining_urinate": {
+        "description": "Straining to urinate",
+        "possible_causes": ["UTI", "bladder stones", "urinary obstruction", "prostate issues"],
+        "urgency": "high",
+        "action": "Contact vet same day; may be urinary obstruction"
+    },
+    "blood_urine": {
+        "description": "Blood in urine",
+        "possible_causes": ["UTI", "bladder stones", "kidney disease", "trauma"],
+        "urgency": "high",
+        "action": "Vet visit same day"
+    },
+    "house_soiling": {
+        "description": "Accidents in the house (house soiling)",
+        "possible_causes": ["UTI", "incontinence", "cognitive decline", "anxiety", "digestive issues"],
+        "urgency": "medium",
+        "action": "Veterinary evaluation to rule out medical causes"
+    },
+    "excessive_urination": {
+        "description": "Increased frequency of urination",
+        "possible_causes": ["diabetes", "kidney disease", "UTI", "Cushing's disease"],
+        "urgency": "medium",
+        "action": "Vet visit within 24-48 hours"
+    },
+    
+    # Oral health
+    "bad_breath": {
+        "description": "Persistent bad breath or foul odor",
+        "possible_causes": ["dental disease", "oral infection", "oral tumors", "kidney disease"],
+        "urgency": "low",
+        "action": "Schedule dental exam with vet"
+    },
+    "excessive_drooling": {
+        "description": "Excessive drooling or salivation",
+        "possible_causes": ["dental disease", "mouth pain", "neurological issue", "toxin exposure"],
+        "urgency": "medium",
+        "action": "Vet examination needed"
+    },
+    "difficulty_chewing": {
+        "description": "Difficulty chewing or swallowing",
+        "possible_causes": ["dental disease", "mouth pain", "oral tumor", "neurological issue"],
+        "urgency": "medium",
+        "action": "Dental and neurological evaluation"
+    },
+    
+    # Behavioral and neurological
+    "sudden_aggression": {
+        "description": "Sudden aggression or irritability",
+        "possible_causes": ["pain", "neurological issue", "fear", "medical condition"],
+        "urgency": "high",
+        "action": "Veterinary behavioral and medical evaluation"
+    },
+    "withdrawal": {
+        "description": "Withdrawal, hiding, or social isolation",
+        "possible_causes": ["illness", "pain", "anxiety", "depression"],
+        "urgency": "medium",
+        "action": "Veterinary and behavioral assessment"
+    },
+    "clinginess": {
+        "description": "Unusual clinginess or separation anxiety",
+        "possible_causes": ["cognitive decline", "sensory impairment", "pain", "anxiety"],
+        "urgency": "medium",
+        "action": "Vet evaluation for underlying causes"
+    },
+    "head_pressing": {
+        "description": "Head pressing against walls/furniture (red flag)",
+        "possible_causes": ["intracranial disease", "neurological disorder", "toxin exposure"],
+        "urgency": "critical",
+        "action": "EMERGENCY - Immediate veterinary evaluation"
+    },
+    "circling": {
+        "description": "Circling behavior or disorientation",
+        "possible_causes": ["neurological issue", "cognitive decline", "inner ear problem"],
+        "urgency": "high",
+        "action": "Urgent vet examination"
+    },
+    "seizures": {
+        "description": "Seizures or convulsions",
+        "possible_causes": ["epilepsy", "toxin exposure", "neurological disease", "fever"],
+        "urgency": "critical",
+        "action": "EMERGENCY - Immediate veterinary care"
+    },
+    "loss_of_balance": {
+        "description": "Loss of balance or coordination",
+        "possible_causes": ["inner ear infection", "neurological issue", "vestibular disease"],
+        "urgency": "high",
+        "action": "Urgent vet evaluation"
+    },
+    
+    # Movement and pain
+    "lameness": {
+        "description": "Limping or lameness",
+        "possible_causes": ["injury", "arthritis", "joint pain", "neurological issue"],
+        "urgency": "medium",
+        "action": "Vet examination for pain management"
+    },
+    "difficulty_moving": {
+        "description": "Difficulty standing or moving",
+        "possible_causes": ["arthritis", "hip dysplasia", "injury", "neurological issue", "pain"],
+        "urgency": "medium",
+        "action": "Orthopedic and pain evaluation"
+    },
+    "reluctance_stairs": {
+        "description": "Avoiding stairs or jumping",
+        "possible_causes": ["joint pain", "arthritis", "age-related", "injury"],
+        "urgency": "low",
+        "action": "Pain management discussion with vet"
+    },
+    
+    # Vital sign changes
+    "excessive_thirst": {
+        "description": "Excessive drinking (polydipsia)",
+        "possible_causes": ["diabetes", "kidney disease", "Cushing's disease", "UTI", "fever"],
+        "urgency": "medium",
+        "action": "Vet visit within 24-48 hours for bloodwork"
+    },
+    "loss_appetite": {
+        "description": "Loss of appetite (anorexia)",
+        "possible_causes": ["dental pain", "illness", "digestive issue", "stress", "medication side effect"],
+        "urgency": "medium",
+        "action": "Vet evaluation; monitor for dehydration"
+    },
+    "increased_hunger": {
+        "description": "Increased appetite (hyperphagia)",
+        "possible_causes": ["hyperthyroidism (cats)", "Cushing's disease", "diabetes", "malabsorption"],
+        "urgency": "low",
+        "action": "Routine vet visit for evaluation"
+    },
+    
+    # Sleep and energy
+    "excessive_sleeping": {
+        "description": "Sleeping more than usual",
+        "possible_causes": ["pain", "infection", "metabolic issue", "depression", "age-related"],
+        "urgency": "medium",
+        "action": "Vet evaluation for underlying causes"
+    },
+    "restlessness_night": {
+        "description": "Restlessness or pacing at night",
+        "possible_causes": ["cognitive decline", "pain", "anxiety", "medical condition"],
+        "urgency": "low",
+        "action": "Discuss behavioral and medical options with vet"
+    },
+    "lethargy": {
+        "description": "General lethargy or lack of energy",
+        "possible_causes": ["infection", "pain", "metabolic issue", "cardiac issue", "depression"],
+        "urgency": "high",
+        "action": "Vet evaluation needed"
+    },
+}
+
 # Ensure a stable models directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
@@ -758,14 +993,17 @@ def analyze_endpoint():
             
             # Count symptoms from latest log
             symptom_count = 0
+            symptoms_detected = []
             try:
                 import json
                 symptoms_str = str(latest.get("symptoms", "[]") or "[]")
                 symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
                 filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
+                symptoms_detected = filtered  # Keep for health guidance
                 symptom_count = len(filtered)
             except:
                 symptom_count = 0
+                symptoms_detected = []
             
             # Use ML prediction directly
             predicted_risk = predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count)
@@ -819,6 +1057,12 @@ def analyze_endpoint():
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Message: {severe_pattern_notice.get('message')}")
     else:
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: No severe illness patterns detected")
+    
+    # Generate health guidance based on detected symptoms
+    if symptoms_detected:
+        health_guidance = generate_health_guidance(symptoms_detected)
+        merged["health_guidance"] = health_guidance
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
     
     # Add data sufficiency notice for user
     if len(df) < 5:
@@ -1306,6 +1550,62 @@ def start_scheduler():
 # Removed: backfill_future_sleep_forecasts() - predictions table deprecated
 # Removed: migrate_legacy_sleep_forecasts() - predictions table deprecated  
 # Removed: store_prediction() - predictions table deprecated
+
+def generate_health_guidance(symptoms_list):
+    """
+    Generate health guidance and recommendations based on detected symptoms.
+    Uses HEALTH_SYMPTOMS_REFERENCE to provide evidence-based information.
+    
+    Args:
+        symptoms_list: List of symptom strings detected from the pet's logs
+        
+    Returns:
+        dict with guidance, urgency level, and recommended actions
+    """
+    if not symptoms_list:
+        return {
+            "guidance": "No specific health concerns detected. Continue regular monitoring.",
+            "urgency": "none",
+            "recommendations": ["Maintain regular vet checkups", "Continue logging pet behavior"]
+        }
+    
+    guidance_items = []
+    max_urgency = "none"
+    urgency_levels = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+    
+    for symptom in symptoms_list:
+        symptom_lower = str(symptom).lower().strip()
+        # Try to find matching symptom in reference
+        for key, info in HEALTH_SYMPTOMS_REFERENCE.items():
+            if key in symptom_lower or symptom_lower in key:
+                guidance_items.append(info)
+                if urgency_levels.get(info.get("urgency", "none"), 0) > urgency_levels.get(max_urgency, 0):
+                    max_urgency = info.get("urgency", "none")
+                break
+    
+    # Build recommendations
+    recommendations = []
+    if max_urgency == "critical":
+        recommendations.append("🚨 EMERGENCY: Seek immediate veterinary care")
+    elif max_urgency == "high":
+        recommendations.append("⚠️ Contact your veterinarian same day")
+    elif max_urgency == "medium":
+        recommendations.append("📋 Schedule a vet appointment within 24-48 hours")
+    elif max_urgency == "low":
+        recommendations.append("📅 Schedule a routine vet visit")
+    
+    # Add specific recommendations
+    for item in guidance_items:
+        if item.get("action"):
+            recommendations.append(item["action"])
+    
+    return {
+        "guidance": f"Detected {len(guidance_items)} health concern(s). {HEALTH_SYMPTOMS_REFERENCE.get('summary', 'See details below.')}",
+        "urgency": max_urgency,
+        "detected_symptoms": [item.get("description") for item in guidance_items],
+        "recommendations": recommendations[:5],  # Top 5 recommendations
+        "details": guidance_items
+    }
 
 def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count=0, model_path=os.path.join(MODELS_DIR, "illness_model.pkl")):
     """
