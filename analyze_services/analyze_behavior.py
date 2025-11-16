@@ -1374,24 +1374,37 @@ def public_pet_page(pet_id):
         pet_age_field = pet.get("date_of_birth")
         if pet_age_field:
             try:
+                # Handle timezone-aware datetime strings (e.g., '2021-09-30 00:00:00+00')
                 birth_date = pd.to_datetime(pet_age_field)
+                # Convert to naive UTC date for comparison
+                if hasattr(birth_date, 'tz_localize') and birth_date.tzinfo is not None:
+                    birth_date = birth_date.tz_convert('UTC').tz_localize(None)
+                
                 today = pd.to_datetime(datetime.utcnow().date())
                 age_delta = (today - birth_date).days
-                years = age_delta // 365
-                months = (age_delta % 365) // 30
                 
-                # Display age in a simple, readable format
-                if years >= 1:
-                    pet_age = f"{years} year{'s' if years > 1 else ''} old"
-                elif months >= 1:
-                    pet_age = f"{months} month{'s' if months > 1 else ''} old"
+                if age_delta < 0:
+                    # Birth date is in the future (invalid data)
+                    print(f"DEBUG: Birth date is in the future: {pet_age_field}")
+                    pet_age = "Unknown"
                 else:
-                    pet_age = f"{age_delta} day{'s' if age_delta > 1 else ''} old"
-                
-                print(f"DEBUG: Calculated age from date_of_birth: {pet_age}")
+                    years = age_delta // 365
+                    months = (age_delta % 365) // 30
+                    
+                    # Display age in a simple, readable format
+                    if years >= 1:
+                        pet_age = f"{years} year{'s' if years > 1 else ''} old"
+                    elif months >= 1:
+                        pet_age = f"{months} month{'s' if months > 1 else ''} old"
+                    else:
+                        pet_age = f"{age_delta} day{'s' if age_delta > 1 else ''} old"
+                    
+                    print(f"DEBUG: Calculated age from date_of_birth '{pet_age_field}': {pet_age} (delta: {age_delta} days, years: {years}, months: {months})")
             except Exception as e:
-                print(f"DEBUG: Failed to parse date_of_birth: {e}")
-                pet_age = ""
+                print(f"DEBUG: Failed to parse date_of_birth '{pet_age_field}': {e}")
+                import traceback
+                traceback.print_exc()
+                pet_age = "Unknown"
         
         pet_weight = pet.get("weight") or ""
         pet_gender = pet.get("gender") or "Unknown"
@@ -1544,25 +1557,25 @@ def public_pet_page(pet_id):
                   <div class="profile-text">
                     <p class="label">Name</p><p class="value">{pet_name}</p>
                     <p class="label">Breed</p><p class="value">{pet_breed}</p>
-                    <p class="label">Age</p><p class="value">{pet_age}</p>
-                    <p class="label">Weight</p><p class="value">{pet_weight}</p>
+                    <p class="label">Age</p><p class="value">{pet_age if pet_age else 'Not available'}</p>
+                    <p class="label">Weight</p><p class="value">{pet_weight if pet_weight else 'Not specified'}</p>
                   </div>
                 </div>
                 <p class="label">Gender</p><p class="value">{pet_gender}</p>
                 <p class="label">Health</p><p class="value">{pet_health}</p>
+                <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;">
+                  <div style="flex:1;min-width:200px;">
+                    <span class="label">Health Status</span><br/>
+                    <span class="badge" style="background:{risk_color};">{status_text}</span>
+                    <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
+                  </div>
+                </div>
                 <div class="owner-info">
                   <div style="display:flex;gap:12px;align-items:center;">
                     {f'<img src="{owner_profile_picture}" alt="{owner_name}" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0;">' if owner_profile_picture else '<div style="width:60px;height:60px;background:#e0e0e0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:24px;">👤</div>'}
                     <div>
                       <p class="label">Owner</p><p class="value">{owner_name}</p>
                     </div>
-                  </div>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;">
-                  <div style="flex:1;min-width:200px;">
-                    <span class="label">Health Status</span><br/>
-                    <span class="badge" style="background:{risk_color};">{status_text}</span>
-                    <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
                   </div>
                 </div>
               </div>
