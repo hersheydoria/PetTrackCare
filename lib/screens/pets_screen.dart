@@ -233,20 +233,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     'Low': '🐶',
   };
 
-  Future<Map<String, dynamic>?> _fetchLatestPet() async {
-    final ownerId = user?.id;
-    if (ownerId == null) return null;
-    final response = await Supabase.instance.client
-        .from('pets')
-        .select()
-        .eq('owner_id', ownerId)
-        .order('id', ascending: false)
-        .limit(1);
-    final data = response as List?;
-    if (data == null || data.isEmpty) return null;
-    return data.first as Map<String, dynamic>;
-  }
-
   // Helper method to check if cached data is still valid
   bool _isCacheValid(String petId) {
     final timestamp = _petDataCacheTimestamp[petId];
@@ -1034,36 +1020,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       _currentMapLabel = label;
       _currentMapSub = subtitle;
     });
-  }
-
-  // Get the actual pet owner's name from the database
-  Future<String> _getActualOwnerName() async {
-    if (_selectedPet == null) return 'Unknown Owner';
-    
-    try {
-      final ownerId = _selectedPet!['owner_id'];
-      if (ownerId == null) return 'Unknown Owner';
-      
-      // Fetch owner information from users table
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('name')
-          .eq('id', ownerId)
-          .limit(1);
-          
-      final userData = response as List?;
-      if (userData != null && userData.isNotEmpty) {
-        final user = userData.first as Map<String, dynamic>;
-        final name = user['name']?.toString();
-        
-        // Return name if available, otherwise fallback
-        return name?.isNotEmpty == true ? name! : 'Owner';
-      }
-    } catch (e) {
-      // Error fetching owner name
-    }
-    
-    return 'Owner';
   }
 
   @override
@@ -3060,7 +3016,6 @@ void _disconnectDevice() async {
                                   // Move lost post to found type in community_posts and update content
                                   final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
                                   final petName = _selectedPet!['name'] ?? 'Unnamed';
-                                  final breed = _selectedPet!['breed'] ?? 'Unknown';
                                   // Find the latest missing post for this pet and user
                                   final posts = await Supabase.instance.client
                                       .from('community_posts')
@@ -4466,140 +4421,6 @@ void _disconnectDevice() async {
   }
 
   // Show share dialog for QR code
-  void _showShareDialog() {
-    final baseBackend = backendUrl.replaceAll(RegExp(r'/analyze/?\$'), '');
-    final publicUrl = '$baseBackend/pet/${_selectedPet!['id']}';
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.share, color: deepRed),
-            SizedBox(width: 8),
-            Text('Share Pet Info'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Share your pet\'s information with others:'),
-            SizedBox(height: 16),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.link, color: Colors.grey.shade600, size: 16),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      publicUrl,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        color: Colors.grey.shade700,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: Colors.red)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              // Here you could integrate with platform sharing
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Sharing feature coming soon!'),
-                  backgroundColor: Colors.blue,
-                ),
-              );
-            },
-            child: Text('Share'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Show save QR dialog
-  void _showSaveQRDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.download, color: deepRed),
-            SizedBox(width: 8),
-            Text('Save QR Code'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Save QR code as image:'),
-            SizedBox(height: 16),
-            Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.blue, size: 16),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'The QR code will be saved to your device\'s gallery.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: Colors.red)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              // Here you could implement actual saving functionality
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Save feature coming soon!'),
-                  backgroundColor: Colors.blue,
-                ),
-              );
-            },
-            child: Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
   // Fetch behavior log for a specific date (returns the latest if multiple exist)
   Future<Map<String, dynamic>?> _fetchBehaviorForDate(DateTime day) async {
     if (_selectedPet == null) return null;
@@ -5776,49 +5597,6 @@ void _disconnectDevice() async {
     );
   }
 
-  // Helper widget for analysis cards
-  Widget _buildAnalysisCard({
-    required IconData icon,
-    required String title,
-    required String content,
-    required Color color,
-  }) {
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 20),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: color,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  content,
-                  style: TextStyle(fontSize: 14),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  
   // Helper method to get health status message based on illness risk
   String _getHealthStatusMessage() {
     if (!_isUnhealthy) {
@@ -5840,7 +5618,6 @@ void _disconnectDevice() async {
   Widget _buildDataNoticeCard(Map<String, dynamic> notice) {
     final status = notice['status']?.toString() ?? 'unknown';
     final message = notice['message']?.toString() ?? '';
-    final logsNeeded = notice['logs_needed'] as int?;
     
     // Determine color based on status
     Color cardColor;
@@ -5880,70 +5657,6 @@ void _disconnectDevice() async {
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildModelNoticeCard(Map<String, dynamic> notice) {
-    final status = notice['status']?.toString() ?? 'unknown';
-    final message = notice['message']?.toString() ?? '';
-    final details = notice['details']?.toString();
-    
-    // Determine color based on status
-    Color cardColor;
-    IconData iconData;
-    
-    if (status == 'no_model_trained') {
-      cardColor = Colors.blue;
-      iconData = Icons.auto_awesome;
-    } else if (status == 'model_trained') {
-      cardColor = Colors.green;
-      iconData = Icons.done_all;
-    } else {
-      cardColor = Colors.grey;
-      iconData = Icons.info;
-    }
-    
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: cardColor.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: cardColor.withOpacity(0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(iconData, color: cardColor, size: 20),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  message,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: cardColor,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (details != null && details.isNotEmpty) ...[
-            SizedBox(height: 8),
-            Padding(
-              padding: EdgeInsets.only(left: 28),
-              child: Text(
-                details,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: cardColor.withOpacity(0.8),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -6145,119 +5858,6 @@ void _disconnectDevice() async {
         ],
       ),
     );
-  }
-
-  // Show detailed health information when health alert is tapped
-  void _showHealthDetailsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.health_and_safety, color: deepRed, size: 24),
-            SizedBox(width: 8),
-            Text(
-              'Health Alert Details',
-              style: TextStyle(color: deepRed, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Risk Level
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: deepRed.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: deepRed.withOpacity(0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Risk Level: ${_illnessRisk?.toUpperCase() ?? 'UNKNOWN'}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: deepRed,
-                        fontSize: 16,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      _getRiskDescription(),
-                      style: TextStyle(fontSize: 14),
-                    ),
-                  ],
-                ),
-              ),
-              
-              SizedBox(height: 16),
-              
-              // General advice
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.lightbulb_outline, color: Colors.amber.shade700, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'Important Reminder',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.amber.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'This prediction is based on behavior patterns and should not replace professional veterinary advice. If clinical signs persist or worsen, please consult a veterinarian immediately.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade700,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Close', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Helper method to get risk description
-  String _getRiskDescription() {
-    switch (_illnessRisk?.toLowerCase()) {
-      case 'high':
-        return 'Your pet shows patterns that may indicate potential health issues. Immediate attention recommended.';
-      case 'medium':
-        return 'Some concerning patterns detected. Monitor closely and consider veterinary consultation.';
-      case 'low':
-        return 'Minor indicators present. Continue monitoring your pet\'s behavior.';
-      default:
-        return 'Unable to determine risk level. Continue regular health monitoring.';
-    }
   }
 
   // Loading skeleton for analysis section
