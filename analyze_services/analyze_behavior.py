@@ -1368,28 +1368,49 @@ def public_pet_page(pet_id):
         # prepare pet fields for display (added gender & health)
         pet_name = pet.get("name") or "Unnamed"
         pet_breed = pet.get("breed") or "Unknown"
-        pet_age = pet.get("date_of_birth")  # Try new date_of_birth field first
         
-        # If date_of_birth exists, calculate age from it
-        if pet_age:
+        # Calculate age from date_of_birth if available
+        pet_age = ""
+        pet_age_field = pet.get("date_of_birth")
+        if pet_age_field:
             try:
-                birth_date = pd.to_datetime(pet_age)
+                birth_date = pd.to_datetime(pet_age_field)
                 today = pd.to_datetime(datetime.utcnow().date())
-                years = (today - birth_date).days // 365
-                months = ((today - birth_date).days % 365) // 30
+                age_delta = (today - birth_date).days
+                years = age_delta // 365
+                months = (age_delta % 365) // 30
                 if years > 0:
                     pet_age = f"{years}y {months}m" if months > 0 else f"{years}y"
+                elif months > 0:
+                    pet_age = f"{months}m"
                 else:
-                    pet_age = f"{months}m" if months > 0 else f"{(today - birth_date).days}d"
-            except Exception:
+                    pet_age = f"{age_delta}d"
+                print(f"DEBUG: Calculated age from date_of_birth: {pet_age}")
+            except Exception as e:
+                print(f"DEBUG: Failed to parse date_of_birth: {e}")
                 pet_age = pet.get("age") or ""
-        else:
-            # Fallback to legacy age field
+        
+        # Fallback to legacy age field if no date_of_birth
+        if not pet_age:
             pet_age = pet.get("age") or ""
+            if pet_age:
+                print(f"DEBUG: Using legacy age field: {pet_age}")
         
         pet_weight = pet.get("weight") or ""
         pet_gender = pet.get("gender") or "Unknown"
         pet_health = pet.get("health") or "Unknown"
+        pet_profile_picture = pet.get("profile_picture") or ""
+        
+        # Fetch owner profile picture
+        owner_profile_picture = ""
+        if owner_id:
+            try:
+                uresp = supabase.table("users").select("profile_picture").eq("id", owner_id).limit(1).execute()
+                urows = uresp.data or []
+                if urows:
+                    owner_profile_picture = urows[0].get("profile_picture") or ""
+            except Exception as e:
+                print(f"DEBUG: Failed to fetch owner profile picture: {e}")
 
         # Get current illness risk from fresh analysis (predictions table deprecated)
         # Fetch fresh analysis from /analyze endpoint to get latest prediction
@@ -1493,6 +1514,10 @@ def public_pet_page(pet_id):
                 .label {{ color:#666; font-size:13px; margin-bottom:4px; }}
                 .value {{ color:#222; font-weight:600; font-size:16px; margin-bottom:12px; }}
                 .badge {{ display:inline-block;padding:6px 10px;border-radius:12px;font-weight:600;color:#fff;font-size:13px; }}
+                .profile-img {{ width:120px; height:120px; border-radius:12px; object-fit:cover; border:3px solid #e0e0e0; margin-bottom:12px; }}
+                .profile-container {{ display:flex; align-items:flex-start; gap:16px; margin-bottom:16px; }}
+                .profile-text {{ flex:1; }}
+                .owner-info {{ margin-top:16px; padding-top:16px; border-top:1px solid #eee; }}
                 h2 {{ font-size:20px; margin-bottom:16px; }}
                 h3 {{ font-size:18px; margin-bottom:12px; }}
                 h4 {{ font-size:16px; margin:16px 0 8px 0; }}
@@ -1517,13 +1542,25 @@ def public_pet_page(pet_id):
             <body>
               <div class="card">
                 <h2>Pet Quick Info</h2>
-                <p class="label">Name</p><p class="value">{pet_name}</p>
-                <p class="label">Breed</p><p class="value">{pet_breed}</p>
-                <p class="label">Age</p><p class="value">{pet_age}</p>
-                <p class="label">Weight</p><p class="value">{pet_weight}</p>
+                <div class="profile-container">
+                  {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div style="width:120px;height:120px;background:#e0e0e0;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#999;">No photo</div>'}
+                  <div class="profile-text">
+                    <p class="label">Name</p><p class="value">{pet_name}</p>
+                    <p class="label">Breed</p><p class="value">{pet_breed}</p>
+                    <p class="label">Age</p><p class="value">{pet_age}</p>
+                    <p class="label">Weight</p><p class="value">{pet_weight}</p>
+                  </div>
+                </div>
                 <p class="label">Gender</p><p class="value">{pet_gender}</p>
                 <p class="label">Health</p><p class="value">{pet_health}</p>
-                <p class="label">Owner</p><p class="value">{owner_name}</p>
+                <div class="owner-info">
+                  <div style="display:flex;gap:12px;align-items:center;">
+                    {f'<img src="{owner_profile_picture}" alt="{owner_name}" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0;">' if owner_profile_picture else '<div style="width:60px;height:60px;background:#e0e0e0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:24px;">👤</div>'}
+                    <div>
+                      <p class="label">Owner</p><p class="value">{owner_name}</p>
+                    </div>
+                  </div>
+                </div>
                 <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;">
                   <div style="flex:1;min-width:200px;">
                     <span class="label">Health Status</span><br/>
@@ -1540,19 +1577,28 @@ def public_pet_page(pet_id):
               <div id="modal" style="display:none;" class="modal-backdrop" onclick="closeModal()">
                 <div class="modal" onclick="event.stopPropagation()">
                   <h3>Detailed Pet Info</h3>
-                  <p><strong>Name:</strong> {pet_name}</p>
-                  <p><strong>Breed:</strong> {pet_breed}</p>
-                  <p><strong>Age:</strong> {pet_age}</p>
-                  <p><strong>Weight:</strong> {pet_weight}</p>
-                  <p><strong>Gender:</strong> {pet_gender}</p>
-                  <p><strong>Health:</strong> {pet_health}</p>
-                  <p><strong>Owner:</strong> {owner_name}</p>
+                  <div class="profile-container">
+                    {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div style="width:120px;height:120px;background:#e0e0e0;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#999;">No photo</div>'}
+                    <div class="profile-text">
+                      <p><strong>Name:</strong> {pet_name}</p>
+                      <p><strong>Breed:</strong> {pet_breed}</p>
+                      <p><strong>Age:</strong> {pet_age}</p>
+                      <p><strong>Weight:</strong> {pet_weight}</p>
+                      <p><strong>Gender:</strong> {pet_gender}</p>
+                      <p><strong>Health:</strong> {pet_health}</p>
+                    </div>
+                  </div>
+                  <div class="owner-info">
+                    <p><strong>Owner Information</strong></p>
+                    <div style="display:flex;gap:12px;align-items:center;margin-top:12px;">
+                      {f'<img src="{owner_profile_picture}" alt="{owner_name}" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0;">' if owner_profile_picture else '<div style="width:60px;height:60px;background:#e0e0e0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:24px;">👤</div>'}
+                      <div><p><strong>{owner_name}</strong></p></div>
+                    </div>
+                  </div>
                   <hr/>
                   <h4>Latest Analysis</h4>
                   <p><strong>Status:</strong> <span class="badge" style="background:{risk_color};">{status_text}</span></p>
                   <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
-                  <p><strong>Summary:</strong> {latest_prediction_text or 'Monitoring pet health...'}</p>
-                  <p><strong>Recommendation:</strong> {latest_suggestions or 'Continue regular logging for better insights'}</p>
                   {care_tips_section}
                   {future_html}
                   <div style="margin-top:16px;text-align:right;">
