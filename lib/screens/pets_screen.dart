@@ -143,7 +143,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // Backend messaging about analysis quality and data sufficiency
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
-  Map<String, dynamic>? _breedNotice; // tells user about breed-specific behaviors (e.g., "Eating less is normal for Chihuahuas")
   Map<String, dynamic>? _severityPatternNotice; // smart warning when pet shows severe illness patterns over 7 days
 
   // New: latest GPS/device location for selected pet
@@ -171,19 +170,33 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
   ];
 
-  // Food intake options
+  // Food Intake & Weight-Related Behavior
   final List<String> foodIntakeOptions = [
-    "Not Eating", "Eating Less", "Normal", "Eating More"
+    "Not eating / Loss of appetite",
+    "Eating less than usual",
+    "Normal eating",
+    "Eating more than usual",
+    "Sudden weight loss",
+    "Sudden weight gain"
   ];
 
-  // Water intake options
+  // Water Intake (Reflects dehydration risks & diseases like diabetes/kidney issues)
   final List<String> waterIntakeOptions = [
-    "Not Drinking", "Drinking Less", "Normal", "Drinking More"
+    "Not drinking",
+    "Drinking less than usual",
+    "Normal drinking",
+    "Excessive drinking (increased thirst)"
   ];
 
-  // Bathroom habits options
+  // Bathroom Habits (Expanded to include urgent medical indicators)
   final List<String> bathroomOptions = [
-    "Normal", "Diarrhea", "Constipation", "Frequent Urination"
+    "Normal urination/defecation",
+    "Diarrhea",
+    "Constipation",
+    "Frequent urination",
+    "Straining to urinate",
+    "Blood in urine",
+    "House soiling / accidents"
   ];
 
   // Body temperature options
@@ -196,27 +209,36 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     "Eager to Eat", "Normal", "Reluctant", "Refuses Food"
   ];
 
-  // Common symptoms for dogs and cats
+  // Clinical Signs (Physical Symptoms) - Expanded set directly based on health indicators
   final List<String> commonSymptoms = [
     "Vomiting",
+    "Persistent vomiting",
     "Coughing",
     "Sneezing",
-    "Excessive Scratching",
+    "Wheezing / difficulty breathing",
+    "Excessive panting",
+    "Excessive scratching",
+    "Excessive grooming / licking",
+    "Hair loss / bald spots",
+    "Skin redness or irritation",
     "Limping",
-    "Loss of Appetite",
-    "Excessive Thirst",
-    "Discharge from Eyes/Nose",
-    "Bad Breath",
-    "Lethargy/Weakness",
-    "Bloated Stomach",
-    "Difficulty Breathing",
-    "Excessive Drooling",
-    "Trembling/Shaking",
-    "Aggression/Irritability",
+    "Difficulty standing or moving",
+    "Bloating / bloated stomach",
+    "Excessive drooling",
+    "Bad breath",
+    "Eye or nose discharge",
+    "Trembling / shaking",
     "None of the Above"
   ];
 
-  final List<String> activityLevels = ["High", "Medium", "Low"];
+  // Activity Level & Energy (Incorporates fatigue and restlessness patterns tied to diseases)
+  final List<String> activityLevels = [
+    "High activity",
+    "Normal activity",
+    "Low activity / lethargy",
+    "Restlessness (especially at night)",
+    "Sudden weakness / collapse"
+  ];
 
   // Add these variables
   CalendarFormat _calendarFormat = CalendarFormat.month;
@@ -228,6 +250,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   // emoji mappings for activity
   final Map<String, String> _activityEmojis = {
+    'High activity': '🐕',
+    'Normal activity': '🐾',
+    'Low activity / lethargy': '🐶',
+    'Restlessness (especially at night)': '😰',
+    'Sudden weakness / collapse': '⚠️',
+    // Legacy mappings for backward compatibility
     'High': '🐕',
     'Medium': '🐾',
     'Low': '🐶',
@@ -719,7 +747,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // Parse data_notice and model_notice from backend response
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
-          _breedNotice = body['breed_notice'] as Map<String, dynamic>?;
           _severityPatternNotice = body['severity_pattern_notice'] as Map<String, dynamic>?;
         });
       } else {
@@ -5435,12 +5462,6 @@ void _disconnectDevice() async {
             SizedBox(height: 12),
           ],
           
-          // Display breed notice if breed-aware adjustment was applied
-          if (_breedNotice != null) ...[
-            _buildBreedNoticeCard(_breedNotice!),
-            SizedBox(height: 12),
-          ],
-          
           // Display severity pattern notice if concerning patterns detected
           if (_severityPatternNotice != null) ...[
             _buildSeverityPatternNoticeCard(_severityPatternNotice!),
@@ -5657,71 +5678,6 @@ void _disconnectDevice() async {
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBreedNoticeCard(Map<String, dynamic> notice) {
-    final status = notice['status']?.toString() ?? 'unknown';
-    final message = notice['message']?.toString() ?? '';
-    final details = notice['details']?.toString();
-    
-    // Determine color and icon based on status
-    Color cardColor;
-    IconData iconData;
-    
-    if (status == 'breed_typical_behavior') {
-      cardColor = Colors.purple;
-      iconData = Icons.pets;
-    } else if (status == 'breed_prone_condition') {
-      cardColor = Colors.orange;
-      iconData = Icons.warning_amber;
-    } else {
-      cardColor = Colors.grey;
-      iconData = Icons.info;
-    }
-    
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: cardColor.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: cardColor.withOpacity(0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(iconData, color: cardColor, size: 20),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  message,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: cardColor,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (details != null && details.isNotEmpty) ...[
-            SizedBox(height: 8),
-            Padding(
-              padding: EdgeInsets.only(left: 28),
-              child: Text(
-                details,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: cardColor.withOpacity(0.8),
-                  height: 1.4,
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );

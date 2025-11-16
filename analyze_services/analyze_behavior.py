@@ -50,379 +50,7 @@ def cleanup_incompatible_models():
 # Run cleanup on startup
 cleanup_incompatible_models()
 
-# ------------------- Breed-Aware Personalization -------------------
-
-BREED_NORMS = {
-    # Small breeds - naturally lower activity, eat less
-    "chihuahua": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",  # Changed from "eating less" - eating less + lethargy is abnormal, not breed trait
-        "typical_water_intake": "normal",
-        "risk_factors": []  # Lethargy is NOT typical - will be caught by symptom detection
-    },
-    "toy poodle": {
-        "typical_activity": "medium",
-        "typical_food_intake": "eating less",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "yorkshire terrier": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "pomeranian": {
-        "typical_activity": "high",
-        "typical_food_intake": "eating less",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "maltese": {
-        "typical_activity": "medium",
-        "typical_food_intake": "eating less",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "shih tzu": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    
-    # Large/Giant breeds - naturally higher activity, more food
-    "golden retriever": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["hip dysplasia", "obesity"]
-    },
-    "labrador retriever": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["obesity", "hip dysplasia"]
-    },
-    "german shepherd": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["digestive issues", "hip dysplasia"]
-    },
-    "great dane": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["bloat", "heart disease"]
-    },
-    "boxer": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["heart disease"]
-    },
-    "doberman": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["heart disease", "hip dysplasia"]
-    },
-    
-    # Medium breeds
-    "beagle": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["obesity"]
-    },
-    "bulldog": {
-        "typical_activity": "low",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["breathing issues", "heat sensitivity"]
-    },
-    "french bulldog": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["breathing issues", "heat sensitivity"]
-    },
-    "dachshund": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["back problems"]
-    },
-    "cocker spaniel": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["ear infections", "hip dysplasia"]
-    },
-    "english springer spaniel": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["ear infections", "hip dysplasia"]
-    },
-    
-    # Cats (common breeds)
-    "persian": {
-        "typical_activity": "low",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["respiratory issues", "kidney disease", "eye discharge"]
-    },
-    "siamese": {
-        "typical_activity": "high",
-        "typical_food_intake": "eating less",
-        "typical_water_intake": "normal",
-        "risk_factors": ["kidney disease", "asthma"]
-    },
-    "bengal": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["hypertrophic cardiomyopathy"]
-    },
-    "maine coon": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["hip dysplasia", "heart disease", "spinal muscular atrophy"]
-    },
-    "ragdoll": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["heart disease", "kidney disease"]
-    },
-    "british shorthair": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["obesity", "heart disease"]
-    },
-    "scottish fold": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["ear mites", "osteochondrodysplasia", "heart disease"]
-    },
-    "abyssinian": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["kidney disease", "amyloidosis"]
-    },
-    "sphynx": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["heart disease", "skin infections", "heat sensitivity"]
-    },
-    "devon rex": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["hypertrophic cardiomyopathy", "ear mites"]
-    },
-    "cornish rex": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["hypertrophic cardiomyopathy"]
-    },
-    "burmese": {
-        "typical_activity": "medium",
-        "typical_food_intake": "eating less",
-        "typical_water_intake": "normal",
-        "risk_factors": ["kidney disease", "hypertrophic cardiomyopathy"]
-    },
-    "russian blue": {
-        "typical_activity": "medium",
-        "typical_food_intake": "eating less",
-        "typical_water_intake": "normal",
-        "risk_factors": ["kidney disease"]
-    },
-    "british longhair": {
-        "typical_activity": "low",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["obesity", "heart disease", "kidney disease"]
-    },
-    "exotic shorthair": {
-        "typical_activity": "low",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["respiratory issues", "kidney disease", "polycystic kidney disease"]
-    },
-    "tonkinese": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["kidney disease", "hypertrophic cardiomyopathy"]
-    },
-    "turkish van": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "high",  # Turk Vans love water
-        "risk_factors": ["hypertrophic cardiomyopathy"]
-    },
-    "norwegian forest cat": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["hip dysplasia", "glycogen storage disease"]
-    },
-    "birman": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["kidney disease", "hypertrophic cardiomyopathy"]
-    },
-    "tabby": {
-        "typical_activity": "high",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "orange cat": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": ["obesity"]
-    },
-    "calico": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "domestic longhair": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    "domestic shorthair": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    },
-    
-    # Default for unknown breeds
-    "unknown": {
-        "typical_activity": "medium",
-        "typical_food_intake": "normal",
-        "typical_water_intake": "normal",
-        "risk_factors": []
-    }
-}
-
-def get_breed_norm(breed):
-    """Get breed norms, fallback to unknown if breed not found"""
-    if not breed:
-        return BREED_NORMS["unknown"]
-    breed_lower = str(breed).lower().strip()
-    return BREED_NORMS.get(breed_lower, BREED_NORMS["unknown"])
-
-def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed, symptoms_str="[]"):
-    """Adjust risk assessment based on breed-typical behaviors.
-    Enhanced with symptom-based lethargy detection.
-    Returns tuple: (adjusted_risk, breed_notice_dict or None)
-    """
-    breed_norm = get_breed_norm(breed)
-    typical_food = breed_norm.get("typical_food_intake", "normal")
-    typical_activity = breed_norm.get("typical_activity", "medium")
-    
-    food_intake_lower = str(food_intake).lower().strip()
-    activity_lower = str(activity_level).lower().strip()
-    breed_lower = str(breed).lower().strip() if breed else "unknown"
-    
-    breed_notice = None
-    
-    print(f"[BREED-ADJUST] Breed: '{breed_lower}', Norm food: '{typical_food}', Actual: '{food_intake_lower}', Norm activity: '{typical_activity}', Actual: '{activity_lower}'")
-    
-    # NEW: Check for lethargy in symptoms - this is NEVER breed-typical
-    # All breeds should have normal energy unless sick
-    try:
-        import json
-        symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
-        symptoms_lower = [str(s).lower() for s in symptoms if s]
-        has_lethargy = any('lethargy' in s or 'lethargic' in s for s in symptoms_lower)
-        
-        if has_lethargy:
-            print(f"[BREED-ADJUST] ⚠️  LETHARGY DETECTED - abnormal for {breed}, escalating risk")
-            breed_notice = {
-                "status": "abnormal_symptom",
-                "message": f"Lethargy detected in {breed.title()}",
-                "details": f"Low energy is not typical for healthy {breed.lower()}s. This may indicate illness and warrants monitoring.",
-                "symptom": "lethargy",
-                "breed": breed
-            }
-            adjusted_risk = "medium" if raw_risk == "low" else "high" if raw_risk == "medium" else raw_risk
-            return adjusted_risk, breed_notice
-    except Exception as e:
-        print(f"[BREED-ADJUST] Could not parse symptoms: {e}")
-    
-    # If eating/drinking less but it's normal for THIS breed, downgrade risk
-    if food_intake_lower == "eating less" and typical_food == "eating less":
-        print(f"[BREED-ADJUST] ✓ 'Eating less' is normal for {breed} - downgrading severity")
-        breed_notice = {
-            "status": "breed_typical_behavior",
-            "message": f"Eating less is normal for {breed.title()}",
-            "details": f"Your {breed.title()} has a naturally smaller appetite compared to other breeds. This reduced food intake is typical for the breed and not a cause for concern.",
-            "behavior": "eating_less",
-            "breed": breed
-        }
-        adjusted_risk = "low" if raw_risk == "medium" else raw_risk
-        return adjusted_risk, breed_notice
-    
-    # If low activity but it's normal for THIS breed, downgrade risk
-    if activity_lower == "low" and typical_activity == "low":
-        print(f"[BREED-ADJUST] ✓ Low activity is normal for {breed} - downgrading severity")
-        breed_notice = {
-            "status": "breed_typical_behavior",
-            "message": f"Low activity is normal for {breed.title()}",
-            "details": f"Your {breed.title()} is naturally less active than other breeds. This calm demeanor is characteristic of the breed and perfectly healthy.",
-            "behavior": "low_activity",
-            "breed": breed
-        }
-        adjusted_risk = "low" if raw_risk == "medium" else raw_risk
-        return adjusted_risk, breed_notice
-    
-    # If breed is prone to specific conditions, escalate on relevant symptoms
-    risk_factors = breed_norm.get("risk_factors", [])
-    if "digestive issues" in risk_factors and food_intake_lower in ["eating less", "not eating"]:
-        print(f"[BREED-ADJUST] ⚠ {breed} prone to digestive issues + eating problem - escalating risk")
-        breed_notice = {
-            "status": "breed_prone_condition",
-            "message": f"⚠️ Watch for digestive issues in {breed.title()}",
-            "details": f"Your {breed.title()} is genetically prone to digestive problems. Combined with the current eating issues, it's worth monitoring closely.",
-            "condition": "digestive_issues",
-            "breed": breed
-        }
-        adjusted_risk = "medium" if raw_risk == "low" else raw_risk
-        return adjusted_risk, breed_notice
-    
-    if "bloat" in risk_factors and activity_lower == "low":
-        print(f"[BREED-ADJUST] ⚠ {breed} prone to bloat + low activity - escalating risk")
-        breed_notice = {
-            "status": "breed_prone_condition",
-            "message": f"⚠️ Watch for bloat in {breed.title()}",
-            "details": f"Your {breed.title()} is prone to bloat (gastric dilatation). Combined with low activity, ensure meal timing and monitor closely.",
-            "condition": "bloat",
-            "breed": breed
-        }
-        adjusted_risk = "medium" if raw_risk == "low" else raw_risk
-        return adjusted_risk, breed_notice
-    
-    return raw_risk, breed_notice
-
-# ------------------- Data Fetch & Model Logic -------------------
+# ------------------- Helper Functions -------------------
 
 def fetch_logs_df(pet_id, limit=200):
     resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).order("log_date", desc=False).limit(limit).execute()
@@ -722,17 +350,27 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         print(f"[CONTEXTUAL-RISK] Recent logs:\n{recent[['log_date', 'activity_level', 'food_intake', 'water_intake', 'bathroom_habits']].to_string()}")
 
         # Count SERIOUS problematic behaviors (not eating/drinking, bathroom issues)
-        low_activity_count = (recent['activity_level'].str.lower() == 'low').sum()
-        not_eating_count = recent['food_intake'].str.lower().isin(['not eating']).sum()  # SERIOUS
-        eating_less_count = recent['food_intake'].str.lower().isin(['eating less']).sum()  # MINOR
-        not_drinking_count = recent['water_intake'].str.lower().isin(['not drinking']).sum()  # SERIOUS
-        drinking_less_count = recent['water_intake'].str.lower().isin(['drinking less']).sum()  # MINOR
-        bad_bathroom_count = recent['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination']).sum()
+        # Updated to match new category values with substring matching
+        low_activity_count = recent['activity_level'].str.lower().str.contains('low', regex=False, na=False).sum()
+        not_eating_count = recent['food_intake'].str.lower().str.contains('not eating', regex=False, na=False).sum()  # SERIOUS
+        eating_less_count = recent['food_intake'].str.lower().str.contains('eating less', regex=False, na=False).sum()  # MINOR
+        weight_loss_count = recent['food_intake'].str.lower().str.contains('weight loss', regex=False, na=False).sum()  # SERIOUS
+        not_drinking_count = recent['water_intake'].str.lower().str.contains('not drinking', regex=False, na=False).sum()  # SERIOUS
+        drinking_less_count = recent['water_intake'].str.lower().str.contains('drinking less', regex=False, na=False).sum()  # MINOR
+        diarrhea_count = recent['bathroom_habits'].str.lower().str.contains('diarrhea', regex=False, na=False).sum()
+        constipation_count = recent['bathroom_habits'].str.lower().str.contains('constipation', regex=False, na=False).sum()
+        straining_count = recent['bathroom_habits'].str.lower().str.contains('straining', regex=False, na=False).sum()
+        blood_in_urine_count = recent['bathroom_habits'].str.lower().str.contains('blood', regex=False, na=False).sum()
+        house_soiling_count = recent['bathroom_habits'].str.lower().str.contains('house soiling', regex=False, na=False).sum()
+        frequent_urination_count = recent['bathroom_habits'].str.lower().str.contains('frequent urin', regex=False, na=False).sum()
+        
+        # Combine serious bathroom issues
+        bad_bathroom_count = diarrhea_count + constipation_count + straining_count + blood_in_urine_count + house_soiling_count + frequent_urination_count
         
         total_logs = len(recent)
         
         p_low_act = low_activity_count / total_logs if total_logs > 0 else 0
-        p_not_eating = not_eating_count / total_logs if total_logs > 0 else 0  # SERIOUS
+        p_not_eating = (not_eating_count + weight_loss_count) / total_logs if total_logs > 0 else 0  # SERIOUS (includes weight loss)
         p_eating_less = eating_less_count / total_logs if total_logs > 0 else 0  # MINOR
         p_not_drinking = not_drinking_count / total_logs if total_logs > 0 else 0  # SERIOUS
         p_drinking_less = drinking_less_count / total_logs if total_logs > 0 else 0  # MINOR
@@ -822,19 +460,34 @@ def detect_severe_illness_pattern(df: pd.DataFrame) -> dict or None:
         print(f"[SEVERE-PATTERN] Analyzing {len(recent)} logs from last 7 days for severe illness patterns")
         
         # Pattern 1: Escalating food refusal (not eating or eating less consistently)
-        eating_issues = recent['food_intake'].str.lower().isin(['not eating', 'eating less']).sum()
+        # Updated to match new category values with substring matching
+        eating_issues = (
+            recent['food_intake'].str.lower().str.contains('not eating', regex=False, na=False).sum() +
+            recent['food_intake'].str.lower().str.contains('eating less', regex=False, na=False).sum() +
+            recent['food_intake'].str.lower().str.contains('weight loss', regex=False, na=False).sum()
+        )
         p_eating_issues = eating_issues / len(recent)
         
         # Pattern 2: Escalating water refusal
-        drinking_issues = recent['water_intake'].str.lower().isin(['not drinking', 'drinking less']).sum()
+        drinking_issues = (
+            recent['water_intake'].str.lower().str.contains('not drinking', regex=False, na=False).sum() +
+            recent['water_intake'].str.lower().str.contains('drinking less', regex=False, na=False).sum()
+        )
         p_drinking_issues = drinking_issues / len(recent)
         
         # Pattern 3: Multiple bathroom issues
-        bathroom_issues = recent['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination']).sum()
+        bathroom_issues = (
+            recent['bathroom_habits'].str.lower().str.contains('diarrhea', regex=False, na=False).sum() +
+            recent['bathroom_habits'].str.lower().str.contains('constipation', regex=False, na=False).sum() +
+            recent['bathroom_habits'].str.lower().str.contains('frequent urin', regex=False, na=False).sum() +
+            recent['bathroom_habits'].str.lower().str.contains('straining', regex=False, na=False).sum() +
+            recent['bathroom_habits'].str.lower().str.contains('blood', regex=False, na=False).sum() +
+            recent['bathroom_habits'].str.lower().str.contains('house soiling', regex=False, na=False).sum()
+        )
         p_bathroom = bathroom_issues / len(recent)
         
         # Pattern 4: Consistently low activity
-        low_activity = (recent['activity_level'].str.lower() == 'low').sum()
+        low_activity = recent['activity_level'].str.lower().str.contains('low', regex=False, na=False).sum()
         p_low_activity = low_activity / len(recent)
         
         # Pattern 5: Multiple reported symptoms
@@ -935,15 +588,16 @@ def detect_severe_illness_pattern(df: pd.DataFrame) -> dict or None:
             latest = recent.iloc[-3:]     # Last 3 logs
             
             earliest_normal = (
-                (earliest['food_intake'].str.lower() == 'normal').sum() / len(earliest) > 0.5
+                (earliest['food_intake'].str.lower().str.contains('normal', regex=False, na=False).sum() / len(earliest) > 0.5)
             ) and (
-                (earliest['activity_level'].str.lower() == 'medium').sum() / len(earliest) > 0.5
+                (earliest['activity_level'].str.lower().str.contains('normal', regex=False, na=False).sum() / len(earliest) > 0.5)
             )
             
             latest_problems = (
-                (latest['food_intake'].str.lower().isin(['not eating', 'eating less']).sum() / len(latest) > 0.6)
+                ((latest['food_intake'].str.lower().str.contains('not eating', regex=False, na=False).sum() +
+                  latest['food_intake'].str.lower().str.contains('eating less', regex=False, na=False).sum()) / len(latest) > 0.6)
             ) and (
-                (latest['activity_level'].str.lower() == 'low').sum() / len(latest) > 0.6
+                (latest['activity_level'].str.lower().str.contains('low', regex=False, na=False).sum() / len(latest) > 0.6)
             )
             
             if earliest_normal and latest_problems:
@@ -1113,21 +767,15 @@ def analyze_endpoint():
             except:
                 symptom_count = 0
             
-            # ONLY use ML prediction if we have clear problem indicators
+            # Use ML prediction directly
             predicted_risk = predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count)
+            print(f"[ANALYZE] Pet {pet_id}: ML prediction = {predicted_risk}")
             
-            # NEW: Apply breed-aware adjustment and get explanatory notice
-            # Pass symptoms_str to detect lethargy as abnormal indicator
-            adjusted_risk, breed_notice = adjust_risk_by_breed(predicted_risk, food_intake, activity_level, pet_breed, symptoms_str)
-            print(f"[ANALYZE] Pet {pet_id}: Raw ML prediction = {predicted_risk}, Breed-adjusted = {adjusted_risk}")
-            if breed_notice:
-                print(f"[ANALYZE] Pet {pet_id}: Breed notice generated: {breed_notice['message']}")
-            
-            if adjusted_risk and adjusted_risk != "low":
-                illness_risk_ml = adjusted_risk
+            if predicted_risk and predicted_risk != "low":
+                illness_risk_ml = predicted_risk
             else:
                 illness_risk_ml = "low"
-                print(f"[ANALYZE] Pet {pet_id}: Adjusted ML prediction = low (no clear problems or breed-normalized)")
+                print(f"[ANALYZE] Pet {pet_id}: ML prediction = low (no clear problems)")
     except Exception as e:
         print(f"[ANALYZE] Pet {pet_id}: ⚠ ML prediction error: {e}")
         illness_risk_ml = "low"
@@ -1136,17 +784,10 @@ def analyze_endpoint():
     contextual_risk = compute_contextual_risk(df)
     print(f"[ANALYZE] Pet {pet_id}: Contextual risk = {contextual_risk}")
 
-    # Blend: choose higher severity so spikes are not hidden
-    # BUT: if breed notice explains behavior as normal, suppress contextual risk escalation
-    if breed_notice and breed_notice.get('status') == 'breed_typical_behavior':
-        print(f"[ANALYZE] Pet {pet_id}: Breed-typical behavior detected - suppressing contextual risk escalation")
-        # Use breed-adjusted ML risk as final, ignore higher contextual risk
-        illness_risk_final = illness_risk_ml
-    else:
-        # Normal blending: choose higher severity
-        illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
+    # Blend: choose higher severity
+    illness_risk_final = blend_illness_risk(illness_risk_ml, contextual_risk)
     
-    print(f"[ANALYZE] Pet {pet_id}: Final blended risk (breed-aware) = {illness_risk_final}")
+    print(f"[ANALYZE] Pet {pet_id}: Final blended risk = {illness_risk_final}")
 
     # model status and derived health status (based on blended risk)
     illness_model_trained = is_illness_model_trained()
@@ -1168,14 +809,6 @@ def analyze_endpoint():
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
-    merged["breed_norms"] = get_breed_norm(pet_breed) if pet_breed else get_breed_norm("unknown")  # Include breed behavioral norms
-    
-    # Add breed notice if breed-aware adjustment was applied
-    if breed_notice:
-        merged["breed_notice"] = breed_notice
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Adding breed_notice to response: {breed_notice.get('message')}")
-    else:
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: No breed notice generated")
     
     # DETECT SEVERE ILLNESS PATTERNS - like period tracker warning "you might be severely sick"
     # Analyzes past 7 days of logs for concerning patterns that suggest serious illness
@@ -1692,20 +1325,26 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
     # Rule-based fallback - distinguishes between serious and minor concerns
     # SERIOUS issues: not eating/drinking, bathroom problems, 2+ symptoms, low activity
     # MINOR issues: eating/drinking less (yellow flag but not immediate danger)
+    # Updated to use substring matching for new category values
     serious_flag = (
-        food_in == "not eating" or
-        water_in == "not drinking" or
-        bathroom_in in ["diarrhea", "constipation", "frequent urination"] or
+        "not eating" in food_in or
+        "not drinking" in water_in or
+        "diarrhea" in bathroom_in or
+        "constipation" in bathroom_in or
+        "frequent urin" in bathroom_in or
+        "straining" in bathroom_in or
+        "blood" in bathroom_in or
+        "house soiling" in bathroom_in or
         symptom_in >= 2 or
-        activity_in == "low"
+        "low" in activity_in
     )
     
     minor_flag = (
-        food_in == "eating less" or
-        water_in == "drinking less"
+        "eating less" in food_in or
+        "drinking less" in water_in
     )
     
-    rule_flag = serious_flag or (minor_flag and activity_in == "low")  # Only flag "eating less" if also low activity
+    rule_flag = serious_flag or (minor_flag and "low" in activity_in)  # Only flag "eating less" if also low activity
     print(f"[ML-PREDICT] Rule-based: serious={serious_flag}, minor={minor_flag}, combined_flag={rule_flag}")
 
     loaded = load_illness_model(model_path)
