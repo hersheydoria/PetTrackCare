@@ -1221,7 +1221,7 @@ def predict_endpoint():
 
     # Add user messaging about analysis method
     try:
-        df = load_behavioral_data(pet_id)
+        df = fetch_logs_df(pet_id)
         num_logs = len(df) if df is not None and len(df) > 0 else 0
         
         model_notice = {}
@@ -1781,25 +1781,6 @@ def train_endpoint():
     except Exception as e:
         return jsonify({"status":"error","message":str(e)}), 500
 
-# Debug endpoint to understand sleep data and predictions
-@app.route("/debug_sleep", methods=["POST"])
-def debug_sleep_forecast():
-    """Debug endpoint - Sleep tracking has been removed from the system."""
-    data = request.get_json(silent=True) or {}
-    pet_id = data.get("pet_id")
-    if not pet_id:
-        return jsonify({"error": "pet_id required"}), 400
-
-    try:
-        return jsonify({
-            "pet_id": pet_id,
-            "message": "Sleep tracking has been removed from the system",
-            "note": "The system now focuses on activity_level, food_intake, water_intake, bathroom_habits, and symptoms for health analysis"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/test_accuracy", methods=["POST"])
 def test_model_accuracy():
     """
@@ -2034,8 +2015,7 @@ def test_accuracy_summary():
             },
             "data_overview": {
                 "total_pets": pets_count,
-                "behavior_logs_available": logs_resp.count if hasattr(logs_resp, 'count') else "unknown",
-                "predictions_stored": preds_resp.count if hasattr(preds_resp, 'count') else "unknown"
+                "behavior_logs_available": logs_resp.count if hasattr(logs_resp, 'count') else "unknown"
             },
             "recommendation": (
                 "Model is trained and ready for accuracy testing. Use POST /test_accuracy to run detailed tests."
@@ -2046,25 +2026,25 @@ def test_accuracy_summary():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def add_behavior_log_and_retrain(pet_id, log_data, future_days=7):
-    # Insert log
-    supabase.table("behavior_logs").insert(log_data).execute()
-    # Fetch all logs for the pet
-    df = fetch_logs_df(pet_id, limit=10000)
-    if not df.empty:
-        train_illness_model(df)
-        # Predict and store health and sleep for every date in the logs (refresh all predictions)
-        all_dates = sorted(df['log_date'].unique())
-        for d in all_dates:
-            # analyze_pet_df computes both health and sleep forecast for each date
-            analyze_pet_df(pet_id, df[df['log_date'] <= d], prediction_date=pd.to_datetime(d).date().isoformat(), store=True)
-        # --- Predict for future dates using learned pattern ---
-        last_date = max(all_dates)
-        # Use logs up to last_date for any future-date predictions to avoid leakage
-        train_df_for_future = df[df['log_date'] <= last_date].copy()
-        for i in range(1, future_days + 1):
-            future_date = last_date + timedelta(days=i)
-            analyze_pet_df(pet_id, train_df_for_future, prediction_date=future_date.isoformat(), store=True)
+def migrate_behavior_logs_to_predictions():
+    """Migration function (deprecated) - predictions table no longer used."""
+    try:
+        print("[MIGRATION] migrate_behavior_logs_to_predictions: Skipping (predictions table deprecated)")
+        return
+    except Exception as e:
+        print(f"[MIGRATION] Error: {e}")
+
+
+def backfill_future_sleep_forecasts():
+    """Sleep forecasting deprecated - no-op function."""
+    print("[MIGRATION] backfill_future_sleep_forecasts: Skipping (sleep tracking deprecated)")
+    return
+
+
+def migrate_legacy_sleep_forecasts():
+    """Sleep forecasting deprecated - no-op function."""
+    print("[MIGRATION] migrate_legacy_sleep_forecasts: Skipping (sleep tracking deprecated)")
+    return
 
 
 if __name__ == "__main__":
