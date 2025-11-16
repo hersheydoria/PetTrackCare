@@ -5358,6 +5358,64 @@ void _disconnectDevice() async {
         padding: const EdgeInsets.symmetric(horizontal: 8.0),
         child: Column(
           children: [
+            // Daily Logging Reminder Banner
+            Container(
+              margin: EdgeInsets.all(8),
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: peach.withOpacity(0.3),
+                border: Border.all(
+                  color: coral,
+                  width: 1.5,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: coral.withOpacity(0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.calendar_today,
+                      color: deepRed,
+                      size: 20,
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Daily Logging Tip',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: deepRed,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Log data every day for best results. Daily entries help us understand your pet\'s health patterns better.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade700,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            SizedBox(height: 8),
+
             // Enhanced Calendar Section
             Container(
               margin: EdgeInsets.symmetric(horizontal: 8, vertical: 8),

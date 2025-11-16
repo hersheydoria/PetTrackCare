@@ -56,9 +56,9 @@ BREED_NORMS = {
     # Small breeds - naturally lower activity, eat less
     "chihuahua": {
         "typical_activity": "medium",
-        "typical_food_intake": "eating less",
+        "typical_food_intake": "normal",  # Changed from "eating less" - eating less + lethargy is abnormal, not breed trait
         "typical_water_intake": "normal",
-        "risk_factors": []
+        "risk_factors": []  # Lethargy is NOT typical - will be caught by symptom detection
     },
     "toy poodle": {
         "typical_activity": "medium",
@@ -329,8 +329,9 @@ def get_breed_norm(breed):
     breed_lower = str(breed).lower().strip()
     return BREED_NORMS.get(breed_lower, BREED_NORMS["unknown"])
 
-def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
+def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed, symptoms_str="[]"):
     """Adjust risk assessment based on breed-typical behaviors.
+    Enhanced with symptom-based lethargy detection.
     Returns tuple: (adjusted_risk, breed_notice_dict or None)
     """
     breed_norm = get_breed_norm(breed)
@@ -344,6 +345,28 @@ def adjust_risk_by_breed(raw_risk, food_intake, activity_level, breed):
     breed_notice = None
     
     print(f"[BREED-ADJUST] Breed: '{breed_lower}', Norm food: '{typical_food}', Actual: '{food_intake_lower}', Norm activity: '{typical_activity}', Actual: '{activity_lower}'")
+    
+    # NEW: Check for lethargy in symptoms - this is NEVER breed-typical
+    # All breeds should have normal energy unless sick
+    try:
+        import json
+        symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+        symptoms_lower = [str(s).lower() for s in symptoms if s]
+        has_lethargy = any('lethargy' in s or 'lethargic' in s for s in symptoms_lower)
+        
+        if has_lethargy:
+            print(f"[BREED-ADJUST] ⚠️  LETHARGY DETECTED - abnormal for {breed}, escalating risk")
+            breed_notice = {
+                "status": "abnormal_symptom",
+                "message": f"Lethargy detected in {breed.title()}",
+                "details": f"Low energy is not typical for healthy {breed.lower()}s. This may indicate illness and warrants monitoring.",
+                "symptom": "lethargy",
+                "breed": breed
+            }
+            adjusted_risk = "medium" if raw_risk == "low" else "high" if raw_risk == "medium" else raw_risk
+            return adjusted_risk, breed_notice
+    except Exception as e:
+        print(f"[BREED-ADJUST] Could not parse symptoms: {e}")
     
     # If eating/drinking less but it's normal for THIS breed, downgrade risk
     if food_intake_lower == "eating less" and typical_food == "eating less":
@@ -1094,7 +1117,8 @@ def analyze_endpoint():
             predicted_risk = predict_illness_risk(activity_level, food_intake, water_intake, bathroom_habits, symptom_count)
             
             # NEW: Apply breed-aware adjustment and get explanatory notice
-            adjusted_risk, breed_notice = adjust_risk_by_breed(predicted_risk, food_intake, activity_level, pet_breed)
+            # Pass symptoms_str to detect lethargy as abnormal indicator
+            adjusted_risk, breed_notice = adjust_risk_by_breed(predicted_risk, food_intake, activity_level, pet_breed, symptoms_str)
             print(f"[ANALYZE] Pet {pet_id}: Raw ML prediction = {predicted_risk}, Breed-adjusted = {adjusted_risk}")
             if breed_notice:
                 print(f"[ANALYZE] Pet {pet_id}: Breed notice generated: {breed_notice['message']}")
