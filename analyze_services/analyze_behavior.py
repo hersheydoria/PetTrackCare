@@ -1379,22 +1379,19 @@ def public_pet_page(pet_id):
                 age_delta = (today - birth_date).days
                 years = age_delta // 365
                 months = (age_delta % 365) // 30
-                if years > 0:
-                    pet_age = f"{years}y {months}m" if months > 0 else f"{years}y"
-                elif months > 0:
-                    pet_age = f"{months}m"
+                
+                # Display age in a simple, readable format
+                if years >= 1:
+                    pet_age = f"{years} year{'s' if years > 1 else ''} old"
+                elif months >= 1:
+                    pet_age = f"{months} month{'s' if months > 1 else ''} old"
                 else:
-                    pet_age = f"{age_delta}d"
+                    pet_age = f"{age_delta} day{'s' if age_delta > 1 else ''} old"
+                
                 print(f"DEBUG: Calculated age from date_of_birth: {pet_age}")
             except Exception as e:
                 print(f"DEBUG: Failed to parse date_of_birth: {e}")
-                pet_age = pet.get("age") or ""
-        
-        # Fallback to legacy age field if no date_of_birth
-        if not pet_age:
-            pet_age = pet.get("age") or ""
-            if pet_age:
-                print(f"DEBUG: Using legacy age field: {pet_age}")
+                pet_age = ""
         
         pet_weight = pet.get("weight") or ""
         pet_gender = pet.get("gender") or "Unknown"
@@ -1565,60 +1562,10 @@ def public_pet_page(pet_id):
                   <div style="flex:1;min-width:200px;">
                     <span class="label">Health Status</span><br/>
                     <span class="badge" style="background:{risk_color};">{status_text}</span>
-                    <p style="margin-top:6px;color:#666;font-size:12px;">Model: {"AI (trained)" if illness_model_trained else "Rules (not trained)"}</p>
-                    <p style="margin-top:6px;color:#666;font-size:13px;">Scan opened this page — tap "More" for details.</p>
-                  </div>
-                  <div style="text-align:right;">
-                    <button onclick="openModal()" class="more-btn">More</button>
+                    <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
                   </div>
                 </div>
               </div>
-
-              <div id="modal" style="display:none;" class="modal-backdrop" onclick="closeModal()">
-                <div class="modal" onclick="event.stopPropagation()">
-                  <h3>Detailed Pet Info</h3>
-                  <div class="profile-container">
-                    {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div style="width:120px;height:120px;background:#e0e0e0;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#999;">No photo</div>'}
-                    <div class="profile-text">
-                      <p><strong>Name:</strong> {pet_name}</p>
-                      <p><strong>Breed:</strong> {pet_breed}</p>
-                      <p><strong>Age:</strong> {pet_age}</p>
-                      <p><strong>Weight:</strong> {pet_weight}</p>
-                      <p><strong>Gender:</strong> {pet_gender}</p>
-                      <p><strong>Health:</strong> {pet_health}</p>
-                    </div>
-                  </div>
-                  <div class="owner-info">
-                    <p><strong>Owner Information</strong></p>
-                    <div style="display:flex;gap:12px;align-items:center;margin-top:12px;">
-                      {f'<img src="{owner_profile_picture}" alt="{owner_name}" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0;">' if owner_profile_picture else '<div style="width:60px;height:60px;background:#e0e0e0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:24px;">👤</div>'}
-                      <div><p><strong>{owner_name}</strong></p></div>
-                    </div>
-                  </div>
-                  <hr/>
-                  <h4>Latest Analysis</h4>
-                  <p><strong>Status:</strong> <span class="badge" style="background:{risk_color};">{status_text}</span></p>
-                  <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
-                  {care_tips_section}
-                  {future_html}
-                  <div style="margin-top:16px;text-align:right;">
-                    <button class="close-btn" onclick="closeModal()">Close</button>
-                  </div>
-                </div>
-              </div>
-
-              <script>
-                function openModal() {{
-                  document.getElementById('modal').style.display = 'flex';
-                }}
-                function closeModal() {{
-                  document.getElementById('modal').style.display = 'none';
-                }}
-                // auto-open modal on page load so scanned users see pop-up immediately
-                window.addEventListener('load', function() {{
-                  setTimeout(openModal, 400);
-                }});
-              </script>
             </body>
             </html>
             """
