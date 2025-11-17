@@ -287,13 +287,19 @@ cleanup_incompatible_models()
 
 # ------------------- Helper Functions -------------------
 
-def fetch_logs_df(pet_id, limit=200):
+def fetch_logs_df(pet_id, limit=200, days_back=30):
+    """Fetch recent behavior logs for a pet (within last N days)"""
     resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).order("log_date", desc=False).limit(limit).execute()
     data = resp.data or []
     if not data:
         return pd.DataFrame()
     df = pd.DataFrame(data)
     df['log_date'] = pd.to_datetime(df['log_date']).dt.date
+    
+    # Filter to only include logs from last N days
+    cutoff_date = (datetime.now() - timedelta(days=days_back)).date()
+    df = df[df['log_date'] >= cutoff_date]
+    
     df['activity_level'] = df.get('activity_level', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     
     # Core health tracking columns
@@ -587,6 +593,13 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
         recent = df.copy()
         recent['log_date'] = pd.to_datetime(recent['log_date'])
         recent = recent.sort_values('log_date').tail(14)
+        
+        # Check if latest log is stale (more than 7 days old)
+        if not recent.empty:
+            latest_date = recent['log_date'].max()
+            days_since_log = (datetime.now() - latest_date).days
+            if days_since_log > 7:
+                print(f"[CONTEXTUAL-RISK] [WARNING] Latest log is {days_since_log} days old - analysis may be outdated")
         
         print(f"[CONTEXTUAL-RISK] Analyzing {len(recent)} recent logs")
         print(f"[CONTEXTUAL-RISK] Recent logs:\n{recent[['log_date', 'activity_level', 'food_intake', 'water_intake', 'bathroom_habits']].to_string()}")
@@ -903,18 +916,30 @@ def analyze_endpoint():
             print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
     
     # Add data sufficiency notice for user
+    # Also check data freshness - warn if latest log is too old
+    data_freshness_warning = None
+    if not df.empty:
+        latest_log_date = pd.to_datetime(df['log_date']).max()
+        days_since_log = (datetime.now() - latest_log_date).days
+        if days_since_log > 7:
+            data_freshness_warning = f"Latest log is {days_since_log} days old. Recent data helps improve accuracy."
+    
     if len(df) < 5:
         merged["data_notice"] = {
             "status": "insufficient_data",
             "message": f"Only {len(df)} logs available. Log at least {5 - len(df)} more health entries for more accurate analysis.",
             "details": "The system learns patterns from historical data. With more logs, it can better detect trends, baseline behaviors, and unusual changes. Current analysis is based on limited data.",
             "recommendation": "Continue logging daily to improve accuracy of health predictions.",
-            "logs_needed": 5 - len(df)
+            "logs_needed": 5 - len(df),
+            "freshness_warning": data_freshness_warning
         }
     else:
+        notice_msg = f"Analysis based on {len(df)} logs. Pattern detection is active."
+        if data_freshness_warning:
+            notice_msg += f" {data_freshness_warning}"
         merged["data_notice"] = {
             "status": "sufficient_data",
-            "message": f"Analysis based on {len(df)} logs. Pattern detection is active.",
+            "message": notice_msg,
             "details": "The system has enough data to detect meaningful patterns and changes from baseline behavior."
         }
     

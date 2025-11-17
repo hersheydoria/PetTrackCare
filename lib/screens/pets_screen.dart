@@ -5377,8 +5377,8 @@ void _disconnectDevice() async {
             
             SizedBox(height: 16),
             
-            // Enhanced Latest Analysis Section
-            if (_prediction != null || _loadingAnalysisData || _healthInsights.isNotEmpty) ...[
+            // Enhanced Latest Analysis Section - always display
+            ...[
               SizedBox(height: 16),
               Container(
                 margin: EdgeInsets.symmetric(horizontal: 8),
