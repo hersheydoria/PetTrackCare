@@ -140,6 +140,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String? _illnessRisk;
   bool _isUnhealthy = false;
   
+  // Track health status for each pet (petId -> isUnhealthy)
+  Map<String, bool> _petHealthStatus = {};
+  
   // Backend messaging about analysis quality and data sufficiency
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
@@ -405,6 +408,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       if (list.isNotEmpty) {
         Map<String, dynamic>? selected;
         
+        // Load health status for all pets from database
+        final Map<String, bool> petHealthMap = {};
+        for (final pet in list) {
+          final petHealth = pet['health']?.toString().toLowerCase() ?? 'good';
+          petHealthMap[pet['id']] = (petHealth == 'bad');
+        }
+        
         // Try to restore previously selected pet
         final lastSelectedPetId = await _getLastSelectedPetId();
         
@@ -431,6 +441,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         setState(() {
           _pets = list;
           _selectedPet = selected;
+          _petHealthStatus = petHealthMap;  // Load health status for all pets
           // clear any previously shown device/map info so we don't show another pet's data
           _currentMapLocation = null;
           _currentMapLabel = null;
@@ -744,6 +755,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _isUnhealthy = unhealthyResp is bool
               ? unhealthyResp
               : (riskRaw == 'high' || riskRaw == 'medium');
+          
+          // Store health status for this pet
+          if (_selectedPet != null) {
+            _petHealthStatus[_selectedPet!['id']] = _isUnhealthy;
+          }
 
           // Parse data_notice and model_notice from backend response
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
@@ -751,6 +767,18 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _healthGuidance = body['health_guidance'] as Map<String, dynamic>?;
           _illnessRiskNotice = body['illness_risk_notice'] as Map<String, dynamic>?;
         });
+        
+        // Persist health status to database after UI update
+        final healthStatus = _isUnhealthy ? 'Bad' : 'Good';
+        try {
+          await Supabase.instance.client
+              .from('pets')
+              .update({'health': healthStatus})
+              .eq('id', petId);
+          print('DEBUG: Updated pet health status to: $healthStatus');
+        } catch (e) {
+          print('Error updating pet health status: $e');
+        }
       } else {
         // non-200 response: ignore for now
         print('Analysis request returned status ${resp.statusCode}');
@@ -2897,15 +2925,19 @@ void _disconnectDevice() async {
                                     Container(
                                       padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                       decoration: BoxDecoration(
-                                        color: _getHealthStatusColor(pet['health'] ?? 'Good').withOpacity(0.2),
+                                        color: (_petHealthStatus[pet['id']] ?? false)
+                                            ? Colors.red.withOpacity(0.2)
+                                            : Colors.green.withOpacity(0.2),
                                         borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Text(
-                                        pet['health'] ?? 'Good',
+                                        (_petHealthStatus[pet['id']] ?? false) ? 'Bad' : 'Good',
                                         style: TextStyle(
                                           fontSize: 11,
                                           fontWeight: FontWeight.w600,
-                                          color: _getHealthStatusColor(pet['health'] ?? 'Good'),
+                                          color: (_petHealthStatus[pet['id']] ?? false)
+                                              ? Colors.red.shade700
+                                              : Colors.green.shade700,
                                         ),
                                       ),
                                     ),
@@ -5912,16 +5944,16 @@ void _disconnectDevice() async {
 
             return AnimatedContainer(
               duration: Duration(milliseconds: 300),
-              height: MediaQuery.of(context).size.height * 0.85,
+              height: MediaQuery.of(context).size.height * 0.90,
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 20,
-                    spreadRadius: 5,
-                    offset: Offset(0, -5),
+                    color: Colors.black.withOpacity(0.20),
+                    blurRadius: 30,
+                    spreadRadius: 8,
+                    offset: Offset(0, -8),
                   ),
                 ],
               ),
@@ -5929,69 +5961,123 @@ void _disconnectDevice() async {
                 children: [
                   // Handle bar
                   Container(
-                    margin: EdgeInsets.only(top: 12),
-                    width: 40,
-                    height: 4,
+                    margin: EdgeInsets.only(top: 14),
+                    width: 50,
+                    height: 5,
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
+                      color: Colors.grey.shade400,
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
                   
-                  // Header
+                  // Pet Health Status Header
                   Container(
-                    padding: EdgeInsets.all(20),
+                    padding: EdgeInsets.all(24),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [lightBlush, Colors.white],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0xFFB82132),
+                          Color(0xFFD2665A),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Status indicator
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.25),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                _isUnhealthy ? Icons.warning_rounded : Icons.health_and_safety,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _selectedPet?['name'] ?? 'Your Pet',
+                                    style: TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Health Status: ${_isUnhealthy ? "Needs Attention" : "✓ Looking Good"}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white.withOpacity(0.9),
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              icon: Icon(Icons.close, color: Colors.white),
+                              onPressed: () => Navigator.pop(context),
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.white.withOpacity(0.2),
+                                shape: CircleBorder(),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 16),
+                        // Date
+                        Row(
+                          children: [
+                            Icon(Icons.calendar_today, color: Colors.white.withOpacity(0.8), size: 16),
+                            SizedBox(width: 8),
+                            Text(
+                              DateFormat('EEEE, MMMM d, yyyy').format(selectedDate),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.white.withOpacity(0.9),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  // Form Title
+                  Container(
+                    padding: EdgeInsets.fromLTRB(24, 20, 24, 12),
+                    decoration: BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Colors.grey.shade200, width: 1)),
                     ),
                     child: Row(
                       children: [
-                        Container(
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: deepRed.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(15),
-                          ),
-                          child: Icon(
-                            isEdit ? Icons.edit : Icons.health_and_safety,
-                            color: deepRed,
-                            size: 24,
-                          ),
+                        Icon(
+                          isEdit ? Icons.edit_note_rounded : Icons.note_add_rounded,
+                          color: deepRed,
+                          size: 20,
                         ),
-                        SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                isEdit ? 'Update Health Log' : 'Log Pet Health Data',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: deepRed,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                DateFormat('EEEE, MMMM d, yyyy').format(selectedDate),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.close, color: Colors.grey.shade600),
-                          onPressed: () => Navigator.pop(context),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.grey.shade100,
-                            shape: CircleBorder(),
+                        SizedBox(width: 10),
+                        Text(
+                          isEdit ? 'Update Health Log' : 'Log Pet Health Data',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
                           ),
                         ),
                       ],
@@ -6001,152 +6087,186 @@ void _disconnectDevice() async {
                   // Form content
                   Expanded(
                     child: SingleChildScrollView(
-                      padding: EdgeInsets.all(20),
+                      padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // Food Intake Section
                           _buildFormSection(
-                            title: "Food Intake - Is ${_selectedPet?['name'] ?? 'your pet'} eating well?",
+                            title: "Food Intake",
                             icon: Icons.restaurant,
                             iconColor: Colors.orange,
+                            subtitle: "Is ${_selectedPet?['name'] ?? 'your pet'} eating well?",
                             child: Column(
                               children: [
-                                SizedBox(height: 8),
-                                Column(
-                                  children: foodIntakeOptions.map((intake) {
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: foodIntakeOptions.map((intake) {
                                     final selected = _foodIntake == intake;
                                     IconData iconData;
                                     Color iconColor;
                                     
                                     switch(intake) {
-                                      case "Not Eating":
+                                      case "Not eating / Loss of appetite":
                                         iconData = Icons.close_rounded;
                                         iconColor = Colors.red;
                                         break;
-                                      case "Eating Less":
+                                      case "Eating less than usual":
                                         iconData = Icons.trending_down;
                                         iconColor = Colors.orange;
                                         break;
-                                      case "Normal":
+                                      case "Normal eating":
                                         iconData = Icons.check_circle_outline;
                                         iconColor = Colors.green;
                                         break;
-                                      case "Eating More":
+                                      case "Eating more than usual":
                                         iconData = Icons.trending_up;
                                         iconColor = Colors.blue;
+                                        break;
+                                      case "Sudden weight loss":
+                                        iconData = Icons.trending_down;
+                                        iconColor = Colors.red;
+                                        break;
+                                      case "Sudden weight gain":
+                                        iconData = Icons.trending_up;
+                                        iconColor = Colors.orange;
                                         break;
                                       default:
                                         iconData = Icons.circle_outlined;
                                         iconColor = Colors.grey;
                                     }
                                     
-                                    return GestureDetector(
-                                      onTap: () {
-                                        setModalState(() => _foodIntake = intake);
-                                        setState(() => _foodIntake = intake);
-                                        HapticFeedback.lightImpact();
-                                      },
-                                      child: AnimatedContainer(
-                                        duration: Duration(milliseconds: 200),
-                                        margin: EdgeInsets.only(bottom: 8),
-                                        padding: EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: selected 
-                                            ? deepRed.withOpacity(0.1) 
-                                            : Colors.white,
-                                          border: Border.all(
-                                            color: selected 
-                                              ? deepRed 
-                                              : Colors.grey.shade300,
-                                            width: selected ? 2 : 1,
-                                          ),
-                                          borderRadius: BorderRadius.circular(10),
-                                          boxShadow: selected ? [
-                                            BoxShadow(
-                                              color: deepRed.withOpacity(0.2),
-                                              blurRadius: 4,
-                                              offset: Offset(0, 1),
-                                            ),
-                                          ] : null,
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Container(
-                                              padding: EdgeInsets.all(6),
-                                              decoration: BoxDecoration(
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setModalState(() => _foodIntake = intake);
+                                          setState(() => _foodIntake = intake);
+                                          HapticFeedback.lightImpact();
+                                        },
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: selected 
+                                                ? Colors.orange.withOpacity(0.12) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
                                                 color: selected 
-                                                  ? iconColor.withOpacity(0.2)
-                                                  : Colors.grey.shade100,
-                                                borderRadius: BorderRadius.circular(6),
+                                                  ? Colors.orange.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2.5 : 1.5,
                                               ),
-                                              child: Icon(
-                                                iconData,
-                                                color: selected ? iconColor : Colors.grey.shade400,
-                                                size: 20,
-                                              ),
-                                            ),
-                                            SizedBox(width: 12),
-                                            Expanded(
-                                              child: Text(
-                                                intake,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: selected 
-                                                    ? FontWeight.w600 
-                                                    : FontWeight.w500,
-                                                  color: selected 
-                                                    ? deepRed 
-                                                    : Colors.grey.shade700,
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.orange.withOpacity(0.15),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
                                                 ),
-                                              ),
+                                              ] : null,
                                             ),
-                                            if (selected)
-                                              Icon(
-                                                Icons.check_circle,
-                                                color: deepRed,
-                                                size: 20,
-                                              ),
-                                          ],
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? iconColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? iconColor : Colors.grey.shade500,
+                                                    size: 22,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Text(
+                                                    intake,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.orange.shade900
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected)
+                                                  Container(
+                                                    padding: EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.orange.shade600,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.check,
+                                                      color: Colors.white,
+                                                      size: 16,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     );
                                   }).toList(),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 16),
+                          SizedBox(height: 20),
 
                           // Water Intake Section
                           _buildFormSection(
                             title: "Water Intake",
                             icon: Icons.water_drop,
                             iconColor: Colors.blue,
+                            subtitle: "Monitor drinking patterns",
                             child: Column(
                               children: [
-                                SizedBox(height: 8),
-                                Column(
-                                  children: waterIntakeOptions.map((intake) {
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: waterIntakeOptions.map((intake) {
                                     final selected = _waterIntake == intake;
                                     IconData iconData;
                                     Color iconColor;
                                     
                                     switch(intake) {
-                                      case "Not Drinking":
+                                      case "Not drinking":
                                         iconData = Icons.close_rounded;
                                         iconColor = Colors.red;
                                         break;
-                                      case "Drinking Less":
+                                      case "Drinking less than usual":
                                         iconData = Icons.trending_down;
                                         iconColor = Colors.orange;
                                         break;
-                                      case "Normal":
+                                      case "Normal drinking":
                                         iconData = Icons.check_circle_outline;
                                         iconColor = Colors.blue;
                                         break;
-                                      case "Drinking More":
+                                      case "Excessive drinking (increased thirst)":
                                         iconData = Icons.trending_up;
                                         iconColor = Colors.purple;
                                         break;
@@ -6155,389 +6275,515 @@ void _disconnectDevice() async {
                                         iconColor = Colors.grey;
                                     }
                                     
-                                    return GestureDetector(
-                                      onTap: () {
-                                        setModalState(() => _waterIntake = intake);
-                                        setState(() => _waterIntake = intake);
-                                        HapticFeedback.lightImpact();
-                                      },
-                                      child: AnimatedContainer(
-                                        duration: Duration(milliseconds: 200),
-                                        margin: EdgeInsets.only(bottom: 8),
-                                        padding: EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: selected 
-                                            ? Colors.blue.withOpacity(0.08) 
-                                            : Colors.white,
-                                          border: Border.all(
-                                            color: selected 
-                                              ? Colors.blue 
-                                              : Colors.grey.shade300,
-                                            width: selected ? 2 : 1,
-                                          ),
-                                          borderRadius: BorderRadius.circular(10),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Container(
-                                              padding: EdgeInsets.all(6),
-                                              decoration: BoxDecoration(
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setModalState(() => _waterIntake = intake);
+                                          setState(() => _waterIntake = intake);
+                                          HapticFeedback.lightImpact();
+                                        },
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: selected 
+                                                ? Colors.blue.withOpacity(0.12) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
                                                 color: selected 
-                                                  ? iconColor.withOpacity(0.2)
-                                                  : Colors.grey.shade100,
-                                                borderRadius: BorderRadius.circular(6),
+                                                  ? Colors.blue.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2.5 : 1.5,
                                               ),
-                                              child: Icon(
-                                                iconData,
-                                                color: selected ? iconColor : Colors.grey.shade400,
-                                                size: 20,
-                                              ),
-                                            ),
-                                            SizedBox(width: 12),
-                                            Expanded(
-                                              child: Text(
-                                                intake,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: selected 
-                                                    ? FontWeight.w600 
-                                                    : FontWeight.w500,
-                                                  color: selected 
-                                                    ? Colors.blue.shade800 
-                                                    : Colors.grey.shade700,
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.blue.withOpacity(0.15),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
                                                 ),
-                                              ),
+                                              ] : null,
                                             ),
-                                            if (selected)
-                                              Icon(
-                                                Icons.check_circle,
-                                                color: Colors.blue,
-                                                size: 20,
-                                              ),
-                                          ],
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? iconColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? iconColor : Colors.grey.shade500,
+                                                    size: 22,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Text(
+                                                    intake,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.blue.shade900
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected)
+                                                  Container(
+                                                    padding: EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.blue.shade600,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.check,
+                                                      color: Colors.white,
+                                                      size: 16,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     );
                                   }).toList(),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 16),
+                          SizedBox(height: 20),
 
                           // Bathroom Habits Section
                           _buildFormSection(
                             title: "Bathroom Habits",
                             icon: Icons.health_and_safety,
                             iconColor: Colors.purple,
+                            subtitle: "Track bathroom changes",
                             child: Column(
                               children: [
-                                SizedBox(height: 8),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: bathroomOptions.map((habit) {
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: bathroomOptions.map((habit) {
                                     final selected = _bathroomHabits == habit;
                                     IconData iconData;
-                                    Color chipColor;
+                                    Color habitColor;
                                     
                                     switch(habit) {
-                                      case "Normal":
+                                      case "Normal urination/defecation":
                                         iconData = Icons.check_circle_outline;
-                                        chipColor = Colors.green;
+                                        habitColor = Colors.green;
                                         break;
                                       case "Diarrhea":
                                         iconData = Icons.warning_amber_rounded;
-                                        chipColor = Colors.orange;
+                                        habitColor = Colors.orange;
                                         break;
                                       case "Constipation":
                                         iconData = Icons.block;
-                                        chipColor = Colors.red;
+                                        habitColor = Colors.red;
                                         break;
-                                      case "Frequent Urination":
+                                      case "Frequent urination":
                                         iconData = Icons.repeat_rounded;
-                                        chipColor = Colors.purple;
+                                        habitColor = Colors.purple;
+                                        break;
+                                      case "Straining to urinate":
+                                        iconData = Icons.error_outline;
+                                        habitColor = Colors.red;
+                                        break;
+                                      case "Blood in urine":
+                                        iconData = Icons.priority_high;
+                                        habitColor = Colors.red;
+                                        break;
+                                      case "House soiling / accidents":
+                                        iconData = Icons.warning;
+                                        habitColor = Colors.orange;
                                         break;
                                       default:
                                         iconData = Icons.circle_outlined;
-                                        chipColor = Colors.grey;
+                                        habitColor = Colors.grey;
                                     }
                                     
-                                    return GestureDetector(
-                                      onTap: () {
-                                        setModalState(() => _bathroomHabits = habit);
-                                        setState(() => _bathroomHabits = habit);
-                                        HapticFeedback.lightImpact();
-                                      },
-                                      child: AnimatedContainer(
-                                        duration: Duration(milliseconds: 200),
-                                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: selected 
-                                            ? chipColor.withOpacity(0.15) 
-                                            : Colors.white,
-                                          border: Border.all(
-                                            color: selected 
-                                              ? chipColor 
-                                              : Colors.grey.shade300,
-                                            width: selected ? 2 : 1,
-                                          ),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              iconData,
-                                              color: selected ? chipColor : Colors.grey.shade400,
-                                              size: 16,
-                                            ),
-                                            SizedBox(width: 6),
-                                            Text(
-                                              habit,
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: selected 
-                                                  ? FontWeight.w600 
-                                                  : FontWeight.w500,
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setModalState(() => _bathroomHabits = habit);
+                                          setState(() => _bathroomHabits = habit);
+                                          HapticFeedback.lightImpact();
+                                        },
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: selected 
+                                                ? Colors.purple.withOpacity(0.15) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
                                                 color: selected 
-                                                  ? chipColor.withOpacity(1.0)
-                                                  : Colors.grey.shade700,
+                                                  ? Colors.purple.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2 : 1.5,
                                               ),
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.purple.withOpacity(0.2),
+                                                  blurRadius: 6,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ] : null,
                                             ),
-                                          ],
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(6),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? habitColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? habitColor : Colors.grey.shade500,
+                                                    size: 18,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Text(
+                                                    habit,
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.purple.shade600
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected) ...[
+                                                  SizedBox(width: 6),
+                                                  Icon(Icons.check, color: Colors.purple.shade600, size: 14),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     );
                                   }).toList(),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 16),
+                          SizedBox(height: 20),
 
                           // Activity Level Section
                           _buildFormSection(
-                            title: "Activity Level Today",
-                            icon: Icons.directions_run,
+                            title: "Activity Level",
+                            icon: Icons.pets,
                             iconColor: Colors.green,
+                            subtitle: "How active is your pet today?",
                             child: Column(
                               children: [
-                                SizedBox(height: 8),
-                                Row(
-                                  children: activityLevels.map((level) {
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: activityLevels.map((level) {
                                     final selected = _activityLevel == level;
                                     IconData iconData;
                                     Color levelColor;
                                     
                                     switch(level) {
-                                      case "High":
+                                      case "High activity":
                                         iconData = Icons.flash_on;
                                         levelColor = Colors.green;
                                         break;
-                                      case "Medium":
+                                      case "Normal activity":
                                         iconData = Icons.wb_sunny_outlined;
+                                        levelColor = Colors.blue;
+                                        break;
+                                      case "Low activity / lethargy":
+                                        iconData = Icons.bedtime;
                                         levelColor = Colors.orange;
                                         break;
-                                      case "Low":
-                                        iconData = Icons.bedtime;
-                                        levelColor = Colors.blue;
+                                      case "Restlessness (especially at night)":
+                                        iconData = Icons.pending_actions;
+                                        levelColor = Colors.purple;
+                                        break;
+                                      case "Sudden weakness / collapse":
+                                        iconData = Icons.warning_rounded;
+                                        levelColor = Colors.red;
                                         break;
                                       default:
                                         iconData = Icons.circle_outlined;
                                         levelColor = Colors.grey;
                                     }
                                     
-                                    return Expanded(
+                                    return SizedBox(
+                                      width: itemWidth,
                                       child: GestureDetector(
                                         onTap: () {
                                           setModalState(() => _activityLevel = level);
                                           setState(() => _activityLevel = level);
                                           HapticFeedback.lightImpact();
                                         },
-                                        child: AnimatedContainer(
-                                          duration: Duration(milliseconds: 200),
-                                          margin: EdgeInsets.symmetric(horizontal: 4),
-                                          padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-                                          decoration: BoxDecoration(
-                                            color: selected 
-                                              ? levelColor.withOpacity(0.12) 
-                                              : Colors.white,
-                                            border: Border.all(
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
                                               color: selected 
-                                                ? levelColor 
-                                                : Colors.grey.shade300,
-                                              width: selected ? 2 : 1,
+                                                ? Colors.green.withOpacity(0.12) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
+                                                color: selected 
+                                                  ? Colors.green.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2.5 : 1.5,
+                                              ),
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.green.withOpacity(0.15),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ] : null,
                                             ),
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                          child: Column(
-                                            children: [
-                                              Container(
-                                                padding: EdgeInsets.all(8),
-                                                decoration: BoxDecoration(
-                                                  color: selected 
-                                                    ? levelColor.withOpacity(0.2)
-                                                    : Colors.grey.shade100,
-                                                  shape: BoxShape.circle,
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? levelColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? levelColor : Colors.grey.shade500,
+                                                    size: 22,
+                                                  ),
                                                 ),
-                                                child: Icon(
-                                                  iconData,
-                                                  color: selected ? levelColor : Colors.grey.shade400,
-                                                  size: 22,
+                                                SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Text(
+                                                    level,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.green.shade600
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
                                                 ),
-                                              ),
-                                              SizedBox(height: 6),
-                                              Text(
-                                                level,
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: selected 
-                                                    ? FontWeight.bold 
-                                                    : FontWeight.w500,
-                                                  color: selected 
-                                                    ? Colors.green 
-                                                    : Colors.grey.shade700,
-                                                ),
-                                              ),
-                                            ],
+                                                if (selected)
+                                                  Container(
+                                                    padding: EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.green.shade600,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.check,
+                                                      color: Colors.white,
+                                                      size: 16,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
                                     );
                                   }).toList(),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 16),
+                          SizedBox(height: 20),
 
-                          // Symptoms Section (replaces notes)
+                          // Clinical Signs Section
                           _buildFormSection(
                             title: "Clinical Signs",
                             icon: Icons.medical_services,
                             iconColor: Colors.red,
+                            subtitle: "Check any physical clinical signs observed",
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                SizedBox(height: 8),
-                                Text(
-                                  "Check any signs your pet is experiencing:",
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                    fontStyle: FontStyle.italic,
-                                  ),
-                                ),
-                                SizedBox(height: 8),
-                                ...commonSymptoms.map((symptom) {
-                                  final isSelected = _selectedSymptoms.contains(symptom);
-                                  final isNone = symptom == "None of the Above";
-                                  
-                                  return Container(
-                                    margin: EdgeInsets.only(bottom: 6),
-                                    child: Material(
-                                      color: Colors.transparent,
-                                      child: InkWell(
-                                        onTap: () {
-                                          // Update state only once to avoid duplicates
-                                          if (isNone) {
-                                            // If "None" is selected, clear all other symptoms
-                                            if (isSelected) {
-                                              _selectedSymptoms.remove(symptom);
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: commonSymptoms.map((clinicalSign) {
+                                    final isSelected = _selectedSymptoms.contains(clinicalSign);
+                                    final isNone = clinicalSign == "None of the Above";
+                                    
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          onTap: () {
+                                            // Update state only once to avoid duplicates
+                                            if (isNone) {
+                                              // If "None" is selected, clear all other clinical signs
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(clinicalSign);
+                                              } else {
+                                                _selectedSymptoms.clear();
+                                                _selectedSymptoms.add(clinicalSign);
+                                              }
                                             } else {
-                                              _selectedSymptoms.clear();
-                                              _selectedSymptoms.add(symptom);
+                                              // If any other clinical sign is selected, remove "None"
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(clinicalSign);
+                                              } else {
+                                                _selectedSymptoms.remove("None of the Above");
+                                                _selectedSymptoms.add(clinicalSign);
+                                              }
                                             }
-                                          } else {
-                                            // If any other symptom is selected, remove "None"
-                                            if (isSelected) {
-                                              _selectedSymptoms.remove(symptom);
-                                            } else {
-                                              _selectedSymptoms.remove("None of the Above");
-                                              _selectedSymptoms.add(symptom);
-                                            }
-                                          }
-                                          
-                                          // Update both UI states after modification
-                                          setModalState(() {});
-                                          setState(() {});
-                                          HapticFeedback.selectionClick();
-                                        },
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Container(
-                                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                          decoration: BoxDecoration(
-                                            color: isSelected 
-                                              ? (isNone ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1))
-                                              : Colors.grey.shade50,
-                                            border: Border.all(
+                                            
+                                            // Update both UI states after modification
+                                            setModalState(() {});
+                                            setState(() {});
+                                            HapticFeedback.selectionClick();
+                                          },
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
                                               color: isSelected 
-                                                ? (isNone ? Colors.green : Colors.red)
-                                                : Colors.grey.shade300,
-                                              width: isSelected ? 2 : 1,
-                                            ),
-                                            borderRadius: BorderRadius.circular(8),
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                isSelected 
-                                                  ? Icons.check_box 
-                                                  : Icons.check_box_outline_blank,
+                                                ? (isNone ? Colors.green.withOpacity(0.12) : Colors.red.withOpacity(0.12))
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
                                                 color: isSelected 
-                                                  ? (isNone ? Colors.green : Colors.red)
-                                                  : Colors.grey.shade400,
-                                                size: 20,
+                                                  ? (isNone ? Colors.green.shade600 : Colors.red.shade600)
+                                                  : Colors.grey.shade300,
+                                                width: isSelected ? 2 : 1.5,
                                               ),
-                                              SizedBox(width: 10),
-                                              Expanded(
-                                                child: Text(
-                                                  symptom,
-                                                  style: TextStyle(
-                                                    fontSize: 13,
-                                                    fontWeight: isSelected 
-                                                      ? FontWeight.w600 
-                                                      : FontWeight.w500,
+                                              borderRadius: BorderRadius.circular(10),
+                                              boxShadow: isSelected ? [
+                                                BoxShadow(
+                                                  color: (isNone ? Colors.green : Colors.red).withOpacity(0.12),
+                                                  blurRadius: 6,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ] : null,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(4),
+                                                  decoration: BoxDecoration(
                                                     color: isSelected 
-                                                      ? (isNone ? Colors.green.shade800 : Colors.red.shade800)
-                                                      : Colors.grey.shade700,
+                                                      ? (isNone ? Colors.green.shade200 : Colors.red.shade200)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: Icon(
+                                                    isSelected 
+                                                      ? Icons.check_box_rounded
+                                                      : Icons.check_box_outline_blank_rounded,
+                                                    color: isSelected 
+                                                      ? (isNone ? Colors.green.shade700 : Colors.red.shade700)
+                                                      : Colors.grey.shade500,
+                                                    size: 20,
                                                   ),
                                                 ),
-                                              ),
-                                            ],
+                                                SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Text(
+                                                    clinicalSign,
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      fontWeight: isSelected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: isSelected 
+                                                        ? (isNone ? Colors.green.shade800 : Colors.red.shade800)
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  );
-                                }).toList(),
+                                    );
+                                  }).toList(),
+                                    );
+                                  },
+                                ),
                                 if (_selectedSymptoms.isNotEmpty && !_selectedSymptoms.contains("None of the Above")) ...[
-                                  SizedBox(height: 8),
+                                  SizedBox(height: 12),
                                   Container(
-                                    padding: EdgeInsets.all(10),
+                                    padding: EdgeInsets.all(12),
                                     decoration: BoxDecoration(
-                                      color: Colors.orange.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(8),
+                                      color: Colors.orange.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(10),
                                       border: Border.all(
-                                        color: Colors.orange.withOpacity(0.3),
+                                        color: Colors.orange.withOpacity(0.4),
+                                        width: 1.5,
                                       ),
                                     ),
                                     child: Row(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 18),
-                                        SizedBox(width: 8),
+                                        Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 18),
+                                        SizedBox(width: 10),
                                         Expanded(
                                           child: Text(
-                                            "${_selectedSymptoms.where((s) => s != "None of the Above").length} clinical sign(s) selected. Consider consulting a vet if clinical signs persist.",
+                                            "${_selectedSymptoms.where((s) => s != "None of the Above").length} clinical sign(s) detected. Consider consulting a vet if signs persist.",
                                             style: TextStyle(
                                               color: Colors.orange.shade900,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w500,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
                                             ),
                                           ),
                                         ),
@@ -6546,28 +6792,29 @@ void _disconnectDevice() async {
                                   ),
                                 ] else if (_selectedSymptoms.isEmpty) ...[
                                   // Show requirement message if no symptoms selected
-                                  SizedBox(height: 8),
+                                  SizedBox(height: 12),
                                   Container(
-                                    padding: EdgeInsets.all(10),
+                                    padding: EdgeInsets.all(12),
                                     decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(8),
+                                      color: Colors.red.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(10),
                                       border: Border.all(
-                                        color: Colors.red.withOpacity(0.3),
+                                        color: Colors.red.withOpacity(0.4),
+                                        width: 1.5,
                                       ),
                                     ),
                                     child: Row(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Icon(Icons.error_outline, color: Colors.red, size: 18),
-                                        SizedBox(width: 8),
+                                        Icon(Icons.error_outline, color: Colors.red.shade700, size: 18),
+                                        SizedBox(width: 10),
                                         Expanded(
                                           child: Text(
-                                            "Clinical signs are required. Select at least one option including 'None of the Above'.",
+                                            "Clinical signs are required. Select at least one option.",
                                             style: TextStyle(
                                               color: Colors.red.shade800,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
                                             ),
                                           ),
                                         ),
@@ -6579,7 +6826,7 @@ void _disconnectDevice() async {
                             ),
                           ),
 
-                          SizedBox(height: 20),
+                          SizedBox(height: 24),
                         ],
                       ),
                     ),
@@ -6723,48 +6970,67 @@ void _disconnectDevice() async {
     required IconData icon,
     required Color iconColor,
     required Widget child,
+    String? subtitle,
   }) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200, width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
-            blurRadius: 6,
-            offset: Offset(0, 1),
+            blurRadius: 8,
+            offset: Offset(0, 2),
           ),
         ],
       ),
       child: Padding(
-        padding: EdgeInsets.all(12),
+        padding: EdgeInsets.fromLTRB(18, 16, 18, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: EdgeInsets.all(6),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: iconColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
+                    color: iconColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(icon, color: iconColor, size: 18),
+                  child: Icon(icon, color: iconColor, size: 20),
                 ),
-                SizedBox(width: 10),
+                SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey.shade800,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.grey.shade800,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        SizedBox(height: 3),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
             ),
+            SizedBox(height: 12),
             child,
           ],
         ),
@@ -6987,22 +7253,6 @@ void _disconnectDevice() async {
         ),
       ),
     );
-  }
-
-  // Helper method to get health status color
-  Color _getHealthStatusColor(String health) {
-    switch (health.toLowerCase()) {
-      case 'excellent':
-        return Colors.green;
-      case 'good':
-        return Colors.blue;
-      case 'fair':
-        return Colors.orange;
-      case 'poor':
-        return Colors.red;
-      default:
-        return Colors.blue;
-    }
   }
 
   // Helper method to get pet type icon

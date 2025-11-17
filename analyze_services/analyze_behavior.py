@@ -905,13 +905,73 @@ def analyze_endpoint():
             "message": "Illness risk is LOW"
         }
     
-    # Generate health guidance based on detected symptoms - only if pet is unhealthy
-    if final_is_unhealthy and symptoms_detected:
+    # Generate health guidance based on detected symptoms or behavioral changes indicating illness
+    if final_is_unhealthy:
         # Analyze historical patterns and pass to guidance generator
         historical_context = analyze_illness_duration_and_patterns(df)
-        health_guidance = generate_health_guidance(symptoms_detected, df, historical_context)
-        merged["health_guidance"] = health_guidance
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
+        
+        if symptoms_detected:
+            # Generate guidance from clinical symptoms
+            health_guidance = generate_health_guidance(symptoms_detected, df, historical_context)
+            merged["health_guidance"] = health_guidance
+            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
+        else:
+            # No clinical symptoms but behavioral changes indicate illness risk
+            # Generate guidance based on all behavioral patterns without limiting
+            behavioral_concerns = []
+            
+            # Activity level concerns
+            activity_lower = activity_level.lower()
+            if 'low activity' in activity_lower or 'lethargy' in activity_lower:
+                behavioral_concerns.append('Activity decreased significantly')
+            elif 'restlessness' in activity_lower or 'night' in activity_lower:
+                behavioral_concerns.append('Restlessness or disrupted sleep patterns')
+            elif 'weakness' in activity_lower or 'collapse' in activity_lower:
+                behavioral_concerns.append('Weakness or inability to move normally')
+            elif 'high activity' in activity_lower:
+                behavioral_concerns.append('Unusual hyperactivity or excessive energy')
+            
+            # Food intake concerns
+            food_lower = food_intake.lower()
+            if 'not eating' in food_lower or 'loss of appetite' in food_lower:
+                behavioral_concerns.append('Loss of appetite or refusing to eat')
+            elif 'eating less' in food_lower:
+                behavioral_concerns.append('Reduced appetite')
+            elif 'eating more' in food_lower:
+                behavioral_concerns.append('Increased appetite or excessive eating')
+            elif 'weight loss' in food_lower:
+                behavioral_concerns.append('Unexplained weight loss')
+            elif 'weight gain' in food_lower:
+                behavioral_concerns.append('Unexplained weight gain')
+            
+            # Water intake concerns
+            water_lower = water_intake.lower()
+            if 'not drinking' in water_lower:
+                behavioral_concerns.append('Not drinking water')
+            elif 'drinking less' in water_lower:
+                behavioral_concerns.append('Reduced water intake')
+            elif 'excessive drinking' in water_lower or 'drinking more' in water_lower:
+                behavioral_concerns.append('Increased thirst/excessive drinking')
+            
+            # Bathroom habits concerns
+            bathroom_lower = bathroom_habits.lower()
+            if 'diarrhea' in bathroom_lower:
+                behavioral_concerns.append('Diarrhea or loose stools')
+            elif 'constipation' in bathroom_lower:
+                behavioral_concerns.append('Constipation')
+            elif 'frequent urination' in bathroom_lower:
+                behavioral_concerns.append('Frequent urination')
+            elif 'straining' in bathroom_lower:
+                behavioral_concerns.append('Straining to urinate or defecate')
+            elif 'blood' in bathroom_lower:
+                behavioral_concerns.append('Blood in urine or stool')
+            elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
+                behavioral_concerns.append('Inappropriate toileting or house soiling')
+            
+            health_guidance = generate_health_guidance(behavioral_concerns if behavioral_concerns else ['Illness risk detected'], df, historical_context)
+            merged["health_guidance"] = health_guidance
+            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(behavioral_concerns)} behavioral concern(s) (no clinical symptoms found)")
+        
         if historical_context.get('is_persistent'):
             print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
     
