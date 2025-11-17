@@ -625,7 +625,7 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
             normal_food_baseline = (earlier_food == 'normal').sum() > len(earlier_logs) * 0.5  # Was mostly normal
             
             if normal_food_baseline and latest_food in ['eating less', 'not eating']:
-                print(f"[CONTEXTUAL-RISK] ⚠️ CHANGE DETECTED: Food intake changed from normal to '{latest_food}'")
+                print(f"[CONTEXTUAL-RISK] [ALERT] CHANGE DETECTED: Food intake changed from normal to '{latest_food}'")
                 change_detected = True
             
             # Similar check for water intake
@@ -634,7 +634,7 @@ def compute_contextual_risk(df: pd.DataFrame) -> str:
             normal_water_baseline = (earlier_water == 'normal').sum() > len(earlier_logs) * 0.5
             
             if normal_water_baseline and latest_water in ['drinking less', 'not drinking']:
-                print(f"[CONTEXTUAL-RISK] ⚠️ CHANGE DETECTED: Water intake changed from normal to '{latest_water}'")
+                print(f"[CONTEXTUAL-RISK] [ALERT] CHANGE DETECTED: Water intake changed from normal to '{latest_water}'")
                 change_detected = True
 
         risk = "low"
@@ -871,7 +871,7 @@ def analyze_endpoint():
         merged["health_guidance"] = health_guidance
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
         if historical_context.get('is_persistent'):
-            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: 🔴 PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
+            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
     
     # Add data sufficiency notice for user
     if len(df) < 5:
@@ -1329,7 +1329,7 @@ def daily_analysis_job():
         if not df.empty:
             train_illness_model(df)  # retrain and persist illness model
         result = analyze_pet(pet["id"])
-        print(f"📊 Pet {pet['id']} analysis stored:", result)
+        print(f"[INFO] Pet {pet['id']} analysis stored:", result)
 
 
 def enqueue_task(task_name: str):
@@ -1536,7 +1536,7 @@ def generate_health_guidance(symptoms_list, df=None, historical_context=None):
         duration = historical_context.get('illness_duration_days', 0)
         if max_urgency in ['low', 'medium']:
             max_urgency = 'high'  # Upgrade persistent illness
-        recommendations.append(f"⚠️ PERSISTENT ILLNESS: Symptoms lasting {duration}+ days requires veterinary evaluation")
+        recommendations.append(f"[ALERT] PERSISTENT ILLNESS: Clinical signs lasting {duration}+ days requires veterinary evaluation")
     
     if max_urgency == "critical":
         recommendations.append("EMERGENCY: Seek immediate veterinary care")
@@ -1760,7 +1760,7 @@ def test_model_accuracy():
     """
     Test the accuracy of illness prediction models.
     Uses time-series cross-validation: train on past data, test on future data.
-    ⚠️ WARNING: This endpoint can be slow on limited resources. Test with specific pet_id for speed.
+    [WARNING] This endpoint can be slow on limited resources. Test with specific pet_id for speed.
     
     Request body:
     {
