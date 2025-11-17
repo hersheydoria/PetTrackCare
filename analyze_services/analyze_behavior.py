@@ -863,6 +863,26 @@ def analyze_endpoint():
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
     
+    # Add illness risk notice for user display
+    if illness_risk_final == "high":
+        merged["illness_risk_notice"] = {
+            "status": "high_risk",
+            "icon": "[ERROR]",
+            "message": "Illness risk is HIGH"
+        }
+    elif illness_risk_final == "medium":
+        merged["illness_risk_notice"] = {
+            "status": "medium_risk",
+            "icon": "[ALERT]",
+            "message": "Illness risk is MEDIUM"
+        }
+    else:  # low
+        merged["illness_risk_notice"] = {
+            "status": "low_risk",
+            "icon": "[OK]",
+            "message": "Illness risk is LOW"
+        }
+    
     # Generate health guidance based on detected symptoms - only if pet is unhealthy
     if final_is_unhealthy and symptoms_detected:
         # Analyze historical patterns and pass to guidance generator
