@@ -143,7 +143,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // Backend messaging about analysis quality and data sufficiency
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
-  Map<String, dynamic>? _severityPatternNotice; // smart warning when pet shows severe illness patterns over 7 days
   Map<String, dynamic>? _healthGuidance; // evidence-based health guidance based on detected symptoms
 
   // New: latest GPS/device location for selected pet
@@ -748,7 +747,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // Parse data_notice and model_notice from backend response
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
-          _severityPatternNotice = body['severity_pattern_notice'] as Map<String, dynamic>?;
           _healthGuidance = body['health_guidance'] as Map<String, dynamic>?;
         });
       } else {
@@ -5464,12 +5462,6 @@ void _disconnectDevice() async {
             SizedBox(height: 12),
           ],
           
-          // Display severity pattern notice if concerning patterns detected
-          if (_severityPatternNotice != null) ...[
-            _buildSeverityPatternNoticeCard(_severityPatternNotice!),
-            SizedBox(height: 12),
-          ],
-          
           // Display health guidance based on detected symptoms - only if pet is unhealthy
           if (_healthGuidance != null && _isUnhealthy) ...[
             _buildHealthGuidanceCard(_healthGuidance!),
@@ -5691,139 +5683,6 @@ void _disconnectDevice() async {
     );
   }
 
-  Widget _buildSeverityPatternNoticeCard(Map<String, dynamic> notice) {
-    final severity = notice['severity']?.toString() ?? 'severe';
-    final message = notice['message']?.toString() ?? '';
-    final details = notice['details']?.toString();
-    final timeframe = notice['timeframe']?.toString() ?? 'ASAP';
-    final actions = (notice['actions'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
-    
-    // Determine severity color
-    Color severityColor;
-    IconData severityIcon;
-    
-    if (severity == 'critical') {
-      severityColor = Color(0xFFD32F2F); // Deep red for critical
-      severityIcon = Icons.emergency;
-    } else {
-      severityColor = Color(0xFFF57C00); // Deep orange for severe
-      severityIcon = Icons.warning;
-    }
-    
-    return Container(
-      padding: EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: severityColor.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: severityColor.withOpacity(0.4),
-          width: 2,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Main warning message
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(severityIcon, color: severityColor, size: 22),
-              SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      message,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: severityColor,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Timeframe: $timeframe',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: severityColor.withOpacity(0.7),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          
-          // Pattern description
-          if (details != null && details.isNotEmpty) ...[
-            SizedBox(height: 10),
-            Padding(
-              padding: EdgeInsets.only(left: 32),
-              child: Text(
-                details,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: severityColor.withOpacity(0.85),
-                  height: 1.5,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-          
-          // Recommended actions
-          if (actions.isNotEmpty) ...[
-            SizedBox(height: 10),
-            Padding(
-              padding: EdgeInsets.only(left: 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Recommended Actions:',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: severityColor,
-                    ),
-                  ),
-                  SizedBox(height: 6),
-                  ...actions.map((action) => Padding(
-                    padding: EdgeInsets.only(bottom: 4),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '• ',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: severityColor.withOpacity(0.8),
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            action,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: severityColor.withOpacity(0.8),
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )).toList(),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _buildHealthGuidanceCard(Map<String, dynamic> guidance) {
     final urgency = guidance['urgency']?.toString() ?? 'none';
     final detectedSymptoms = (guidance['detected_symptoms'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
@@ -5888,7 +5747,7 @@ void _disconnectDevice() async {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Detected Symptoms:',
+                    'Detected Clinical Signs:',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -6037,10 +5896,12 @@ void _disconnectDevice() async {
         return StatefulBuilder(
           builder: (context, setModalState) {
             bool _isFormValid() {
-              return _foodIntake != null && 
+              // All fields must be filled including clinical signs (symptoms)
+              return _activityLevel != null && 
+                     _foodIntake != null && 
                      _waterIntake != null && 
-                     _activityLevel != null && 
-                     _bathroomHabits != null;
+                     _bathroomHabits != null &&
+                     _selectedSymptoms.isNotEmpty; // Clinical signs required
             }
 
             return AnimatedContainer(
@@ -6671,6 +6532,36 @@ void _disconnectDevice() async {
                                               color: Colors.orange.shade900,
                                               fontSize: 11,
                                               fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ] else if (_selectedSymptoms.isEmpty) ...[
+                                  // Show requirement message if no symptoms selected
+                                  SizedBox(height: 8),
+                                  Container(
+                                    padding: EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Colors.red.withOpacity(0.3),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(Icons.error_outline, color: Colors.red, size: 18),
+                                        SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            "Clinical signs are required. Select at least one option including 'None of the Above'.",
+                                            style: TextStyle(
+                                              color: Colors.red.shade800,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
                                             ),
                                           ),
                                         ),

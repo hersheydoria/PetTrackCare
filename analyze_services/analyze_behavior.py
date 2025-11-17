@@ -672,195 +672,6 @@ def blend_illness_risk(ml_risk: str, contextual_risk: str) -> str:
     b = str(contextual_risk or "low").lower()
     return a if sev.get(a, 0) >= sev.get(b, 0) else b
 
-def detect_severe_illness_pattern(df: pd.DataFrame) -> dict or None:
-    """
-    Detect patterns in recent logs that suggest the pet might be severely sick.
-    Similar to period tracker warning "you haven't logged, might want to switch to pregnancy mode"
-    Returns a notice dict if pattern detected, else None
-    """
-    if df is None or df.empty or len(df) < 3:
-        return None
-    
-    try:
-        df = df.copy()
-        df['log_date'] = pd.to_datetime(df['log_date'])
-        
-        # Analyze last 7 days
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
-        recent = df[df['log_date'] >= seven_days_ago].copy()
-        
-        if len(recent) < 3:
-            return None  # Need at least 3 recent logs to detect patterns
-        
-        print(f"[SEVERE-PATTERN] Analyzing {len(recent)} logs from last 7 days for severe illness patterns")
-        
-        # Pattern 1: Escalating food refusal (not eating or eating less consistently)
-        # Updated to match new category values with substring matching
-        eating_issues = (
-            recent['food_intake'].str.lower().str.contains('not eating', regex=False, na=False).sum() +
-            recent['food_intake'].str.lower().str.contains('eating less', regex=False, na=False).sum() +
-            recent['food_intake'].str.lower().str.contains('weight loss', regex=False, na=False).sum()
-        )
-        p_eating_issues = eating_issues / len(recent)
-        
-        # Pattern 2: Escalating water refusal
-        drinking_issues = (
-            recent['water_intake'].str.lower().str.contains('not drinking', regex=False, na=False).sum() +
-            recent['water_intake'].str.lower().str.contains('drinking less', regex=False, na=False).sum()
-        )
-        p_drinking_issues = drinking_issues / len(recent)
-        
-        # Pattern 3: Multiple bathroom issues
-        bathroom_issues = (
-            recent['bathroom_habits'].str.lower().str.contains('diarrhea', regex=False, na=False).sum() +
-            recent['bathroom_habits'].str.lower().str.contains('constipation', regex=False, na=False).sum() +
-            recent['bathroom_habits'].str.lower().str.contains('frequent urin', regex=False, na=False).sum() +
-            recent['bathroom_habits'].str.lower().str.contains('straining', regex=False, na=False).sum() +
-            recent['bathroom_habits'].str.lower().str.contains('blood', regex=False, na=False).sum() +
-            recent['bathroom_habits'].str.lower().str.contains('house soiling', regex=False, na=False).sum()
-        )
-        p_bathroom = bathroom_issues / len(recent)
-        
-        # Pattern 4: Consistently low activity
-        low_activity = recent['activity_level'].str.lower().str.contains('low', regex=False, na=False).sum()
-        p_low_activity = low_activity / len(recent)
-        
-        # Pattern 5: Multiple reported symptoms
-        symptom_count = 0
-        for idx, row in recent.iterrows():
-            try:
-                symptoms_str = str(row.get('symptoms', '[]'))
-                symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
-                filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
-                if len(filtered) >= 2:
-                    symptom_count += 1
-            except:
-                pass
-        p_multiple_symptoms = symptom_count / len(recent)
-        
-        print(f"[SEVERE-PATTERN] Eating issues: {p_eating_issues:.2f}, Drinking: {p_drinking_issues:.2f}, Bathroom: {p_bathroom:.2f}, Low activity: {p_low_activity:.2f}, Multi-symptoms: {p_multiple_symptoms:.2f}")
-        
-        # SEVERE PATTERN 1: Food + Water Refusal
-        # Pet is refusing both food and water = critical, needs immediate vet
-        if p_eating_issues >= 0.6 and p_drinking_issues >= 0.4:
-            print(f"[SEVERE-PATTERN] ⚠️ CRITICAL: Food AND water refusal detected ({p_eating_issues:.0%} eating issues, {p_drinking_issues:.0%} drinking issues)")
-            return {
-                "status": "severe_illness_detected",
-                "severity": "critical",
-                "message": "🚨 Critical: Immediate veterinary care recommended",
-                "pattern": "food_and_water_refusal",
-                "details": f"Your pet is refusing both food and water for {len(recent)} consecutive logs. This is a critical sign that requires immediate veterinary attention. Please contact your vet today.",
-                "actions": [
-                    "Contact your veterinarian immediately",
-                    "Monitor hydration closely - dehydration is dangerous",
-                    "Keep your pet calm and comfortable",
-                    "Prepare for possible emergency vet visit"
-                ],
-                "timeframe": "TODAY - Do not wait"
-            }
-        
-        # SEVERE PATTERN 2: Persistent eating refusal + low activity
-        # Pet won't eat and just lying around = could be serious infection/illness
-        if p_eating_issues >= 0.7 and p_low_activity >= 0.7:
-            print(f"[SEVERE-PATTERN] ⚠️ SEVERE: Food refusal + lethargy pattern ({p_eating_issues:.0%} not eating, {p_low_activity:.0%} low activity)")
-            return {
-                "status": "severe_illness_detected",
-                "severity": "severe",
-                "message": "⚠️ Severe: Loss of appetite + lethargy detected",
-                "pattern": "anorexia_lethargy",
-                "details": f"Your pet is consistently refusing food and showing very low activity levels over the past {len(recent)} logs. This combination often indicates infection, pain, or serious illness.",
-                "actions": [
-                    "Schedule a vet appointment within 24 hours",
-                    "Take your pet's temperature if possible",
-                    "Monitor for vomiting or other symptoms",
-                    "Keep food and water available but don't force"
-                ],
-                "timeframe": "Within 24 hours"
-            }
-        
-        # SEVERE PATTERN 3: Bathroom issues + low activity
-        # Pet having digestive issues and lethargic = could be gastroenteritis or infection
-        if p_bathroom >= 0.6 and p_low_activity >= 0.6:
-            print(f"[SEVERE-PATTERN] ⚠️ SEVERE: Digestive + lethargy pattern ({p_bathroom:.0%} bathroom issues, {p_low_activity:.0%} low activity)")
-            return {
-                "status": "severe_illness_detected",
-                "severity": "severe",
-                "message": "⚠️ Severe: Digestive problems + low energy",
-                "pattern": "gi_illness",
-                "details": f"Your pet is showing persistent digestive issues (diarrhea/constipation) combined with lethargy over {len(recent)} logs. This suggests possible gastroenteritis or intestinal infection.",
-                "actions": [
-                    "Contact your vet - may need stool sample",
-                    "Avoid rich foods, offer bland diet (rice + chicken)",
-                    "Ensure hydration - small frequent water breaks",
-                    "Monitor for blood in stool or extreme pain"
-                ],
-                "timeframe": "Within 24-48 hours"
-            }
-        
-        # SEVERE PATTERN 4: Multiple symptoms + eating issues
-        # Pet showing multiple clinical signs = systemic problem
-        if p_multiple_symptoms >= 0.5 and p_eating_issues >= 0.5:
-            print(f"[SEVERE-PATTERN] ⚠️ SEVERE: Multiple clinical signs + appetite loss ({p_multiple_symptoms:.0%} with symptoms, {p_eating_issues:.0%} eating issues)")
-            return {
-                "status": "severe_illness_detected",
-                "severity": "severe",
-                "message": "⚠️ Severe: Multiple clinical signs detected",
-                "pattern": "systemic_illness",
-                "details": f"Your pet is showing multiple reported symptoms combined with loss of appetite in {len(recent)} recent logs. This pattern suggests systemic infection or serious illness.",
-                "actions": [
-                    "Schedule urgent vet appointment (24-48 hours)",
-                    "Write down all symptoms for the vet",
-                    "Note when symptoms started and progression",
-                    "Check for fever (normal temp is 99-102°F for dogs, 99-102°F for cats)"
-                ],
-                "timeframe": "Within 24-48 hours"
-            }
-        
-        # PATTERN 5: Sudden change to all low values
-        # Pet suddenly went from normal to all problems = acute illness event
-        if len(recent) >= 5:
-            earliest = recent.iloc[:-4]  # First logs
-            latest = recent.iloc[-3:]     # Last 3 logs
-            
-            earliest_normal = (
-                (earliest['food_intake'].str.lower().str.contains('normal', regex=False, na=False).sum() / len(earliest) > 0.5)
-            ) and (
-                (earliest['activity_level'].str.lower().str.contains('normal', regex=False, na=False).sum() / len(earliest) > 0.5)
-            )
-            
-            latest_problems = (
-                ((latest['food_intake'].str.lower().str.contains('not eating', regex=False, na=False).sum() +
-                  latest['food_intake'].str.lower().str.contains('eating less', regex=False, na=False).sum()) / len(latest) > 0.6)
-            ) and (
-                (latest['activity_level'].str.lower().str.contains('low', regex=False, na=False).sum() / len(latest) > 0.6)
-            )
-            
-            if earliest_normal and latest_problems:
-                print(f"[SEVERE-PATTERN] ⚠️ ACUTE: Sudden decline from baseline detected")
-                return {
-                    "status": "severe_illness_detected",
-                    "severity": "severe",
-                    "message": "⚠️ Alert: Sudden health decline detected",
-                    "pattern": "acute_illness",
-                    "details": f"Your pet was fine just a few days ago but has suddenly shown a sharp decline in appetite, activity, and overall health. This acute change suggests an infection or injury that needs prompt attention.",
-                    "actions": [
-                        "Contact your vet today - do not wait",
-                        "Watch for signs of pain or discomfort",
-                        "Keep the pet warm and in a quiet space",
-                        "Note exact time when you first noticed changes"
-                    ],
-                    "timeframe": "TODAY"
-                }
-        
-        print(f"[SEVERE-PATTERN] No severe illness patterns detected")
-        return None
-        
-    except Exception as e:
-        print(f"[SEVERE-PATTERN] Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
 # ------------------- Core Analysis -------------------
 def analyze_pet_df(pet_id, df, prediction_date=None):
     """Analyze provided DataFrame of logs for pet_id and return analysis results (no storage to predictions table)."""
@@ -1033,16 +844,8 @@ def analyze_endpoint():
     health_status = "unhealthy" if is_unhealthy else "healthy"
     print(f"[ANALYZE] Pet {pet_id}: Health status = {health_status}")
     
-    # DETECT SEVERE ILLNESS PATTERNS - like period tracker warning "you might be severely sick"
-    # Analyzes past 7 days of logs for concerning patterns that suggest serious illness
-    severe_pattern_notice = detect_severe_illness_pattern(df)
-    if severe_pattern_notice:
-        merged_unhealthy_from_pattern = True
-    else:
-        merged_unhealthy_from_pattern = False
-
-    # Update health status if severe pattern detected (override ML prediction)
-    final_is_unhealthy = is_unhealthy or merged_unhealthy_from_pattern
+    # Update health status based on ML prediction
+    final_is_unhealthy = is_unhealthy
     final_health_status = "unhealthy" if final_is_unhealthy else "healthy"
 
     # Merge into response
@@ -1060,19 +863,15 @@ def analyze_endpoint():
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
     
-    if severe_pattern_notice:
-        merged["severity_pattern_notice"] = severe_pattern_notice
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: ⚠️ SEVERE PATTERN DETECTED: {severe_pattern_notice.get('pattern')}")
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Message: {severe_pattern_notice.get('message')}")
-
-    else:
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: No severe illness patterns detected")
-    
     # Generate health guidance based on detected symptoms - only if pet is unhealthy
     if final_is_unhealthy and symptoms_detected:
-        health_guidance = generate_health_guidance(symptoms_detected)
+        # Analyze historical patterns and pass to guidance generator
+        historical_context = analyze_illness_duration_and_patterns(df)
+        health_guidance = generate_health_guidance(symptoms_detected, df, historical_context)
         merged["health_guidance"] = health_guidance
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
+        if historical_context.get('is_persistent'):
+            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: 🔴 PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
     
     # Add data sufficiency notice for user
     if len(df) < 5:
@@ -1561,13 +1360,145 @@ def start_scheduler():
 # Removed: migrate_legacy_sleep_forecasts() - predictions table deprecated  
 # Removed: store_prediction() - predictions table deprecated
 
-def generate_health_guidance(symptoms_list):
+def analyze_illness_duration_and_patterns(df):
+    """
+    Analyze illness duration, persistence, and historical patterns.
+    
+    Returns dict with:
+    - illness_duration_days: How long unhealthy pattern has persisted
+    - is_persistent: Whether illness lasted >7 days
+    - pattern_type: 'acute', 'chronic', 'cyclical', 'improving', 'worsening'
+    - sudden_changes: List of sudden health changes detected
+    - recovery_history: Whether pet has recovered before from similar patterns
+    """
+    if df is None or df.empty:
+        return {"illness_duration_days": 0, "is_persistent": False, "pattern_type": None}
+    
+    try:
+        df_copy = df.copy()
+        df_copy['log_date'] = pd.to_datetime(df_copy['log_date'])
+        df_copy = df_copy.sort_values('log_date')
+        
+        # Helper to detect unhealthy indicators in a row
+        def is_unhealthy_log(row):
+            activity = str(row.get('activity_level', '')).lower()
+            food = str(row.get('food_intake', '')).lower()
+            water = str(row.get('water_intake', '')).lower()
+            bathroom = str(row.get('bathroom_habits', '')).lower()
+            
+            unhealthy_indicators = (
+                'low' in activity or 'very low' in activity or
+                'not eating' in food or 'eating less' in food or
+                'not drinking' in water or 'drinking less' in water or
+                'diarrhea' in bathroom or 'constipation' in bathroom or
+                'blood' in bathroom or 'straining' in bathroom
+            )
+            return unhealthy_indicators
+        
+        df_copy['is_unhealthy'] = df_copy.apply(is_unhealthy_log, axis=1)
+        
+        # Find consecutive unhealthy period
+        unhealthy_streak = 0
+        max_streak = 0
+        unhealthy_start_idx = None
+        max_streak_start_idx = None
+        
+        for idx, is_unhealthy in enumerate(df_copy['is_unhealthy']):
+            if is_unhealthy:
+                if unhealthy_streak == 0:
+                    unhealthy_start_idx = idx
+                unhealthy_streak += 1
+                if unhealthy_streak > max_streak:
+                    max_streak = unhealthy_streak
+                    max_streak_start_idx = unhealthy_start_idx
+            else:
+                unhealthy_streak = 0
+        
+        # Calculate illness duration in days
+        illness_duration_days = max_streak
+        is_persistent = illness_duration_days > 7
+        
+        # Determine pattern type
+        pattern_type = None
+        if illness_duration_days <= 3:
+            pattern_type = 'acute'
+        elif illness_duration_days > 7:
+            pattern_type = 'chronic'
+        
+        # Check for cyclical pattern (unhealthy, recovery, unhealthy again)
+        unhealthy_periods = []
+        current_start = None
+        for idx, is_unhealthy in enumerate(df_copy['is_unhealthy']):
+            if is_unhealthy and current_start is None:
+                current_start = idx
+            elif not is_unhealthy and current_start is not None:
+                unhealthy_periods.append((current_start, idx))
+                current_start = None
+        if current_start is not None:
+            unhealthy_periods.append((current_start, len(df_copy)))
+        
+        if len(unhealthy_periods) >= 2:
+            pattern_type = 'cyclical'
+        
+        # Check trend (improving vs worsening)
+        if max_streak_start_idx is not None and max_streak_start_idx + max_streak < len(df_copy):
+            # Check if improvement after illness streak
+            post_streak = df_copy.iloc[max_streak_start_idx + max_streak:]
+            if len(post_streak) >= 2 and not post_streak['is_unhealthy'].any():
+                pattern_type = 'improving'
+        
+        # Check for worsening (escalating symptoms)
+        if max_streak_start_idx is not None:
+            streak_data = df_copy.iloc[max_streak_start_idx:max_streak_start_idx + max_streak]
+            symptom_counts = []
+            for _, row in streak_data.iterrows():
+                try:
+                    symptoms_str = str(row.get('symptoms', '[]'))
+                    symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+                    filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
+                    symptom_counts.append(len(filtered))
+                except:
+                    symptom_counts.append(0)
+            if len(symptom_counts) >= 2 and symptom_counts[-1] > symptom_counts[0]:
+                pattern_type = 'worsening'
+        
+        # Detect sudden changes (healthy to unhealthy or major symptom jump)
+        sudden_changes = []
+        for i in range(1, len(df_copy)):
+            prev_unhealthy = df_copy.iloc[i-1]['is_unhealthy']
+            curr_unhealthy = df_copy.iloc[i]['is_unhealthy']
+            if not prev_unhealthy and curr_unhealthy:
+                sudden_changes.append({
+                    "date": str(df_copy.iloc[i]['log_date']),
+                    "change": "healthy_to_unhealthy"
+                })
+        
+        # Check recovery history (has pet recovered before from similar patterns?)
+        recovery_history = len(unhealthy_periods) > 1
+        
+        return {
+            "illness_duration_days": illness_duration_days,
+            "is_persistent": is_persistent,
+            "pattern_type": pattern_type,
+            "unhealthy_periods": len(unhealthy_periods),
+            "sudden_changes": sudden_changes,
+            "recovery_history": recovery_history,
+            "total_logs_analyzed": len(df_copy)
+        }
+    except Exception as e:
+        print(f"[PATTERN-ANALYSIS] Error analyzing patterns: {e}")
+        return {"illness_duration_days": 0, "is_persistent": False, "pattern_type": None}
+
+def generate_health_guidance(symptoms_list, df=None, historical_context=None):
     """
     Generate health guidance and recommendations based on detected symptoms.
     Uses HEALTH_SYMPTOMS_REFERENCE to provide evidence-based information.
+    Now includes historical context (duration, patterns, sudden changes).
     
     Args:
         symptoms_list: List of symptom strings detected from the pet's logs
+        df: Optional DataFrame with all logs for historical analysis
+        historical_context: Optional dict with pattern analysis results
         
     Returns:
         dict with guidance, urgency level, and recommended actions
@@ -1578,6 +1509,10 @@ def generate_health_guidance(symptoms_list):
             "urgency": "none",
             "recommendations": ["Maintain regular vet checkups", "Continue logging pet behavior"]
         }
+    
+    # Analyze patterns if not provided
+    if historical_context is None and df is not None:
+        historical_context = analyze_illness_duration_and_patterns(df)
     
     guidance_items = []
     max_urgency = "none"
@@ -1595,25 +1530,53 @@ def generate_health_guidance(symptoms_list):
     
     # Build recommendations
     recommendations = []
+    
+    # Enhance urgency if illness is persistent (>7 days)
+    if historical_context and historical_context.get('is_persistent'):
+        duration = historical_context.get('illness_duration_days', 0)
+        if max_urgency in ['low', 'medium']:
+            max_urgency = 'high'  # Upgrade persistent illness
+        recommendations.append(f"⚠️ PERSISTENT ILLNESS: Symptoms lasting {duration}+ days requires veterinary evaluation")
+    
     if max_urgency == "critical":
-        recommendations.append("🚨 EMERGENCY: Seek immediate veterinary care")
+        recommendations.append("EMERGENCY: Seek immediate veterinary care")
     elif max_urgency == "high":
-        recommendations.append("⚠️ Contact your veterinarian same day")
+        recommendations.append("Contact your veterinarian same day")
     elif max_urgency == "medium":
-        recommendations.append("📋 Schedule a vet appointment within 24-48 hours")
+        recommendations.append("Schedule a vet appointment within 24-48 hours")
     elif max_urgency == "low":
-        recommendations.append("📅 Schedule a routine vet visit")
+        recommendations.append("Schedule a routine vet visit")
     
     # Add specific recommendations
     for item in guidance_items:
         if item.get("action"):
             recommendations.append(item["action"])
     
+    # Add contextual insights from historical patterns
+    context_insights = []
+    if historical_context:
+        pattern_type = historical_context.get('pattern_type')
+        if pattern_type == 'cyclical':
+            context_insights.append(f"Pattern: Your pet shows cyclical health patterns with {historical_context.get('unhealthy_periods')} episodes")
+        elif pattern_type == 'worsening':
+            context_insights.append("Pattern: Symptoms are escalating - immediate vet attention recommended")
+        elif pattern_type == 'improving':
+            context_insights.append("Pattern: Symptoms are improving - continue monitoring")
+        
+        if historical_context.get('sudden_changes'):
+            context_insights.append(f"Alert: Sudden health change detected on {historical_context.get('sudden_changes')[0].get('date')}")
+        
+        if historical_context.get('recovery_history'):
+            context_insights.append("History: Your pet has recovered from similar episodes before")
+    
     return {
         "guidance": f"Detected {len(guidance_items)} health concern(s). {HEALTH_SYMPTOMS_REFERENCE.get('summary', 'See details below.')}",
         "urgency": max_urgency,
         "detected_symptoms": [item.get("description") for item in guidance_items],
-        "recommendations": recommendations[:5],  # Top 5 recommendations
+        "recommendations": recommendations[:7],  # Up to 7 recommendations
+        "pattern_context": context_insights,
+        "illness_duration_days": historical_context.get('illness_duration_days') if historical_context else None,
+        "is_persistent_illness": historical_context.get('is_persistent') if historical_context else False,
         "details": guidance_items
     }
 
