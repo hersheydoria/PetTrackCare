@@ -144,6 +144,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
   Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
   Map<String, dynamic>? _healthGuidance; // evidence-based health guidance based on detected symptoms
+  Map<String, dynamic>? _illnessRiskNotice; // illness risk status (low/medium/high)
 
   // New: latest GPS/device location for selected pet
   LatLng? _latestDeviceLocation;
@@ -748,6 +749,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
           _modelNotice = body['model_notice'] as Map<String, dynamic>?;
           _healthGuidance = body['health_guidance'] as Map<String, dynamic>?;
+          _illnessRiskNotice = body['illness_risk_notice'] as Map<String, dynamic>?;
         });
       } else {
         // non-200 response: ignore for now
@@ -5397,26 +5399,6 @@ void _disconnectDevice() async {
               ),
             ],
 
-            // Health Insights Section (Why It Happened) - moved after Latest Analysis
-            if (_healthInsights.isNotEmpty || (!_loadingAnalysisData && !_isUnhealthy)) ...[
-              SizedBox(height: 16),
-              Container(
-                margin: EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    )
-                  ],
-                ),
-                child: _buildHealthInsightsContent(),
-              ),
-            ],
-
             // Add bottom spacing
             SizedBox(height: 24),
           ],
@@ -5459,6 +5441,12 @@ void _disconnectDevice() async {
           // Display data sufficiency notice if present
           if (_dataNotice != null) ...[
             _buildDataNoticeCard(_dataNotice!),
+            SizedBox(height: 12),
+          ],
+          
+          // Display illness risk notice if present and pet is unhealthy
+          if (_illnessRiskNotice != null && _isUnhealthy) ...[
+            _buildIllnessRiskNoticeCard(_illnessRiskNotice!),
             SizedBox(height: 12),
           ],
           
@@ -5532,91 +5520,6 @@ void _disconnectDevice() async {
   }
 
   // Health Insights Widget (moved after Latest Analysis)
-  Widget _buildHealthInsightsContent() {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.lightbulb, color: Colors.blue.shade700, size: 20),
-              ),
-              SizedBox(width: 12),
-              Text(
-                "Why It Happened",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                  color: Colors.blue.shade700,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 16),
-          
-          // Show insights that explain the causes/patterns
-          if (_healthInsights.isNotEmpty) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Based on behavioral patterns from the last 7 days:',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.blue.shade600,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  ..._healthInsights,
-                ],
-              ),
-            ),
-          ] else if (!_loadingAnalysisData && !_isUnhealthy) ...[
-            // Show explanation when there are no specific insights and pet is healthy
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green.shade200),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'All behavioral patterns are normal — no concerning indicators detected',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.green.shade800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 
   // Helper method to get health status message based on illness risk
   String _getHealthStatusMessage() {
@@ -5671,6 +5574,56 @@ void _disconnectDevice() async {
                   message,
                   style: TextStyle(
                     fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cardColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildIllnessRiskNoticeCard(Map<String, dynamic> notice) {
+    final status = notice['status']?.toString() ?? 'unknown';
+    final message = notice['message']?.toString() ?? '';
+    
+    // Determine color based on risk status
+    Color cardColor;
+    IconData iconData;
+    
+    if (status == 'high_risk') {
+      cardColor = Color(0xFFB82132); // deep red
+      iconData = Icons.error;
+    } else if (status == 'medium_risk') {
+      cardColor = Color(0xFFFF8C00); // orange
+      iconData = Icons.warning;
+    } else {
+      cardColor = Color(0xFF2ECC71); // green
+      iconData = Icons.check_circle;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cardColor, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconData, color: cardColor, size: 22),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: cardColor,
                   ),
@@ -5770,7 +5723,7 @@ void _disconnectDevice() async {
             ),
           ],
           
-          // Recommendations
+          // Recommendations with proper icon rendering
           if (recommendations.isNotEmpty) ...[
             SizedBox(height: 10),
             Padding(
@@ -5789,14 +5742,7 @@ void _disconnectDevice() async {
                   SizedBox(height: 6),
                   ...recommendations.map((rec) => Padding(
                     padding: EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      '• $rec',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: urgencyColor.withOpacity(0.85),
-                        height: 1.3,
-                      ),
-                    ),
+                    child: _buildRecommendationWithIcon(rec, urgencyColor),
                   )).toList(),
                 ],
               ),
@@ -5805,6 +5751,66 @@ void _disconnectDevice() async {
         ],
       ),
     );
+  }
+  
+  Widget _buildRecommendationWithIcon(String recommendation, Color defaultColor) {
+    // Parse recommendation text for icon tags
+    String text = recommendation;
+    IconData? iconData;
+    Color iconColor = defaultColor;
+    
+    // Check for icon tags and replace them
+    if (text.contains('[ALERT]')) {
+      iconData = Icons.warning;
+      iconColor = Color(0xFFFF8C00); // Orange
+      text = text.replaceAll('[ALERT]', '').trim();
+    } else if (text.contains('[ERROR]')) {
+      iconData = Icons.error;
+      iconColor = Color(0xFFB82132); // Red
+      text = text.replaceAll('[ERROR]', '').trim();
+    } else if (text.contains('[OK]')) {
+      iconData = Icons.check_circle;
+      iconColor = Color(0xFF2ECC71); // Green
+      text = text.replaceAll('[OK]', '').trim();
+    } else if (text.contains('[INFO]')) {
+      iconData = Icons.info;
+      iconColor = Color(0xFF1E88E5); // Blue
+      text = text.replaceAll('[INFO]', '').trim();
+    } else if (text.contains('[WARNING]')) {
+      iconData = Icons.warning_amber;
+      iconColor = Color(0xFFFBC02D); // Amber
+      text = text.replaceAll('[WARNING]', '').trim();
+    }
+    
+    if (iconData != null) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(iconData, color: iconColor, size: 14),
+          SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 11,
+                color: defaultColor.withOpacity(0.85),
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      );
+    } else {
+      // No icon tag found, display as regular bullet point
+      return Text(
+        '• $text',
+        style: TextStyle(
+          fontSize: 11,
+          color: defaultColor.withOpacity(0.85),
+          height: 1.3,
+        ),
+      );
+    }
   }
 
   // Loading skeleton for analysis section
