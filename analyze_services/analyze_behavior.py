@@ -1669,10 +1669,25 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
         elif le_activity and activity_in in getattr(le_activity, 'classes_', []):
             act_enc = int(np.where(getattr(le_activity, 'classes_', []) == activity_in)[0][0])
         else:
-            ac = (metadata.get('act_most_common') if metadata else None)
-            if ac and ac in (act_map or {}):
-                act_enc = int((act_map or {})[ac])
-                print(f"[ML-PREDICT] Activity '{activity_in}' not in training, using '{ac}'")
+            # Fallback: match on keyword if exact value not found
+            ac = None
+            if "low" in activity_in:
+                ac = "low"
+            elif "high" in activity_in:
+                ac = "high"
+            elif "medium" in activity_in or "normal" in activity_in:
+                ac = "medium"
+            else:
+                # Use most common as last resort
+                ac = metadata.get('act_most_common') if metadata else None
+            
+            if ac:
+                if act_map and ac in act_map:
+                    act_enc = int(act_map[ac])
+                    print(f"[ML-PREDICT] Activity '{activity_in}' mapped to '{ac}'")
+                elif le_activity and ac in getattr(le_activity, 'classes_', []):
+                    act_enc = int(np.where(getattr(le_activity, 'classes_', []) == ac)[0][0])
+                    print(f"[ML-PREDICT] Activity '{activity_in}' mapped to '{ac}'")
     except Exception as e:
         print(f"[ML-PREDICT] Failed to encode activity: {e}")
 
@@ -1682,10 +1697,27 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
         elif le_food and food_in in getattr(le_food, 'classes_', []):
             food_enc = int(np.where(getattr(le_food, 'classes_', []) == food_in)[0][0])
         else:
-            fc = (metadata.get('food_most_common') if metadata else None)
-            if fc and fc in (food_map or {}):
-                food_enc = int((food_map or {})[fc])
-                print(f"[ML-PREDICT] Food '{food_in}' not in training, using '{fc}'")
+            # Fallback: match on keyword if exact value not found
+            fc = None
+            if "not eating" in food_in or "no appetite" in food_in or "refusing food" in food_in:
+                fc = "not eating"
+            elif "eating less" in food_in or "reduced appetite" in food_in:
+                fc = "eating less"
+            elif "weight loss" in food_in or "losing weight" in food_in:
+                fc = "weight loss"
+            elif "normal" in food_in:
+                fc = "normal"
+            else:
+                # Use most common as last resort
+                fc = metadata.get('food_most_common') if metadata else None
+            
+            if fc:
+                if food_map and fc in food_map:
+                    food_enc = int(food_map[fc])
+                    print(f"[ML-PREDICT] Food '{food_in}' mapped to '{fc}'")
+                elif le_food and fc in getattr(le_food, 'classes_', []):
+                    food_enc = int(np.where(getattr(le_food, 'classes_', []) == fc)[0][0])
+                    print(f"[ML-PREDICT] Food '{food_in}' mapped to '{fc}'")
     except Exception as e:
         print(f"[ML-PREDICT] Failed to encode food: {e}")
 
@@ -1695,10 +1727,27 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
         elif le_water and water_in in getattr(le_water, 'classes_', []):
             water_enc = int(np.where(getattr(le_water, 'classes_', []) == water_in)[0][0])
         else:
-            wc = (metadata.get('water_most_common') if metadata else None)
-            if wc and wc in (water_map or {}):
-                water_enc = int((water_map or {})[wc])
-                print(f"[ML-PREDICT] Water '{water_in}' not in training, using '{wc}'")
+            # Fallback: match on keyword if exact value not found
+            wc = None
+            if "not drinking" in water_in or "refusing water" in water_in or "no water" in water_in:
+                wc = "not drinking"
+            elif "drinking less" in water_in or "reduced water" in water_in:
+                wc = "drinking less"
+            elif "normal" in water_in:
+                wc = "normal"
+            elif "high water" in water_in or "increased water" in water_in:
+                wc = "high water"
+            else:
+                # Use most common as last resort
+                wc = metadata.get('water_most_common') if metadata else None
+            
+            if wc:
+                if water_map and wc in water_map:
+                    water_enc = int(water_map[wc])
+                    print(f"[ML-PREDICT] Water '{water_in}' mapped to '{wc}'")
+                elif le_water and wc in getattr(le_water, 'classes_', []):
+                    water_enc = int(np.where(getattr(le_water, 'classes_', []) == wc)[0][0])
+                    print(f"[ML-PREDICT] Water '{water_in}' mapped to '{wc}'")
     except Exception as e:
         print(f"[ML-PREDICT] Failed to encode water: {e}")
 
@@ -1708,10 +1757,33 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
         elif le_bathroom and bathroom_in in getattr(le_bathroom, 'classes_', []):
             bathroom_enc = int(np.where(getattr(le_bathroom, 'classes_', []) == bathroom_in)[0][0])
         else:
-            bc = (metadata.get('bathroom_most_common') if metadata else None)
-            if bc and bc in (bathroom_map or {}):
-                bathroom_enc = int((bathroom_map or {})[bc])
-                print(f"[ML-PREDICT] Bathroom '{bathroom_in}' not in training, using '{bc}'")
+            # Fallback: match on keyword if exact value not found
+            bc = None
+            if "diarrhea" in bathroom_in or "loose stool" in bathroom_in:
+                bc = "diarrhea"
+            elif "constipation" in bathroom_in or "hard stool" in bathroom_in:
+                bc = "constipation"
+            elif "frequent urin" in bathroom_in or "frequent urination" in bathroom_in:
+                bc = "frequent urination"
+            elif "straining" in bathroom_in or "strain" in bathroom_in:
+                bc = "straining"
+            elif "blood" in bathroom_in or "bloody" in bathroom_in:
+                bc = "blood in urine"
+            elif "house soiling" in bathroom_in or "accidents" in bathroom_in:
+                bc = "house soiling"
+            elif "normal" in bathroom_in:
+                bc = "normal"
+            else:
+                # Use most common as last resort
+                bc = metadata.get('bathroom_most_common') if metadata else None
+            
+            if bc:
+                if bathroom_map and bc in bathroom_map:
+                    bathroom_enc = int(bathroom_map[bc])
+                    print(f"[ML-PREDICT] Bathroom '{bathroom_in}' mapped to '{bc}'")
+                elif le_bathroom and bc in getattr(le_bathroom, 'classes_', []):
+                    bathroom_enc = int(np.where(getattr(le_bathroom, 'classes_', []) == bc)[0][0])
+                    print(f"[ML-PREDICT] Bathroom '{bathroom_in}' mapped to '{bc}'")
     except Exception as e:
         print(f"[ML-PREDICT] Failed to encode bathroom: {e}")
 
