@@ -324,11 +324,18 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
     le_water = LabelEncoder()
     le_bathroom = LabelEncoder()
     
+    # Normalize (lowercase) categorical features before encoding to match prediction normalization
+    df_norm = df.copy()
+    df_norm['activity_level'] = df_norm['activity_level'].str.lower()
+    df_norm['food_intake'] = df_norm['food_intake'].str.lower()
+    df_norm['water_intake'] = df_norm['water_intake'].str.lower()
+    df_norm['bathroom_habits'] = df_norm['bathroom_habits'].str.lower()
+    
     # Encode categorical features (activity, food, water, bathroom only)
-    df['act_enc'] = le_activity.fit_transform(df['activity_level'])
-    df['food_enc'] = le_food.fit_transform(df['food_intake'])
-    df['water_enc'] = le_water.fit_transform(df['water_intake'])
-    df['bathroom_enc'] = le_bathroom.fit_transform(df['bathroom_habits'])
+    df_norm['act_enc'] = le_activity.fit_transform(df_norm['activity_level'])
+    df_norm['food_enc'] = le_food.fit_transform(df_norm['food_intake'])
+    df_norm['water_enc'] = le_water.fit_transform(df_norm['water_intake'])
+    df_norm['bathroom_enc'] = le_bathroom.fit_transform(df_norm['bathroom_habits'])
     
     # Count symptoms (parse JSON array)
     def count_symptoms(symptoms_str):
@@ -341,23 +348,23 @@ def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.p
         except Exception:
             return 0
     
-    df['symptom_count'] = df['symptoms'].apply(count_symptoms)
+    df_norm['symptom_count'] = df_norm['symptoms'].apply(count_symptoms)
     
     # Build feature matrix with health indicators (activity, food, water, bathroom, symptoms only)
-    X = df[['act_enc', 'food_enc', 'water_enc', 'bathroom_enc', 'symptom_count']].values
+    X = df_norm[['act_enc', 'food_enc', 'water_enc', 'bathroom_enc', 'symptom_count']].values
     
     # Illness indicator based on health data (without mood or sleep)
     y = (
         # Food intake issues
-        (df['food_intake'].str.lower().isin(['not eating', 'eating less'])) |
+        (df_norm['food_intake'].isin(['not eating', 'eating less'])) |
         # Water intake issues
-        (df['water_intake'].str.lower().isin(['not drinking', 'drinking less'])) |
+        (df_norm['water_intake'].isin(['not drinking', 'drinking less'])) |
         # Bathroom issues
-        (df['bathroom_habits'].str.lower().isin(['diarrhea', 'constipation', 'frequent urination'])) |
+        (df_norm['bathroom_habits'].isin(['diarrhea', 'constipation', 'frequent urination'])) |
         # Multiple symptoms (2 or more real symptoms)
-        (df['symptom_count'] >= 2) |
+        (df_norm['symptom_count'] >= 2) |
         # Low activity level
-        (df['activity_level'].str.lower() == 'low')
+        (df_norm['activity_level'] == 'low')
     ).astype(int).values
 
     # Guard: need both classes to train a classifier
@@ -827,6 +834,8 @@ def analyze_endpoint():
                 print(f"[ANALYZE] Pet {pet_id}: ML prediction = low (no clear problems)")
     except Exception as e:
         print(f"[ANALYZE] Pet {pet_id}: ⚠ ML prediction error: {e}")
+        import traceback
+        traceback.print_exc()
         illness_risk_ml = "low"
 
     # Contextual risk from recent logs
@@ -1662,6 +1671,8 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
     food_enc = None
     water_enc = None
     bathroom_enc = None
+    
+    print(f"[ML-PREDICT] Available maps: act_map={bool(act_map and len(act_map))}, food_map={bool(food_map and len(food_map))}, water_map={bool(water_map and len(water_map))}, bathroom_map={bool(bathroom_map and len(bathroom_map))}")
 
     try:
         if act_map and activity_in in act_map:
@@ -1789,11 +1800,13 @@ def predict_illness_risk(activity_level, food_intake, water_intake, bathroom_hab
 
     # If encodings are missing, fallback
     if act_enc is None or food_enc is None or water_enc is None or bathroom_enc is None:
-        print(f"[ML-PREDICT] Missing encodings, using rule-based fallback")
+        print(f"[ML-PREDICT] Missing encodings: act={act_enc}, food={food_enc}, water={water_enc}, bathroom={bathroom_enc}")
+        print(f"[ML-PREDICT] Using rule-based fallback")
         result = "high" if rule_flag else "low"
         print(f"[ML-PREDICT] → Rule-based result: {result}")
         return result
 
+    print(f"[ML-PREDICT] Encodings: act={act_enc}, food={food_enc}, water={water_enc}, bathroom={bathroom_enc}, symptoms={symptom_in}")
     X = np.array([[act_enc, food_enc, water_enc, bathroom_enc, symptom_in]])
 
     try:
