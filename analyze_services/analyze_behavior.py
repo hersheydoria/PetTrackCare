@@ -2113,6 +2113,103 @@ def test_model_accuracy():
     except Exception as e:
         return jsonify({"error": str(e), "details": "Error during accuracy testing"}), 500
 
+@app.route("/test_accuracy_quick", methods=["POST"])
+def test_model_accuracy_quick():
+    """
+    Quick lightweight accuracy check without detailed confusion matrices.
+    Faster alternative to /test_accuracy for testing on limited resources.
+    """
+    data = request.get_json(silent=True) or {}
+    pet_id = data.get("pet_id")
+    test_days = int(data.get("test_days", 7))
+    
+    try:
+        from sklearn.metrics import accuracy_score, f1_score
+        
+        # Get pets to test
+        if pet_id:
+            pet_ids = [pet_id]
+        else:
+            try:
+                pets_resp = supabase.table("pets").select("id").limit(1).execute()
+                pet_ids = [p["id"] for p in (pets_resp.data or [])]
+            except:
+                return jsonify({"error": "Could not fetch pets", "note": "Please provide pet_id parameter"}), 400
+        
+        if not pet_ids:
+            return jsonify({"warning": "No pets found"}), 200
+        
+        results = {
+            "test_samples": 0,
+            "accuracy": None,
+            "f1_score": None,
+            "interpretation": None,
+            "model_status": None
+        }
+        
+        illness_y_true, illness_y_pred = [], []
+        
+        for pid in pet_ids:
+            df = fetch_logs_df(pid, limit=200)
+            if df.empty or len(df) < test_days + 5:
+                continue
+            
+            df = df.copy()
+            df['log_date'] = pd.to_datetime(df['log_date'])
+            df = df.sort_values('log_date')
+            
+            split_idx = len(df) - test_days
+            train_df = df.iloc[:split_idx]
+            test_df = df.iloc[split_idx:]
+            
+            try:
+                train_illness_model(train_df)
+                
+                for _, row in test_df.iterrows():
+                    activity = str(row.get("activity_level", ""))
+                    food_intake = str(row.get("food_intake", ""))
+                    water_intake = str(row.get("water_intake", ""))
+                    bathroom_habits = str(row.get("bathroom_habits", ""))
+                    
+                    symptom_count = 0
+                    try:
+                        import json
+                        symptoms_str = str(row.get("symptoms", "[]"))
+                        symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
+                        filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
+                        symptom_count = len(filtered)
+                    except:
+                        symptom_count = 0
+                    
+                    pred_risk = predict_illness_risk(activity, food_intake, water_intake, bathroom_habits, symptom_count)
+                    
+                    actual_unhealthy = (
+                        (food_intake.lower() in ['not eating', 'eating less']) or
+                        (water_intake.lower() in ['not drinking', 'drinking less']) or
+                        (bathroom_habits.lower() in ['diarrhea', 'constipation', 'frequent urination']) or
+                        (symptom_count >= 2) or
+                        (activity.lower() == 'low')
+                    )
+                    actual_risk = "high" if actual_unhealthy else "low"
+                    
+                    illness_y_true.append(1 if actual_risk in ["high", "medium"] else 0)
+                    illness_y_pred.append(1 if pred_risk in ["high", "medium"] else 0)
+            except Exception as e:
+                print(f"Quick test error for pet {pid}: {e}")
+        
+        if illness_y_true and illness_y_pred:
+            results["test_samples"] = len(illness_y_true)
+            results["accuracy"] = round(accuracy_score(illness_y_true, illness_y_pred), 3)
+            results["f1_score"] = round(f1_score(illness_y_true, illness_y_pred, zero_division=0), 3)
+            results["interpretation"] = _interpret_illness_metrics(results["accuracy"], results["f1_score"])
+        
+        results["model_status"] = "trained" if is_illness_model_trained() else "untrained"
+        
+        return jsonify(results)
+    
+    except Exception as e:
+        print(f"[ERROR] Quick accuracy test failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def _interpret_illness_metrics(accuracy, f1):
     """Interpret illness prediction performance"""
