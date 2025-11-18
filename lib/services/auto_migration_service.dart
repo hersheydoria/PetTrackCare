@@ -11,6 +11,14 @@ class AutoMigrationService {
   
   final LocationSyncService _locationSyncService = LocationSyncService();
   
+  // Callback function to notify when migration completes with location data
+  VoidCallback? _onLocationDataMigrated;
+  
+  /// Set callback to be invoked when migration completes with location data
+  void setOnLocationDataMigrated(VoidCallback callback) {
+    _onLocationDataMigrated = callback;
+  }
+  
   /// Force run migration for testing (bypasses all conditions)
   Future<void> forceRunMigration() async {
     print('🚨 FORCE RUN MIGRATION CALLED');
@@ -281,6 +289,13 @@ class AutoMigrationService {
       if (results['success'] > 0) {
         await _logMigrationResult(results);
         print('📝 Migration results logged to database');
+        
+        // TRIGGER CALLBACK: Notify listeners that location data was migrated
+        if (_onLocationDataMigrated != null) {
+          print('📍 Triggering location data migration callback...');
+          _onLocationDataMigrated!();
+          print('✅ Location data migration callback executed');
+        }
       }
       
       // Summary notification

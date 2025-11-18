@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart'; // For date formatting
+import 'package:flutter/foundation.dart'; // For kDebugMode
 import 'notification_screen.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -13,6 +14,7 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
+import '../services/auto_migration_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -95,6 +97,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
   RealtimeChannel? _selectedPetChannel; // Realtime listener for selected pet updates
+  RealtimeChannel? _locationHistoryChannel; // Realtime listener for location history updates
+  
+  // Auto-migration service
+  final AutoMigrationService _autoMigrationService = AutoMigrationService();
   
   // Caching mechanism for pet data
   final Map<String, Map<String, dynamic>> _petDataCache = {};
@@ -285,19 +291,33 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
     return null;
   }
+  
+  // Helper method to clear location cache (used after migration)
+  void _clearLocationCache() {
+    if (mounted) {
+      setState(() {
+        _latestDeviceLocation = null;
+        _latestDeviceTimestamp = null;
+        _latestDeviceId = null;
+        _locationHistory = [];
+        _currentMapLocation = null;
+        _currentMapLabel = null;
+        _currentMapSub = null;
+      });
+    }
+  }
 
   // Background data fetching with caching
   Future<void> _fetchPetDataInBackground(String petId) async {
     try {
-      // Fetch behavior dates and location in parallel
+      // OPTIMIZATION: Run ALL independent fetches in parallel instead of sequential
+      // This massively improves load times as they all run simultaneously
       await Future.wait([
         _fetchBehaviorDates(),
         _fetchLatestLocationForPet(),
-      ]);
-      
-      // Fetch analysis, then health insights (insights depend on _isUnhealthy being set)
-      await _fetchAnalyzeFromBackend();
-      await _fetchLatestHealthInsights();
+        _fetchAnalyzeFromBackend(),
+        _fetchLatestHealthInsights(), // All run in parallel now
+      ], eagerError: false); // Continue even if one fails
 
       // Cache the results
       final dataToCache = {
@@ -308,6 +328,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         'activityProb': _activityProb,
         'illnessRisk': _illnessRisk,
         'isUnhealthy': _isUnhealthy,
+        'timestamp': DateTime.now(),
       };
       _cachePetData(petId, dataToCache);
 
@@ -320,7 +341,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         });
       }
     } catch (e) {
-      // Handle errors gracefully
+      // Handle errors gracefully - still update UI even if some fetches fail
+      print('Error in _fetchPetDataInBackground: $e');
       if (mounted) {
         setState(() {
           _loadingBehaviorData = false;
@@ -457,6 +479,9 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         // Setup realtime listener for pet updates (e.g., is_missing status changes)
         _setupSelectedPetListener();
         
+        // Setup realtime listener for location history updates
+        _setupLocationHistoryListener();
+        
         // Save the selected pet ID for future sessions
         if (selected != null) {
           _saveSelectedPetId(selected['id']);
@@ -494,13 +519,15 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     final petId = _selectedPet!['id'];
     
     try {
-      // The backend now continuously trains models per pet, so we rely on its analysis
-      // Fetch ALL behavior logs to determine which are within last 7 days
+      // OPTIMIZATION: Only fetch last 30 days of logs and limit to 100 records
+      final thirtyDaysAgo = DateTime.now().subtract(Duration(days: 30)).toIso8601String();
       final response = await Supabase.instance.client
           .from('behavior_logs')
           .select()
           .eq('pet_id', petId)
-          .order('log_date', ascending: false);
+          .gte('log_date', thirtyDaysAgo)
+          .order('log_date', ascending: false)
+          .limit(100); // OPTIMIZATION: Limit to 100 records max
 
       final data = response as List?;
       print('DEBUG: _fetchLatestHealthInsights - Got ${data?.length ?? 0} behavior logs for pet $petId');
@@ -673,10 +700,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     if (_selectedPet == null) return;
     try {
       final petId = _selectedPet!['id'];
+      // OPTIMIZATION: Only fetch last 120 days for calendar display instead of all logs
+      final cutoffDate = DateTime.now().subtract(Duration(days: 120)).toIso8601String();
       final response = await Supabase.instance.client
           .from('behavior_logs')
           .select('log_date')
           .eq('pet_id', petId)
+          .gte('log_date', cutoffDate) // Only fetch last 120 days
           .order('log_date', ascending: true);
       final data = response as List? ?? [];
       final Map<DateTime, List<String>> map = {};
@@ -691,9 +721,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // ignore parse errors
         }
       }
-      setState(() {
-        _events = map;
-      });
+      if (mounted) {
+        setState(() {
+          _events = map;
+        });
+      }
     } catch (e) {
       // ignore / optionally log
     }
@@ -714,7 +746,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'pet_id': petId}),
       ).timeout(
-        Duration(seconds: 10),
+        Duration(seconds: 8), // OPTIMIZATION: Reduced timeout from 10s to 8s for faster feedback
         onTimeout: () => throw TimeoutException('Analysis request timed out'),
       );
       
@@ -806,6 +838,22 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
     try {
       final petId = _selectedPet!['id'];
+      // OPTIMIZATION: Skip location fetch if no device was previously mapped and still isn't
+      if (_latestDeviceId == null && _latestDeviceLocation == null) {
+        // Quick check to see if device was recently added
+        final devResp = await Supabase.instance.client
+            .from('device_pet_map')
+            .select('device_id')
+            .eq('pet_id', petId)
+            .limit(1);
+        final devList = devResp as List? ?? [];
+        final deviceId = devList.isNotEmpty ? devList.first['device_id']?.toString() : null;
+        if (deviceId == null || deviceId.isEmpty) {
+          // No device mapped for this pet
+          return;
+        }
+      }
+      
       // 1) find device_id in device_pet_map
       final devResp = await Supabase.instance.client
           .from('device_pet_map')
@@ -815,12 +863,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       final devList = devResp as List? ?? [];
       final deviceId = devList.isNotEmpty ? devList.first['device_id']?.toString() : null;
       if (deviceId == null || deviceId.isEmpty) {
-        setState(() {
-          _latestDeviceLocation = null;
-          _latestDeviceTimestamp = null;
-          _latestDeviceId = null;
-          _locationHistory = [];
-        });
+        if (mounted) {
+          setState(() {
+            _latestDeviceLocation = null;
+            _latestDeviceTimestamp = null;
+            _latestDeviceId = null;
+            _locationHistory = [];
+          });
+        }
         return;
       }
 
@@ -848,31 +898,33 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         // Fetch location history first to get address
         await _fetchLocationHistoryForDevice(deviceId, petId: petId);
         
-        setState(() {
-          _latestDeviceId = deviceId;
-          _latestDeviceTimestamp = ts;
-          _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
-          
-          // Automatically set the map to show the latest location
-          // Always reset to latest location when fetching (e.g., when switching pets or refreshing)
-          if (_latestDeviceLocation != null) {
-            _currentMapLocation = _latestDeviceLocation;
-            // Get address from location history if available
-            if (_locationHistory.isNotEmpty) {
-              final latestHistory = _locationHistory.first;
-              final address = latestHistory['address']?.toString();
-              if (address != null && address.isNotEmpty) {
-                _currentMapLabel = address;
+        if (mounted) {
+          setState(() {
+            _latestDeviceId = deviceId;
+            _latestDeviceTimestamp = ts;
+            _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
+            
+            // Automatically set the map to show the latest location
+            // Always reset to latest location when fetching (e.g., when switching pets or refreshing)
+            if (_latestDeviceLocation != null) {
+              _currentMapLocation = _latestDeviceLocation;
+              // Get address from location history if available
+              if (_locationHistory.isNotEmpty) {
+                final latestHistory = _locationHistory.first;
+                final address = latestHistory['address']?.toString();
+                if (address != null && address.isNotEmpty) {
+                  _currentMapLabel = address;
+                } else {
+                  _currentMapLabel = 'Live GPS Location';
+                }
+                _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
               } else {
                 _currentMapLabel = 'Live GPS Location';
+                _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
               }
-              _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts.toLocal()) : 'Latest location';
-            } else {
-              _currentMapLabel = 'Live GPS Location';
-              _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts.toLocal()) : 'Latest location';
             }
-          }
-        });
+          });
+        }
   
       } else {
         // device exists but no location rows yet
@@ -896,88 +948,169 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
-   // Fetch recent location_history rows (limit 10) for device and reverse-geocode addresses.
-  Future<void> _fetchLocationHistoryForDevice(String deviceId, {required String petId, int limit = 10}) async {
+   // Fetch recent location_history rows (limit 8) for device and reverse-geocode addresses.
+  Future<void> _fetchLocationHistoryForDevice(String deviceId, {required String petId, int limit = 8}) async {
     try {
       final resp = await Supabase.instance.client
           .from('location_history')
-          .select()
+          .select('id,latitude,longitude,timestamp,device_mac,pet_id,firebase_entry_id') // Include firebase_entry_id to check if migrated from Firebase
           .eq('device_mac', deviceId)
           .eq('pet_id', petId)
           .order('timestamp', ascending: false)
           .limit(limit);
       final list = resp as List? ?? [];
       final records = <Map<String, dynamic>>[];
+      
       for (final row in list) {
         try {
           final lat = double.tryParse(row['latitude']?.toString() ?? '');
           final lng = double.tryParse(row['longitude']?.toString() ?? '');
+          final firebaseEntryId = row['firebase_entry_id'] as String?;
           DateTime? ts;
           final rawTs = row['timestamp'];
-          if (rawTs is String) ts = DateTime.tryParse(rawTs);
-          else if (rawTs is DateTime) ts = rawTs;
-          String? address;
-          if (lat != null && lng != null) {
-            // try reverse geocoding; non-blocking but awaited so UI gets addresses
-            address = await _reverseGeocode(lat, lng);
+          if (rawTs is String) {
+            ts = DateTime.tryParse(rawTs);
+            // If timestamp includes timezone info (e.g., "2025-11-18T14:30:00+08:00"), parse it correctly
+            if (ts != null && rawTs.contains('+')) {
+              // Already timezone-aware from database, use as-is
+              ts = DateTime.tryParse(rawTs);
+            }
+          } else if (rawTs is DateTime) {
+            ts = rawTs;
           }
+          
+          // Note: Supabase already stores the correct local time with timezone info
+          // No need to add any timezone offset
+          
           records.add({
             'latitude': lat,
             'longitude': lng,
             'timestamp': ts,
             'device_mac': row['device_mac'],
-            'address': address,
+            'firebase_entry_id': firebaseEntryId,
+            'address': null, // Will be resolved asynchronously
           });
-        } catch (_) {
+        } catch (e) {
           // skip malformed row
+          if (kDebugMode) print('Error parsing location record: $e');
         }
       }
-      setState(() {
-        _locationHistory = records;
-      });
       
-      // Automatically refresh addresses for any location without addresses
-      if (records.isNotEmpty) {
-        Future.delayed(Duration(milliseconds: 500), () {
-          _refreshAddressesForLocationHistory();
+      if (mounted) {
+        setState(() {
+          _locationHistory = records;
         });
       }
-    } catch (_) {
-      setState(() {
-        _locationHistory = [];
-      });
+      
+      // Resolve addresses in parallel for all locations after a short delay to allow UI to render first
+      if (records.isNotEmpty) {
+        Future.delayed(Duration(milliseconds: 100), () {
+          if (mounted) {
+            _resolveAddressesForLocationHistory();
+          }
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) print('Error fetching location history: $e');
+      if (mounted) {
+        setState(() {
+          _locationHistory = [];
+        });
+      }
+    }
+  }
+
+  // Resolve addresses for all location history items with rate limiting
+  Future<void> _resolveAddressesForLocationHistory() async {
+    if (_locationHistory.isEmpty) return;
+    
+    if (kDebugMode) print('🔄 Starting address resolution for ${_locationHistory.length} locations...');
+    
+    try {
+      bool hasUpdates = false;
+      int resolvedCount = 0;
+      
+      // Process addresses sequentially with a small delay between requests to avoid overwhelming the API
+      for (int i = 0; i < _locationHistory.length; i++) {
+        final record = _locationHistory[i];
+        final lat = record['latitude'] as double?;
+        final lng = record['longitude'] as double?;
+        final existingAddress = record['address'] as String?;
+        
+        // Only resolve if we don't have an address yet
+        if (lat != null && lng != null && (existingAddress == null || existingAddress.isEmpty)) {
+          try {
+            final address = await _reverseGeocode(lat, lng);
+            if (address != null && address.isNotEmpty && i < _locationHistory.length) {
+              _locationHistory[i]['address'] = address;
+              hasUpdates = true;
+              resolvedCount++;
+              if (kDebugMode) print('✅ [$resolvedCount] Resolved address for location $i: $address');
+            } else if (kDebugMode) {
+              print('⚠️  Failed to resolve address for location $i');
+            }
+            
+            // Add a small delay between requests to respect API rate limits (avoid 429 Too Many Requests)
+            if (i < _locationHistory.length - 1) {
+              await Future.delayed(Duration(milliseconds: 300));
+            }
+          } catch (e) {
+            if (kDebugMode) print('❌ Error resolving address for location $i: $e');
+          }
+        }
+      }
+      
+      if (hasUpdates && mounted) {
+        if (kDebugMode) print('🔄 Updating UI with ${resolvedCount} resolved addresses...');
+        setState(() {
+          // Trigger rebuild with resolved addresses
+          _locationHistory = [..._locationHistory];
+        });
+      } else if (kDebugMode) {
+        print('ℹ️ No updates to apply');
+      }
+    } catch (e) {
+      if (kDebugMode) print('❌ Error in address resolution loop: $e');
     }
   }
 
   // Reverse geocode using Nominatim (OpenStreetMap). Returns display_name or null.
   Future<String?> _reverseGeocode(double lat, double lng) async {
     try {
-      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=$lat&lon=$lng');
-      final resp = await http.get(url, headers: {'User-Agent': 'PetTrackCare/1.0 (+your-email@example.com)'});
+      // Use Nominatim's reverse geocoding API
+      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=0');
+      if (kDebugMode) print('🔍 Fetching address for: $lat, $lng');
+      
+      final resp = await http.get(
+        url, 
+        headers: {'User-Agent': 'PetTrackCare/1.0 (pettrackcare.app)'}
+      ).timeout(
+        Duration(seconds: 15), // Increased from 8 to 15 seconds to handle network latency
+        onTimeout: () {
+          if (kDebugMode) print('⏱️ Reverse geocoding timeout for lat: $lat, lng: $lng');
+          throw TimeoutException('Reverse geocoding request timed out after 15 seconds');
+        }
+      );
+      
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
         final display = body['display_name'];
-        if (display is String && display.isNotEmpty) return display;
+        if (display is String && display.isNotEmpty) {
+          if (kDebugMode) print('✅ Reverse geocoding succeeded: $lat, $lng -> $display');
+          return display;
+        } else {
+          if (kDebugMode) print('⚠️ No display_name in response for $lat, $lng');
+        }
+      } else {
+        if (kDebugMode) print('❌ Reverse geocoding failed with status ${resp.statusCode}');
       }
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) print('❌ Reverse geocoding error for lat: $lat, lng: $lng: $e');
+    }
     return null;
   }
 
   // Try to resolve address for a specific location in background
-  void _tryResolveAddressForLocation(double lat, double lng, int index) async {
-    try {
-      final address = await _reverseGeocode(lat, lng);
-      if (address != null && address.isNotEmpty && mounted) {
-        setState(() {
-          if (index < _locationHistory.length) {
-            _locationHistory[index]['address'] = address;
-          }
-        });
-      }
-    } catch (e) {
-      // Silently handle errors - address resolution is not critical
-    }
-  }
 
   // Format address for display - truncate if too long and prioritize important parts
   String _formatAddressForDisplay(String address) {
@@ -1006,45 +1139,16 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   // Refresh addresses for location history items that don't have addresses yet
   Future<void> _refreshAddressesForLocationHistory() async {
-    if (_locationHistory.isEmpty) return;
-    
-    bool hasUpdates = false;
-    final updatedHistory = <Map<String, dynamic>>[];
-    
-    for (final record in _locationHistory) {
-      final lat = record['latitude'] as double?;
-      final lng = record['longitude'] as double?;
-      final currentAddress = record['address'] as String?;
-      
-      // If no address exists and we have coordinates, try to get address
-      if ((currentAddress == null || currentAddress.isEmpty) && lat != null && lng != null) {
-        final newAddress = await _reverseGeocode(lat, lng);
-        if (newAddress != null && newAddress.isNotEmpty) {
-          final updatedRecord = Map<String, dynamic>.from(record);
-          updatedRecord['address'] = newAddress;
-          updatedHistory.add(updatedRecord);
-          hasUpdates = true;
-        } else {
-          updatedHistory.add(record);
-        }
-      } else {
-        updatedHistory.add(record);
-      }
-    }
-    
-    if (hasUpdates) {
-      setState(() {
-        _locationHistory = updatedHistory;
-      });
-    }
+    // Use the new parallel address resolution method
+    await _resolveAddressesForLocationHistory();
   }
 
   String _formatTimestamp(DateTime? dt) {
     if (dt == null) return '-';
     try {
-      return DateFormat('MMM d, yyyy • hh:mm a').format(dt.toLocal());
+      return DateFormat('MMM d, yyyy • hh:mm a').format(dt);
     } catch (_) {
-      return dt.toIso8601String();
+      return dt.toString();
     }
   }
 
@@ -1058,7 +1162,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           markerLocation: _currentMapLocation ?? _latestDeviceLocation,
           markerLabel: _currentMapLabel ?? (_latestDeviceLocation != null ? 'Current Location' : null),
           markerSub: _currentMapSub ?? (_latestDeviceTimestamp != null 
-            ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!.toLocal()) 
+            ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!) 
             : null),
           locationHistory: _locationHistory,
           onLocationSelected: (location, label, subtitle) {
@@ -1084,11 +1188,71 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _fetchPets();
+    
+    // Register callback for when location data is migrated from Firebase
+    _autoMigrationService.setOnLocationDataMigrated(() {
+      print('🔄 Location data migration callback triggered - refreshing location display');
+      // Clear location cache to force fresh fetch
+      _clearLocationCache();
+      // Refresh location display when migration completes
+      if (_selectedPet != null && mounted) {
+        _fetchLatestLocationForPet();
+      }
+    });
+    
+    // Trigger auto-migration when PetProfileScreen loads
+    _runAutoMigrationInBackground();
+  }
+  
+  /// Run auto-migration in background without blocking the UI
+  void _runAutoMigrationInBackground() {
+    // Use multiple logging methods to ensure visibility
+    print('=== AUTO-MIGRATION TRIGGER FROM PETS_SCREEN ===');
+    debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM PetProfileScreen.initState()');
+    print('Timestamp: ${DateTime.now().toIso8601String()}');
+    print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
+    print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
+    
+    Future.microtask(() async {
+      try {
+        print('=== MIGRATION STATUS CHECK ===');
+        await _autoMigrationService.checkMigrationStatus();
+        
+        print('=== CHECKING MIGRATION CONDITIONS ===');
+        debugPrint('Starting auto-migration check...');
+        
+        final shouldRun = await _autoMigrationService.shouldRunMigration();
+        print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
+        debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
+        
+        if (shouldRun) {
+          print('=== STARTING MIGRATION PROCESS ===');
+          debugPrint('INITIATING BACKGROUND MIGRATION...');
+          await _autoMigrationService.runAutoMigration();
+          print('=== MIGRATION COMPLETED ===');
+          debugPrint('Background migration process completed');
+        } else {
+          print('=== MIGRATION SKIPPED ===');
+          debugPrint('Auto-migration skipped - conditions not met');
+          print('=== CONDITIONS: User not authenticated or wrong role ===');
+        }
+      } catch (e) {
+        print('=== MIGRATION ERROR ===');
+        print('Error type: ${e.runtimeType}');
+        print('Error details: $e');
+        debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
+      }
+    });
   }
 
   // Setup realtime listener for selected pet changes
   void _setupSelectedPetListener() {
     if (_selectedPet == null) return;
+    
+    // Unsubscribe from previous pet channel if exists
+    if (_selectedPetChannel != null) {
+      _selectedPetChannel!.unsubscribe();
+    }
     
     final petId = _selectedPet!['id'];
     
@@ -1121,6 +1285,48 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
+  // Setup realtime listener for location history changes
+  void _setupLocationHistoryListener() {
+    if (_selectedPet == null) return;
+    
+    // Unsubscribe from previous location history channel if exists
+    if (_locationHistoryChannel != null) {
+      _locationHistoryChannel!.unsubscribe();
+    }
+    
+    final petId = _selectedPet!['id'];
+    
+    try {
+      _locationHistoryChannel = Supabase.instance.client
+          .channel('location_history_$petId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'location_history',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'pet_id',
+              value: petId,
+            ),
+            callback: (payload) {
+              print('📍 Real-time location update for pet $petId');
+              // Refresh location data when new location is inserted
+              if (mounted) {
+                _fetchLatestLocationForPet();
+                // Refetch location history to get the new entry
+                final deviceId = _selectedPet?['device_id']?.toString();
+                if (deviceId != null && deviceId.isNotEmpty) {
+                  _fetchLocationHistoryForDevice(deviceId, petId: petId);
+                }
+              }
+            },
+          )
+          .subscribe();
+    } catch (e) {
+      print('Error setting up location history realtime listener: $e');
+    }
+  }
+
   @override
   void dispose() {
     _emergencyContactController.dispose();
@@ -1128,9 +1334,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _customMessageController.dispose();
     _specialNotesController.dispose();
     _tabController.dispose();
-    // Unsubscribe from realtime listener
+    // Unsubscribe from realtime listeners
     if (_selectedPetChannel != null) {
       _selectedPetChannel!.unsubscribe();
+    }
+    if (_locationHistoryChannel != null) {
+      _locationHistoryChannel!.unsubscribe();
     }
     super.dispose();
   }
@@ -3240,7 +3449,7 @@ void _disconnectDevice() async {
       markerLabel = locationAddress?.isNotEmpty == true 
           ? '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${locationAddress!.length > 40 ? '${locationAddress.substring(0, 40)}...' : locationAddress}'
           : '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${_latestDeviceId ?? 'Device Location'}';
-      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, yyyy • h:mm a').format(_latestDeviceTimestamp!.toLocal()) : 'Last seen: unknown';
+      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, yyyy • h:mm a').format(_latestDeviceTimestamp!) : 'Last seen: unknown';
     } else if (_currentMapLocation != null) {
       // Showing a historical location (user clicked on a location from history)
       lat = _currentMapLocation!.latitude;
@@ -3368,40 +3577,6 @@ void _disconnectDevice() async {
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  SizedBox(height: 16),
-                  
-                  // Status indicators
-                  Row(
-                    children: [
-                      _buildStatusIndicator(
-                        icon: Icons.gps_fixed,
-                        label: 'GPS Status',
-                        value: _latestDeviceLocation != null ? 'Active' : 'Inactive',
-                        color: _latestDeviceLocation != null ? Colors.green : Colors.orange,
-                        isActive: _latestDeviceLocation != null,
-                      ),
-                      SizedBox(width: 12),
-                      _buildStatusIndicator(
-                        icon: Icons.history,
-                        label: 'History',
-                        value: '${_locationHistory.length} records',
-                        color: _locationHistory.isNotEmpty ? Colors.blue : Colors.grey,
-                        isActive: _locationHistory.isNotEmpty,
-                      ),
-                    ],
-                  ),
-                  
-                  SizedBox(height: 16),
-                  
-                  // Action buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 1,
-                        child: Container(),
-                      ),
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.2),
@@ -3434,12 +3609,31 @@ void _disconnectDevice() async {
                           },
                         ),
                       ),
-                      Expanded(
-                        flex: 1,
-                        child: Container(),
+                    ],
+                  ),
+                  SizedBox(height: 16),
+                  
+                  // Status indicators
+                  Row(
+                    children: [
+                      _buildStatusIndicator(
+                        icon: Icons.gps_fixed,
+                        label: 'GPS Status',
+                        value: _latestDeviceLocation != null ? 'Active' : 'Inactive',
+                        color: _latestDeviceLocation != null ? Colors.green : Colors.orange,
+                        isActive: _latestDeviceLocation != null,
+                      ),
+                      SizedBox(width: 12),
+                      _buildStatusIndicator(
+                        icon: Icons.history,
+                        label: 'History',
+                        value: '${_locationHistory.length} records',
+                        color: _locationHistory.isNotEmpty ? Colors.blue : Colors.grey,
+                        isActive: _locationHistory.isNotEmpty,
                       ),
                     ],
                   ),
+                  
                 ],
               ),
             ),
@@ -3876,14 +4070,12 @@ void _disconnectDevice() async {
       leadingIcon = Icons.location_on;
       iconColor = deepRed;
     } else if (lat != null && lng != null) {
-      // Show coordinates as title when no address is available
+      // Show coordinates as title when no address is available yet
       title = 'Lat: ${lat.toStringAsFixed(4)}, Lng: ${lng.toStringAsFixed(4)}';
       subtitle = 'Resolving address...';
       leadingIcon = Icons.my_location;
       iconColor = Colors.orange;
-      
-      // Try to resolve address in background (non-blocking)
-      _tryResolveAddressForLocation(lat, lng, index);
+      // Note: Address resolution is now handled by _resolveAddressesForLocationHistory() after fetch completes
     } else {
       title = 'Unknown Location';
       subtitle = 'No location data available';
@@ -3896,10 +4088,12 @@ void _disconnectDevice() async {
     if (timestamp != null) {
       try {
         // Format as: Oct 5, 2025 • 2:30 PM
-        timestampDisplay = DateFormat('MMM d, yyyy • h:mm a').format(timestamp.toLocal());
+        // The timestamp already has the correct local time, so don't convert it again
+        // Just use it directly without timezone conversion
+        timestampDisplay = DateFormat('MMM d, yyyy • h:mm a').format(timestamp);
       } catch (e) {
         // Fallback to ISO string if formatting fails
-        timestampDisplay = timestamp.toLocal().toString().substring(0, 16);
+        timestampDisplay = timestamp.toString().substring(0, 16);
       }
     }
     
@@ -5482,12 +5676,6 @@ void _disconnectDevice() async {
             SizedBox(height: 12),
           ],
           
-          // Display health guidance based on detected symptoms - only if pet is unhealthy
-          if (_healthGuidance != null && _isUnhealthy) ...[
-            _buildHealthGuidanceCard(_healthGuidance!),
-            SizedBox(height: 12),
-          ],
-          
           // Health Status Section (moved inside Latest Analysis)
           Container(
             padding: EdgeInsets.all(16),
@@ -5546,6 +5734,13 @@ void _disconnectDevice() async {
               ],
             ),
           ),
+          
+          // Display health guidance based on detected symptoms - only if pet is unhealthy
+          if (_healthGuidance != null && _isUnhealthy) ...[
+            SizedBox(height: 12),
+            _buildHealthGuidanceCard(_healthGuidance!),
+            SizedBox(height: 12),
+          ],
         ],
       ),
     );
@@ -5691,13 +5886,16 @@ void _disconnectDevice() async {
       urgencyIcon = Icons.check_circle;
     }
     
+    // Get default care tips based on urgency level
+    List<String> careTips = _getDefaultCareTips(urgency);
+    
     return Container(
       padding: EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: urgencyColor.withOpacity(0.08),
+        color: Color(0xFFB82132).withOpacity(0.08),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: urgencyColor.withOpacity(0.3),
+          color: Color(0xFFB82132).withOpacity(0.3),
           width: 1.5,
         ),
       ),
@@ -5708,15 +5906,15 @@ void _disconnectDevice() async {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(urgencyIcon, color: urgencyColor, size: 20),
+              Icon(urgencyIcon, color: Color(0xFFB82132), size: 24),
               SizedBox(width: 10),
               Expanded(
                 child: Text(
                   'Health Guidance',
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 16,
                     fontWeight: FontWeight.w700,
-                    color: urgencyColor,
+                    color: Color(0xFFB82132),
                   ),
                 ),
               ),
@@ -5734,19 +5932,20 @@ void _disconnectDevice() async {
                   Text(
                     'Detected Clinical Signs:',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: urgencyColor,
+                      color: Color(0xFFB82132),
                     ),
                   ),
-                  SizedBox(height: 6),
-                  ...detectedSymptoms.take(3).map((symptom) => Padding(
-                    padding: EdgeInsets.only(bottom: 3),
+                  SizedBox(height: 8),
+                  ...detectedSymptoms.take(5).map((symptom) => Padding(
+                    padding: EdgeInsets.only(bottom: 4),
                     child: Text(
                       '• $symptom',
                       style: TextStyle(
-                        fontSize: 11,
-                        color: urgencyColor.withOpacity(0.85),
+                        fontSize: 13,
+                        color: Color(0xFFB82132).withOpacity(0.85),
+                        height: 1.4,
                       ),
                     ),
                   )).toList(),
@@ -5755,9 +5954,9 @@ void _disconnectDevice() async {
             ),
           ],
           
-          // Recommendations with proper icon rendering
+          // Backend recommendations if provided
           if (recommendations.isNotEmpty) ...[
-            SizedBox(height: 10),
+            SizedBox(height: 12),
             Padding(
               padding: EdgeInsets.only(left: 30),
               child: Column(
@@ -5766,15 +5965,41 @@ void _disconnectDevice() async {
                   Text(
                     'Recommended Actions:',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: urgencyColor,
+                      color: Color(0xFFB82132),
                     ),
                   ),
-                  SizedBox(height: 6),
+                  SizedBox(height: 8),
                   ...recommendations.map((rec) => Padding(
-                    padding: EdgeInsets.only(bottom: 4),
-                    child: _buildRecommendationWithIcon(rec, urgencyColor),
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: _buildDetailedRecommendation(rec, urgencyColor),
+                  )).toList(),
+                ],
+              ),
+            ),
+          ],
+          
+          // General care tips
+          if (careTips.isNotEmpty) ...[
+            SizedBox(height: 12),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Care Tips:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFB82132),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  ...careTips.map((tip) => Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: _buildCareTip(tip, urgencyColor),
                   )).toList(),
                 ],
               ),
@@ -5785,9 +6010,135 @@ void _disconnectDevice() async {
     );
   }
   
-  Widget _buildRecommendationWithIcon(String recommendation, Color defaultColor) {
-    // Parse recommendation text for icon tags
+  List<String> _getDefaultCareTips(String urgency) {
+    switch (urgency.toLowerCase()) {
+      case 'critical':
+        return [
+          '[ALERT] Seek immediate veterinary care - do not delay',
+          '[ALERT] Keep your pet calm and minimize physical activity',
+          '[INFO] Have your pet\'s medical history ready for the vet',
+          '[INFO] Monitor vital signs (breathing, temperature, hydration)',
+          '[WARNING] Avoid giving new food or treats during this period',
+          '[INFO] Keep your pet in a quiet, comfortable environment',
+          '[TIP] Document all symptoms and when they started',
+        ];
+      case 'high':
+        return [
+          '[WARNING] Schedule a veterinary appointment urgently',
+          '[INFO] Monitor your pet closely for any changes',
+          '[INFO] Maintain regular meal schedules and hydration',
+          '[TIP] Take photos or video of symptoms to show the vet',
+          '[INFO] Avoid strenuous exercise and play',
+          '[WARNING] Do not give medications without vet approval',
+          '[TIP] Keep a daily log of symptoms and behavior changes',
+        ];
+      case 'medium':
+        return [
+          '[INFO] Schedule a veterinary checkup within the next few days',
+          '[INFO] Monitor symptoms for any worsening',
+          '[TIP] Maintain consistent feeding and water schedules',
+          '[INFO] Provide a comfortable resting area',
+          '[INFO] Keep your pet clean and well-groomed',
+          '[TIP] Document symptom patterns and triggers',
+          '[INFO] Avoid sudden changes to diet or routine',
+        ];
+      default:
+        return [
+          '[OK] Continue regular health maintenance and monitoring',
+          '[TIP] Maintain consistent exercise and play routines',
+          '[INFO] Keep regular grooming and hygiene practices',
+          '[INFO] Schedule annual preventive health checkups',
+          '[TIP] Provide balanced nutrition and fresh water daily',
+          '[INFO] Monitor your pet\'s behavior regularly',
+          '[TIP] Keep your pet\'s vaccinations up to date',
+        ];
+    }
+  }
+  
+  Widget _buildDetailedRecommendation(String recommendation, Color defaultColor) {
+    // Parse recommendation text for icon tags and priority indicators
     String text = recommendation;
+    IconData? iconData;
+    Color iconColor = defaultColor;
+    bool isHighPriority = false;
+    
+    // Check for priority indicators
+    if (text.startsWith('[URGENT]') || text.startsWith('[CRITICAL]')) {
+      isHighPriority = true;
+      text = text.replaceAll(RegExp(r'^\[(URGENT|CRITICAL)\]\s*'), '').trim();
+    }
+    
+    // Check for icon tags and replace them
+    if (text.contains('[ALERT]')) {
+      iconData = Icons.warning;
+      iconColor = Color(0xFFFF8C00); // Orange
+      text = text.replaceAll('[ALERT]', '').trim();
+    } else if (text.contains('[ERROR]')) {
+      iconData = Icons.error;
+      iconColor = Color(0xFFB82132); // Red
+      text = text.replaceAll('[ERROR]', '').trim();
+    } else if (text.contains('[OK]')) {
+      iconData = Icons.check_circle;
+      iconColor = Color(0xFF2ECC71); // Green
+      text = text.replaceAll('[OK]', '').trim();
+    } else if (text.contains('[INFO]')) {
+      iconData = Icons.info;
+      iconColor = Color(0xFF1E88E5); // Blue
+      text = text.replaceAll('[INFO]', '').trim();
+    } else if (text.contains('[WARNING]')) {
+      iconData = Icons.warning_amber;
+      iconColor = Color(0xFFFBC02D); // Amber
+      text = text.replaceAll('[WARNING]', '').trim();
+    } else if (text.contains('[HELP]')) {
+      iconData = Icons.help;
+      iconColor = Color(0xFF1E88E5); // Blue
+      text = text.replaceAll('[HELP]', '').trim();
+    } else if (text.contains('[TIP]')) {
+      iconData = Icons.lightbulb;
+      iconColor = Color(0xFFFBC02D); // Amber
+      text = text.replaceAll('[TIP]', '').trim();
+    }
+    
+    // Default icon if no tag found
+    if (iconData == null) {
+      iconData = Icons.arrow_right;
+      iconColor = defaultColor.withOpacity(0.6);
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isHighPriority ? iconColor.withOpacity(0.08) : Colors.transparent,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: isHighPriority ? iconColor.withOpacity(0.2) : Colors.transparent,
+          width: 0.5,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(iconData, color: iconColor, size: 16),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 13,
+                color: Color(0xFFB82132).withOpacity(0.9),
+                height: 1.5,
+                fontWeight: isHighPriority ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildCareTip(String tip, Color defaultColor) {
+    // Parse tip text for icon tags
+    String text = tip;
     IconData? iconData;
     Color iconColor = defaultColor;
     
@@ -5812,37 +6163,39 @@ void _disconnectDevice() async {
       iconData = Icons.warning_amber;
       iconColor = Color(0xFFFBC02D); // Amber
       text = text.replaceAll('[WARNING]', '').trim();
+    } else if (text.contains('[TIP]')) {
+      iconData = Icons.lightbulb;
+      iconColor = Color(0xFFFBC02D); // Amber
+      text = text.replaceAll('[TIP]', '').trim();
+    } else if (text.contains('[HELP]')) {
+      iconData = Icons.help;
+      iconColor = Color(0xFF1E88E5); // Blue
+      text = text.replaceAll('[HELP]', '').trim();
     }
     
-    if (iconData != null) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(iconData, color: iconColor, size: 14),
-          SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 11,
-                color: defaultColor.withOpacity(0.85),
-                height: 1.3,
-              ),
+    // Default icon if no tag found
+    if (iconData == null) {
+      iconData = Icons.check;
+      iconColor = defaultColor.withOpacity(0.6);
+    }
+    
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(iconData, color: iconColor, size: 16),
+        SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              color: Color(0xFFB82132).withOpacity(0.85),
+              height: 1.5,
             ),
           ),
-        ],
-      );
-    } else {
-      // No icon tag found, display as regular bullet point
-      return Text(
-        '• $text',
-        style: TextStyle(
-          fontSize: 11,
-          color: defaultColor.withOpacity(0.85),
-          height: 1.3,
         ),
-      );
-    }
+      ],
+    );
   }
 
   // Loading skeleton for analysis section
@@ -7518,7 +7871,7 @@ class _FullScreenMapViewState extends State<_FullScreenMapView> {
                                 }
                                 
                                 final timestamp = ts != null 
-                                    ? DateFormat('MMM d, yyyy • hh:mm a').format(ts.toLocal())
+                                    ? DateFormat('MMM d, yyyy • hh:mm a').format(ts)
                                     : '-';
                                 
                                 return ListTile(

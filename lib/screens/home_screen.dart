@@ -743,19 +743,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             .length;
       });
 
-      // Refresh lists to stay in sync with backend/RLS
-      await Future.wait([
+      // Refresh lists to stay in sync with backend/RLS (fire and forget - don't block on errors)
+      Future.wait([
         fetchSittingJobs(),
         fetchOwnerPendingRequests(),
         fetchOwnerActiveJobs(),
-      ]);
+      ]).catchError((e) {
+        print('⚠️ Background refresh error: $e');
+        return [];
+      });
 
       if (mounted) {
         _showEnhancedSnackBar('Job $status.');
       }
     } catch (e) {
       if (mounted) {
-        _showEnhancedSnackBar('Failed to update: $e', isError: true);
+        _showEnhancedSnackBar('Failed to update job: $e', isError: true);
       }
     }
   }
@@ -1138,21 +1141,30 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final ownerResponse = await supabase.from('users').select('name').eq('id', widget.userId).single();
       final ownerName = ownerResponse['name'] as String? ?? 'Pet Owner';
       
-      // Send notification to the sitter
-      await sendJobNotification(
-        recipientId: sitterId,
-        actorId: widget.userId,
-        jobId: jobId,
-        type: 'job_request',
-        petName: petName,
-        actorName: ownerName,
-      );
+      // Try to send notification (fire and forget)
+      try {
+        await sendJobNotification(
+          recipientId: sitterId,
+          actorId: widget.userId,
+          jobId: jobId,
+          type: 'job_request',
+          petName: petName,
+          actorName: ownerName,
+        );
+      } catch (notifError) {
+        print('⚠️ Failed to send job notification: $notifError');
+      }
       
       setState(() {
         pendingSitterIds.add(sitterId);
       });
       _showEnhancedSnackBar('Sitter hired — request sent.');
-      await Future.wait([fetchOwnerPendingRequests(), fetchOwnerActiveJobs()]);
+      
+      // Refresh background (fire and forget)
+      Future.wait([fetchOwnerPendingRequests(), fetchOwnerActiveJobs()]).catchError((e) {
+        print('⚠️ Background refresh error: $e');
+        return [];
+      });
     } catch (e) {
       print('❌ createSittingJob ERROR: $e');
       _showEnhancedSnackBar('Failed to create sitting job.', isError: true);

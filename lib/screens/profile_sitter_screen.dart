@@ -3225,14 +3225,10 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
         final birthDate = DateTime.parse(pet['date_of_birth'].toString());
         return _formatAgeFromBirthDate(birthDate);
       } catch (e) {
-        // Fallback to old age format
-        final age = pet['age'] ?? 0;
-        return '$age ${age == 1 ? 'year' : 'years'} old';
+        return 'Age unknown';
       }
     } else {
-      // Fallback to old age format
-      final age = pet['age'] ?? 0;
-      return '$age ${age == 1 ? 'year' : 'years'} old';
+      return 'Age unknown';
     }
   }
 
@@ -3273,6 +3269,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
     final sitterId = supabase.auth.currentUser?.id;
 
     if (sitterId == null) {
+      print('❌ No sitter ID found');
       setState(() {
         isLoading = false;
       });
@@ -3280,26 +3277,129 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
     }
 
     try {
-      final response = await supabase
-      .from('sitting_jobs')
-      .select('''
-        id, status, start_date, end_date,
-        pets (
-          id, name, breed, age, owner_id, profile_picture,
-          users!owner_id (
-            name
-          )
-        )
-      ''')
-      .eq('sitter_id', sitterId)
-      .eq('status', 'Active');
+      print('🔍 Fetching assigned pets for sitter: $sitterId');
+      
+      // Step 1: Get all active sitting jobs for this sitter
+      final jobsResponse = await supabase
+          .from('sitting_jobs')
+          .select('id, pet_id, status, start_date, end_date, created_at')
+          .eq('sitter_id', sitterId)
+          .eq('status', 'Active');
+
+      print('✅ Found ${jobsResponse.length} active sitting jobs');
+      if (jobsResponse.isNotEmpty) {
+        print('📍 First job data: ${jobsResponse[0]}');
+      }
+
+      if (jobsResponse.isEmpty) {
+        setState(() {
+          assignedPets = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      // Step 2: Extract pet IDs and fetch pet details
+      final petIds = (jobsResponse as List)
+          .map((job) => job['pet_id']?.toString())
+          .where((id) => id != null && id.isNotEmpty)
+          .cast<String>()
+          .toList();
+
+      print('🐕 Extracted ${petIds.length} pet IDs');
+      for (var id in petIds) {
+        print('   - $id');
+      }
+
+      if (petIds.isEmpty) {
+        setState(() {
+          assignedPets = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      // Fetch all pets in one query
+      List<dynamic> petsResponse = [];
+      try {
+        petsResponse = await supabase
+            .from('pets')
+            .select('id, name, breed, date_of_birth, owner_id, profile_picture')
+            .inFilter('id', petIds);
+        print('✅ Fetched ${petsResponse.length} pet details');
+      } catch (petError) {
+        print('❌ Error fetching pets: $petError');
+        rethrow;
+      }
+
+      // Step 3: Fetch owner information for each unique owner_id
+      final ownerIds = petsResponse
+          .map((pet) => pet['owner_id']?.toString())
+          .where((id) => id != null && id.isNotEmpty)
+          .toSet()
+          .toList();
+
+      print('👤 Fetching ${ownerIds.length} owner details');
+
+      Map<String, dynamic> ownerMap = {};
+      if (ownerIds.isNotEmpty) {
+        try {
+          final ownersResponse = await supabase
+              .from('users')
+              .select('id, name, profile_picture')
+              .inFilter('id', ownerIds);
+
+          print('✅ Fetched ${ownersResponse.length} owner records');
+          for (var owner in ownersResponse) {
+            ownerMap[owner['id']?.toString() ?? ''] = owner;
+          }
+        } catch (ownerError) {
+          print('⚠️ Error fetching owners: $ownerError');
+          // Continue without owner data
+        }
+      }
+
+      // Step 4: Combine data
+      List<Map<String, dynamic>> enrichedPets = [];
+      for (var job in jobsResponse) {
+        final petId = job['pet_id']?.toString();
+        if (petId == null) continue;
+        
+        Map<String, dynamic>? pet;
+        try {
+          pet = petsResponse.firstWhere(
+            (p) => p['id']?.toString() == petId,
+          ) as Map<String, dynamic>?;
+        } catch (e) {
+          print('⚠️ Pet not found for ID: $petId');
+          continue;
+        }
+
+        if (pet != null) {
+          final ownerId = pet['owner_id']?.toString() ?? '';
+          final owner = ownerMap[ownerId];
+
+          enrichedPets.add({
+            'job_id': job['id'],
+            'status': job['status'],
+            'start_date': job['start_date'],
+            'end_date': job['end_date'],
+            'pet': pet,
+            'owner': owner,
+          });
+          print('✅ Enriched pet: ${pet['name']}');
+        }
+      }
+
+      print('📋 Successfully enriched ${enrichedPets.length} pets with owner data');
 
       setState(() {
-        assignedPets = List<Map<String, dynamic>>.from(response);
+        assignedPets = enrichedPets;
         isLoading = false;
       });
     } catch (e) {
       print('❌ Error fetching assigned pets: $e');
+      print('   Stack: ${StackTrace.current}');
       setState(() => isLoading = false);
     }
   }
@@ -3346,8 +3446,15 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: assignedPets.length,
               itemBuilder: (context, index) {
-                final pet = assignedPets[index]['pets'];
-                final owner = pet['users'];
+                final record = assignedPets[index];
+                final pet = record['pet'] as Map<String, dynamic>?;
+                final owner = record['owner'] as Map<String, dynamic>?;
+                
+                if (pet == null) {
+                  print('⚠️ Null pet at index $index');
+                  return SizedBox.shrink();
+                }
+                
                 return _assignedPetListTile(pet, owner);
               },
             ),
