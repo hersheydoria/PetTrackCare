@@ -916,78 +916,67 @@ def analyze_endpoint():
             "persistence_days": persistence_days
         }
     
-    # Generate health guidance based on detected symptoms or behavioral changes indicating illness
-    if final_is_unhealthy:
-        
-        if symptoms_detected:
-            # Generate guidance from clinical symptoms
-            health_guidance = generate_health_guidance(symptoms_detected, df, historical_context)
-            merged["health_guidance"] = health_guidance
-            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(symptoms_detected)} symptom(s)")
-        else:
-            # No clinical symptoms but behavioral changes indicate illness risk
-            # Generate guidance based on all behavioral patterns without limiting
-            behavioral_concerns = []
-            
-            # Activity level concerns
-            activity_lower = activity_level.lower()
-            if 'low activity' in activity_lower or 'lethargy' in activity_lower:
-                behavioral_concerns.append('Activity decreased significantly')
-            elif 'restlessness' in activity_lower or 'night' in activity_lower:
-                behavioral_concerns.append('Restlessness or disrupted sleep patterns')
-            elif 'weakness' in activity_lower or 'collapse' in activity_lower:
-                behavioral_concerns.append('Weakness or inability to move normally')
-            elif 'high activity' in activity_lower:
-                behavioral_concerns.append('Unusual hyperactivity or excessive energy')
-            
-            # Food intake concerns
-            food_lower = food_intake.lower()
-            if 'not eating' in food_lower or 'loss of appetite' in food_lower:
-                behavioral_concerns.append('Loss of appetite or refusing to eat')
-            elif 'eating less' in food_lower:
-                behavioral_concerns.append('Reduced appetite')
-            elif 'eating more' in food_lower:
-                behavioral_concerns.append('Increased appetite or excessive eating')
-            elif 'weight loss' in food_lower:
-                behavioral_concerns.append('Unexplained weight loss')
-            elif 'weight gain' in food_lower:
-                behavioral_concerns.append('Unexplained weight gain')
-            
-            # Water intake concerns
-            water_lower = water_intake.lower()
-            if 'not drinking' in water_lower:
-                behavioral_concerns.append('Not drinking water')
-            elif 'drinking less' in water_lower:
-                behavioral_concerns.append('Reduced water intake')
-            elif 'excessive drinking' in water_lower or 'drinking more' in water_lower:
-                behavioral_concerns.append('Increased thirst/excessive drinking')
-            
-            # Bathroom habits concerns
-            bathroom_lower = bathroom_habits.lower()
-            if 'diarrhea' in bathroom_lower:
-                behavioral_concerns.append('Diarrhea or loose stools')
-            elif 'constipation' in bathroom_lower:
-                behavioral_concerns.append('Constipation')
-            elif 'frequent urination' in bathroom_lower:
-                behavioral_concerns.append('Frequent urination')
-            elif 'straining' in bathroom_lower:
-                behavioral_concerns.append('Straining to urinate or defecate')
-            elif 'blood' in bathroom_lower:
-                behavioral_concerns.append('Blood in urine or stool')
-            elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
-                behavioral_concerns.append('Inappropriate toileting or house soiling')
-            
-            # Combine behavioral concerns with any detected symptoms for comprehensive health guidance
-            all_health_issues = behavioral_concerns + (symptoms_detected if symptoms_detected else [])
-            if not all_health_issues:
-                all_health_issues = ['Illness risk detected']
-            
-            health_guidance = generate_health_guidance(all_health_issues, df, historical_context)
-            merged["health_guidance"] = health_guidance
-            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(all_health_issues)} health issue(s) ({len(behavioral_concerns)} behavioral + {len(symptoms_detected) if symptoms_detected else 0} clinical)")
-        
-        if historical_context.get('is_persistent'):
-            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
+    # Always analyze behavioral concerns from current log state
+    behavioral_concerns = []
+    
+    # Activity level concerns
+    activity_lower = activity_level.lower()
+    if 'low activity' in activity_lower or 'lethargy' in activity_lower:
+        behavioral_concerns.append('Activity decreased significantly')
+    elif 'restlessness' in activity_lower or 'night' in activity_lower:
+        behavioral_concerns.append('Restlessness or disrupted sleep patterns')
+    elif 'weakness' in activity_lower or 'collapse' in activity_lower:
+        behavioral_concerns.append('Weakness or inability to move normally')
+    elif 'high activity' in activity_lower:
+        behavioral_concerns.append('Unusual hyperactivity or excessive energy')
+    
+    # Food intake concerns
+    food_lower = food_intake.lower()
+    if 'not eating' in food_lower or 'loss of appetite' in food_lower:
+        behavioral_concerns.append('Loss of appetite or refusing to eat')
+    elif 'eating less' in food_lower:
+        behavioral_concerns.append('Reduced appetite')
+    elif 'eating more' in food_lower:
+        behavioral_concerns.append('Increased appetite or excessive eating')
+    elif 'weight loss' in food_lower:
+        behavioral_concerns.append('Unexplained weight loss')
+    elif 'weight gain' in food_lower:
+        behavioral_concerns.append('Unexplained weight gain')
+    
+    # Water intake concerns
+    water_lower = water_intake.lower()
+    if 'not drinking' in water_lower:
+        behavioral_concerns.append('Not drinking water')
+    elif 'drinking less' in water_lower:
+        behavioral_concerns.append('Reduced water intake')
+    elif 'excessive drinking' in water_lower or 'drinking more' in water_lower:
+        behavioral_concerns.append('Increased thirst/excessive drinking')
+    
+    # Bathroom habits concerns
+    bathroom_lower = bathroom_habits.lower()
+    if 'diarrhea' in bathroom_lower:
+        behavioral_concerns.append('Diarrhea or loose stools')
+    elif 'constipation' in bathroom_lower:
+        behavioral_concerns.append('Constipation')
+    elif 'frequent urination' in bathroom_lower:
+        behavioral_concerns.append('Frequent urination')
+    elif 'straining' in bathroom_lower:
+        behavioral_concerns.append('Straining to urinate or defecate')
+    elif 'blood' in bathroom_lower:
+        behavioral_concerns.append('Blood in urine or stool')
+    elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
+        behavioral_concerns.append('Inappropriate toileting or house soiling')
+    
+    # Generate health guidance based on detected symptoms or behavioral changes
+    # Combine behavioral concerns with any detected clinical symptoms for comprehensive health guidance
+    all_health_issues = behavioral_concerns + (symptoms_detected if symptoms_detected else [])
+    if all_health_issues:
+        health_guidance = generate_health_guidance(all_health_issues, df, historical_context)
+        merged["health_guidance"] = health_guidance
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(all_health_issues)} health issue(s) ({len(behavioral_concerns)} behavioral + {len(symptoms_detected) if symptoms_detected else 0} clinical)")
+    
+    if final_is_unhealthy and historical_context.get('is_persistent'):
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
     
     # Add data sufficiency notice for user
     # Also check data freshness - warn if latest log is too old
