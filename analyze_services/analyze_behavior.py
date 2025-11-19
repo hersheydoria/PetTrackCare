@@ -1553,7 +1553,7 @@ def analyze_illness_duration_and_patterns(df):
             else:
                 unhealthy_streak = 0
 
-        # Calculate illness duration in consecutive days (ignoring gaps with no logs)
+        # Calculate illness duration focusing on consecutive days, filling gaps without logs as healthy days
         daily_health = (
             df_copy[['log_date', 'is_unhealthy']]
             .assign(log_day=lambda d: d['log_date'].dt.normalize())
@@ -1562,45 +1562,60 @@ def analyze_illness_duration_and_patterns(df):
             .sort_values('log_day')
         )
 
+        if not daily_health.empty:
+            full_range = pd.date_range(
+                start=daily_health['log_day'].min(),
+                end=daily_health['log_day'].max(),
+                freq='D'
+            )
+            daily_health = (
+                daily_health.set_index('log_day')
+                .reindex(full_range, fill_value=False)
+                .rename_axis('log_day')
+                .reset_index()
+            )
+
         day_streak = 0
         longest_day_streak = 0
         streak_start_date = None
         longest_streak_start = None
-        prev_unhealthy_day = None
 
         for _, row in daily_health.iterrows():
             current_day = row['log_day']
             if row['is_unhealthy']:
                 if day_streak == 0:
-                    day_streak = 1
                     streak_start_date = current_day
-                else:
-                    if prev_unhealthy_day and (current_day - prev_unhealthy_day).days == 1:
-                        day_streak += 1
-                    else:
-                        day_streak = 1
-                        streak_start_date = current_day
-                prev_unhealthy_day = current_day
+                day_streak += 1
                 if day_streak > longest_day_streak:
                     longest_day_streak = day_streak
                     longest_streak_start = streak_start_date
             else:
                 day_streak = 0
                 streak_start_date = None
-                prev_unhealthy_day = None
 
-        illness_duration_days = longest_day_streak
-        if illness_duration_days == 0 and max_streak > 0:
-            # Single unhealthy day without consecutive confirmation still counts as 1
-            illness_duration_days = 1
+        # Current streak must end with the latest unhealthy log to be considered persistent
+        current_streak_days = 0
+        current_streak_start = None
+        current_streak_end = None
+        for _, row in daily_health.sort_values('log_day', ascending=False).iterrows():
+            if row['is_unhealthy']:
+                current_streak_days += 1
+                if current_streak_end is None:
+                    current_streak_end = row['log_day']
+                current_streak_start = row['log_day']
+            else:
+                break
+
+        illness_duration_days = current_streak_days
 
         is_persistent = illness_duration_days > 7
         
         # Determine pattern type
         pattern_type = None
-        if illness_duration_days <= 3:
+        pattern_basis = longest_day_streak or illness_duration_days
+        if pattern_basis <= 3:
             pattern_type = 'acute'
-        elif illness_duration_days > 7:
+        elif pattern_basis > 7:
             pattern_type = 'chronic'
         
         # Check for cyclical pattern (unhealthy, recovery, unhealthy again)
@@ -1661,7 +1676,12 @@ def analyze_illness_duration_and_patterns(df):
             "unhealthy_periods": len(unhealthy_periods),
             "sudden_changes": sudden_changes,
             "recovery_history": recovery_history,
-            "total_logs_analyzed": len(df_copy)
+            "total_logs_analyzed": len(df_copy),
+            "current_streak_start": str(current_streak_start.date()) if current_streak_start is not None else None,
+            "current_streak_end": str(current_streak_end.date()) if current_streak_end is not None else None,
+            "current_streak_days": current_streak_days,
+            "longest_unhealthy_streak_days": longest_day_streak,
+            "longest_streak_start": str(longest_streak_start.date()) if longest_streak_start is not None else None
         }
     except Exception as e:
         print(f"[PATTERN-ANALYSIS] Error analyzing patterns: {e}")
