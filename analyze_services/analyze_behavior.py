@@ -977,9 +977,14 @@ def analyze_endpoint():
             elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
                 behavioral_concerns.append('Inappropriate toileting or house soiling')
             
-            health_guidance = generate_health_guidance(behavioral_concerns if behavioral_concerns else ['Illness risk detected'], df, historical_context)
+            # Combine behavioral concerns with any detected symptoms for comprehensive health guidance
+            all_health_issues = behavioral_concerns + (symptoms_detected if symptoms_detected else [])
+            if not all_health_issues:
+                all_health_issues = ['Illness risk detected']
+            
+            health_guidance = generate_health_guidance(all_health_issues, df, historical_context)
             merged["health_guidance"] = health_guidance
-            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(behavioral_concerns)} behavioral concern(s) (no clinical symptoms found)")
+            print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(all_health_issues)} health issue(s) ({len(behavioral_concerns)} behavioral + {len(symptoms_detected) if symptoms_detected else 0} clinical)")
         
         if historical_context.get('is_persistent'):
             print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
