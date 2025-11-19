@@ -885,30 +885,39 @@ def analyze_endpoint():
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
     
-    # Add illness risk notice for user display
+    # Analyze historical patterns FIRST (before creating notice) to check persistence
+    historical_context = analyze_illness_duration_and_patterns(df)
+    is_persistent_illness = historical_context.get("is_persistent", False)
+    persistence_days = historical_context.get("illness_duration_days", 0)
+    
+    # Add illness risk notice for user display - INCLUDING persistence information
     if illness_risk_final == "high":
         merged["illness_risk_notice"] = {
             "status": "high_risk",
             "icon": "[ERROR]",
-            "message": "Illness risk is HIGH"
+            "message": "Illness risk is HIGH",
+            "is_persistent": is_persistent_illness,
+            "persistence_days": persistence_days
         }
     elif illness_risk_final == "medium":
         merged["illness_risk_notice"] = {
             "status": "medium_risk",
             "icon": "[ALERT]",
-            "message": "Illness risk is MEDIUM"
+            "message": "Illness risk is MEDIUM",
+            "is_persistent": is_persistent_illness,
+            "persistence_days": persistence_days
         }
     else:  # low
         merged["illness_risk_notice"] = {
             "status": "low_risk",
             "icon": "[OK]",
-            "message": "Illness risk is LOW"
+            "message": "Illness risk is LOW",
+            "is_persistent": is_persistent_illness,
+            "persistence_days": persistence_days
         }
     
     # Generate health guidance based on detected symptoms or behavioral changes indicating illness
     if final_is_unhealthy:
-        # Analyze historical patterns and pass to guidance generator
-        historical_context = analyze_illness_duration_and_patterns(df)
         
         if symptoms_detected:
             # Generate guidance from clinical symptoms
@@ -1687,6 +1696,7 @@ def generate_health_guidance(symptoms_list, df=None, historical_context=None):
         "guidance": f"Detected {len(guidance_items)} health concern(s). {HEALTH_SYMPTOMS_REFERENCE.get('summary', 'See details below.')}",
         "urgency": max_urgency,
         "detected_symptoms": [item.get("description") for item in guidance_items],
+        "detected_health_issues": symptoms_list,  # Raw behavioral and clinical health concerns
         "recommendations": recommendations[:7],  # Up to 7 recommendations
         "pattern_context": context_insights,
         "illness_duration_days": historical_context.get('illness_duration_days') if historical_context else None,

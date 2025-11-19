@@ -152,18 +152,14 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
             // Run auto-migration in background when user enters home
             _runAutoMigrationInBackground();
             
-            return CallInviteWrapper(
-              child: MissingPetAlertWrapper(
-                child: MainNavigation(userId: user!.id),
-              ),
+            return MissingPetAlertWrapper(
+              child: MainNavigation(userId: user!.id),
             );
           },
         '/location_picker': (_) {
           print('🚀 Route: /location_picker accessed - initializing MissingPetAlertWrapper');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: LocationPicker(),
-            ),
+          return MissingPetAlertWrapper(
+            child: LocationPicker(),
           );
         },
         '/reset-password': (_) {
@@ -172,51 +168,39 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
         },
         '/notification' : (_) {
           print('🚀 Route: /notification accessed - initializing MissingPetAlertWrapper');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: NotificationScreen(),
-            ),
+          return MissingPetAlertWrapper(
+            child: NotificationScreen(),
           );
         },
          '/postDetail': (context) {
           print('🚀 Route: /postDetail accessed - initializing MissingPetAlertWrapper');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: PostDetailScreen.fromRoute(context),
-            ),
+          return MissingPetAlertWrapper(
+            child: PostDetailScreen.fromRoute(context),
           );
         },
           '/petAlert': (context) {
           print('🚀 Route: /petAlert accessed - initializing MissingPetAlertWrapper');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: PetAlertScreen.fromRoute(context),
-            ),
+          return MissingPetAlertWrapper(
+            child: PetAlertScreen.fromRoute(context),
           );
         },
         '/profile_owner': (_) {
           print('🚀 Route: /profile_owner accessed - initializing MissingPetAlertWrapper');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: OwnerProfileScreen(openSavedPosts: false),
-            ),
+          return MissingPetAlertWrapper(
+            child: OwnerProfileScreen(openSavedPosts: false),
           );
         },
         '/profile_sitter': (_) {
           print('🚀 Route: /profile_sitter accessed - initializing MissingPetAlertWrapper');
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: SitterProfileScreen(openSavedPosts: false),
-            ),
+          return MissingPetAlertWrapper(
+            child: SitterProfileScreen(openSavedPosts: false),
           );
         },
         '/community': (context) {
           print('🚀 Route: /community accessed - initializing MissingPetAlertWrapper');
           final user = Supabase.instance.client.auth.currentUser;
-          return CallInviteWrapper(
-            child: MissingPetAlertWrapper(
-              child: CommunityScreen(userId: user?.id ?? ''),
-            ),
+          return MissingPetAlertWrapper(
+            child: CommunityScreen(userId: user?.id ?? ''),
           );
         },
       },

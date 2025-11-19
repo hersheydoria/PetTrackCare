@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
-import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
@@ -243,7 +242,14 @@ class CallInviteService {
 
   // Show incoming call dialog
   void _showIncomingCallDialog(String from, String to, String callId, String mode, String callerName) {
-    if (_context == null || !_context!.mounted) return;
+    if (_context == null || !_context!.mounted) {
+      print('📞 CallInviteService: Context is null or unmounted - cannot show dialog');
+      print('   _context == null: ${_context == null}');
+      if (_context != null) {
+        print('   _context.mounted: ${_context!.mounted}');
+      }
+      return;
+    }
 
     _activeCallId = callId;
     final isVideo = mode == 'video';
@@ -251,97 +257,121 @@ class CallInviteService {
     // Play ringtone when showing the dialog
     _playRingtone();
 
-    showDialog<bool>(
-      context: _context!,
-      barrierDismissible: false,
-      builder: (dialogContext) => WillPopScope(
-        onWillPop: () async => false,
-        child: AlertDialog(
-          title: Row(
-            children: [
-              Icon(
-                isVideo ? Icons.videocam : Icons.phone,
-                color: Color(0xFFB82132),
-                size: 28,
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Incoming ${isVideo ? "Video" : "Voice"} Call',
-                  style: TextStyle(fontSize: 18),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(
-                radius: 40,
-                backgroundColor: Color(0xFFB82132).withOpacity(0.1),
-                child: Icon(
-                  Icons.person,
-                  size: 40,
-                  color: Color(0xFFB82132),
-                ),
-              ),
-              SizedBox(height: 16),
-              Text(
-                callerName,
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 8),
-              Text(
-                'is calling you...',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => _declineCall(dialogContext, from, to, callId),
-              style: TextButton.styleFrom(
-                backgroundColor: Colors.red.withOpacity(0.1),
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
+    print('📞 CallInviteService: About to show dialog...');
+    print('   From: $from');
+    print('   To: $to');
+    print('   CallID: $callId');
+    print('   Mode: $mode');
+    print('   Caller: $callerName');
+
+    try {
+      // Use a post-frame callback to ensure we're on the main thread
+      // and the widget tree is ready
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_context!.mounted) {
+          print('📞 CallInviteService: Context unmounted during post-frame callback');
+          return;
+        }
+
+        showDialog<bool>(
+          context: _context!,
+          barrierDismissible: false,
+          builder: (dialogContext) => WillPopScope(
+            onWillPop: () async => false,
+            child: AlertDialog(
+              title: Row(
                 children: [
-                  Icon(Icons.call_end, color: Colors.red),
-                  SizedBox(width: 8),
-                  Text('Decline', style: TextStyle(color: Colors.red)),
+                  Icon(
+                    isVideo ? Icons.videocam : Icons.phone,
+                    color: Color(0xFFB82132),
+                    size: 28,
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Incoming ${isVideo ? "Video" : "Voice"} Call',
+                      style: TextStyle(fontSize: 18),
+                    ),
+                  ),
                 ],
               ),
-            ),
-            SizedBox(width: 8),
-            ElevatedButton(
-              onPressed: () => _acceptCall(dialogContext, from, to, callId, isVideo),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
-              child: Row(
+              content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.call, color: Colors.white),
-                  SizedBox(width: 8),
-                  Text('Accept', style: TextStyle(color: Colors.white)),
+                  CircleAvatar(
+                    radius: 40,
+                    backgroundColor: Color(0xFFB82132).withOpacity(0.1),
+                    child: Icon(
+                      Icons.person,
+                      size: 40,
+                      color: Color(0xFFB82132),
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  Text(
+                    callerName,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'is calling you...',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                    ),
+                  ),
                 ],
               ),
+              actions: [
+                TextButton(
+                  onPressed: () => _declineCall(dialogContext, from, to, callId),
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.red.withOpacity(0.1),
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.call_end, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Decline', style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+                SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () => _acceptCall(dialogContext, from, to, callId, isVideo),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.call, color: Colors.white),
+                      SizedBox(width: 8),
+                      Text('Accept', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
-    ).then((_) {
+          ),
+        ).then((_) {
+          print('📞 CallInviteService: Dialog dismissed/closed');
+          _isShowingDialog = false;
+          _activeCallId = null;
+        });
+        print('📞 CallInviteService: Dialog shown successfully');
+      });
+    } catch (e) {
+      print('📞 CallInviteService: ERROR showing dialog: $e');
       _isShowingDialog = false;
       _activeCallId = null;
-    });
+    }
   }
 
   // Accept the call
@@ -501,8 +531,7 @@ class CallInviteService {
     
     try {
       await channel.subscribe();
-      await channel.send(
-        type: rt.RealtimeListenTypes.broadcast,
+      await channel.sendBroadcastMessage(
         event: event,
         payload: payload,
       );

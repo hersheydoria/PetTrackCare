@@ -5140,8 +5140,14 @@ void _disconnectDevice() async {
   Widget _buildHealthInsights(String activity, String foodIntake, String waterIntake, String bathroomHabits, List<String> symptoms) {
     List<Widget> insights = [];
     
+    // Normalize strings for case-insensitive comparison
+    final normalizedFood = foodIntake.trim().toLowerCase();
+    final normalizedWater = waterIntake.trim().toLowerCase();
+    final normalizedActivity = activity.trim().toLowerCase();
+    final normalizedBathroom = bathroomHabits.trim().toLowerCase();
+    
     // Food intake insights
-    if (foodIntake == 'Not Eating' || foodIntake == 'Eating Less') {
+    if (normalizedFood.contains('not eating') || normalizedFood.contains('eating less')) {
       insights.add(_buildInsightItem(
         'Food Intake Concern',
         'Reduced appetite may indicate health issues. Monitor closely.',
@@ -5151,14 +5157,14 @@ void _disconnectDevice() async {
     }
 
     // Water intake insights
-    if (waterIntake == 'Not Drinking' || waterIntake == 'Drinking Less') {
+    if (normalizedWater.contains('not drinking') || normalizedWater.contains('drinking less')) {
       insights.add(_buildInsightItem(
         'Hydration Concern',
         'Reduced water intake needs attention. Ensure fresh water is available.',
         Icons.warning,
         Colors.red,
       ));
-    } else if (waterIntake == 'Drinking More') {
+    } else if (normalizedWater.contains('drinking more')) {
       insights.add(_buildInsightItem(
         'Increased Thirst',
         'Excessive drinking may indicate diabetes or kidney issues. Consider a vet visit.',
@@ -5168,7 +5174,7 @@ void _disconnectDevice() async {
     }
 
     // Bathroom habits insights
-    if (bathroomHabits == 'Diarrhea' || bathroomHabits == 'Constipation') {
+    if (normalizedBathroom.contains('diarrhea') || normalizedBathroom.contains('constipation')) {
       insights.add(_buildInsightItem(
         'Digestive Issue Detected',
         'Monitor closely and consider consulting a veterinarian if it persists.',
@@ -5178,14 +5184,14 @@ void _disconnectDevice() async {
     }
 
     // Activity insights
-    if (activity == 'Low') {
+    if (normalizedActivity.contains('low')) {
       insights.add(_buildInsightItem(
         'Low Activity Level',
         'Consider encouraging more exercise or check for health issues.',
         Icons.trending_down,
         Colors.orange,
       ));
-    } else if (activity == 'High') {
+    } else if (normalizedActivity.contains('high')) {
       insights.add(_buildInsightItem(
         'High Energy',
         'Great! Your pet is active and energetic.',
@@ -5816,6 +5822,8 @@ void _disconnectDevice() async {
   Widget _buildIllnessRiskNoticeCard(Map<String, dynamic> notice) {
     final status = notice['status']?.toString() ?? 'unknown';
     final message = notice['message']?.toString() ?? '';
+    final isPeristent = notice['is_persistent'] ?? false;
+    final persistenceDays = notice['persistence_days'] ?? 0;
     
     // Determine color based on risk status
     Color cardColor;
@@ -5831,6 +5839,14 @@ void _disconnectDevice() async {
       cardColor = Color(0xFF2ECC71); // green
       iconData = Icons.check_circle;
     }
+    
+    // Build persistence indicator if present
+    String persistenceText = '';
+    if (isPeristent && persistenceDays != null && persistenceDays > 0) {
+      persistenceText = ' (Persistent: $persistenceDays+ days)';
+    }
+    
+    final displayMessage = message + persistenceText;
     
     return Container(
       padding: EdgeInsets.all(12),
@@ -5848,7 +5864,7 @@ void _disconnectDevice() async {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  message,
+                  displayMessage,
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -5867,6 +5883,7 @@ void _disconnectDevice() async {
     final urgency = guidance['urgency']?.toString() ?? 'none';
     final detectedSymptoms = (guidance['detected_symptoms'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final recommendations = (guidance['recommendations'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    final detectedHealthIssues = (guidance['detected_health_issues'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     
     // Determine urgency color
     Color urgencyColor;
@@ -5888,6 +5905,11 @@ void _disconnectDevice() async {
     
     // Get default care tips based on urgency level
     List<String> careTips = _getDefaultCareTips(urgency);
+    
+    // Merge recommendations into care tips for non-redundant display
+    if (recommendations.isNotEmpty) {
+      careTips.insertAll(0, recommendations);
+    }
     
     return Container(
       padding: EdgeInsets.all(14),
@@ -5921,7 +5943,40 @@ void _disconnectDevice() async {
             ],
           ),
           
-          // Detected symptoms
+          // Detected health issues (problems/concerns that may cause illness)
+          if (detectedHealthIssues.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Health Concerns Detected:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFB82132),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  ...detectedHealthIssues.take(5).map((issue) => Padding(
+                    padding: EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '• $issue',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFFB82132).withOpacity(0.85),
+                        height: 1.4,
+                      ),
+                    ),
+                  )).toList(),
+                ],
+              ),
+            ),
+          ],
+          
+          // Detected clinical symptoms (actual physical signs)
           if (detectedSymptoms.isNotEmpty) ...[
             SizedBox(height: 10),
             Padding(
@@ -5954,33 +6009,7 @@ void _disconnectDevice() async {
             ),
           ],
           
-          // Backend recommendations if provided
-          if (recommendations.isNotEmpty) ...[
-            SizedBox(height: 12),
-            Padding(
-              padding: EdgeInsets.only(left: 30),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Recommended Actions:',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFB82132),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  ...recommendations.map((rec) => Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: _buildDetailedRecommendation(rec, urgencyColor),
-                  )).toList(),
-                ],
-              ),
-            ),
-          ],
-          
-          // General care tips
+          // General care tips (includes merged recommendations and default tips)
           if (careTips.isNotEmpty) ...[
             SizedBox(height: 12),
             Padding(
@@ -6055,86 +6084,6 @@ void _disconnectDevice() async {
     }
   }
   
-  Widget _buildDetailedRecommendation(String recommendation, Color defaultColor) {
-    // Parse recommendation text for icon tags and priority indicators
-    String text = recommendation;
-    IconData? iconData;
-    Color iconColor = defaultColor;
-    bool isHighPriority = false;
-    
-    // Check for priority indicators
-    if (text.startsWith('[URGENT]') || text.startsWith('[CRITICAL]')) {
-      isHighPriority = true;
-      text = text.replaceAll(RegExp(r'^\[(URGENT|CRITICAL)\]\s*'), '').trim();
-    }
-    
-    // Check for icon tags and replace them
-    if (text.contains('[ALERT]')) {
-      iconData = Icons.warning;
-      iconColor = Color(0xFFFF8C00); // Orange
-      text = text.replaceAll('[ALERT]', '').trim();
-    } else if (text.contains('[ERROR]')) {
-      iconData = Icons.error;
-      iconColor = Color(0xFFB82132); // Red
-      text = text.replaceAll('[ERROR]', '').trim();
-    } else if (text.contains('[OK]')) {
-      iconData = Icons.check_circle;
-      iconColor = Color(0xFF2ECC71); // Green
-      text = text.replaceAll('[OK]', '').trim();
-    } else if (text.contains('[INFO]')) {
-      iconData = Icons.info;
-      iconColor = Color(0xFF1E88E5); // Blue
-      text = text.replaceAll('[INFO]', '').trim();
-    } else if (text.contains('[WARNING]')) {
-      iconData = Icons.warning_amber;
-      iconColor = Color(0xFFFBC02D); // Amber
-      text = text.replaceAll('[WARNING]', '').trim();
-    } else if (text.contains('[HELP]')) {
-      iconData = Icons.help;
-      iconColor = Color(0xFF1E88E5); // Blue
-      text = text.replaceAll('[HELP]', '').trim();
-    } else if (text.contains('[TIP]')) {
-      iconData = Icons.lightbulb;
-      iconColor = Color(0xFFFBC02D); // Amber
-      text = text.replaceAll('[TIP]', '').trim();
-    }
-    
-    // Default icon if no tag found
-    if (iconData == null) {
-      iconData = Icons.arrow_right;
-      iconColor = defaultColor.withOpacity(0.6);
-    }
-    
-    return Container(
-      padding: EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: isHighPriority ? iconColor.withOpacity(0.08) : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isHighPriority ? iconColor.withOpacity(0.2) : Colors.transparent,
-          width: 0.5,
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(iconData, color: iconColor, size: 16),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 13,
-                color: Color(0xFFB82132).withOpacity(0.9),
-                height: 1.5,
-                fontWeight: isHighPriority ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
   
   Widget _buildCareTip(String tip, Color defaultColor) {
     // Parse tip text for icon tags
