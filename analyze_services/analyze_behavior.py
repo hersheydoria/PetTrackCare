@@ -15,6 +15,7 @@ import subprocess
 import sys
 import argparse
 import traceback
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +25,34 @@ BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Flask(__name__)
+
+# Track last training time per pet to avoid re-training on every request
+MODEL_TRAIN_HISTORY = {}
+MODEL_TRAIN_COOLDOWN = timedelta(hours=6)
+
+
+def schedule_pet_model_training(pet_id, df):
+    """Run illness model training asynchronously with cooldown per pet."""
+    if df is None or df.empty:
+        return
+
+    now = datetime.now()
+    last_run = MODEL_TRAIN_HISTORY.get(pet_id)
+    if last_run and (now - last_run) < MODEL_TRAIN_COOLDOWN:
+        minutes_since = int((now - last_run).total_seconds() // 60)
+        print(f"[ANALYZE] Pet {pet_id}: Skipping retrain (last run {minutes_since} min ago)")
+        return
+
+    def _train_async(df_snapshot):
+        try:
+            print(f"[ANALYZE] Pet {pet_id}: Async retraining illness model...")
+            train_illness_model(df_snapshot)
+            MODEL_TRAIN_HISTORY[pet_id] = datetime.now()
+            print(f"[ANALYZE] Pet {pet_id}: Model retrain finished")
+        except Exception as exc:
+            print(f"[ANALYZE] Pet {pet_id}: ⚠ Model retrain failed: {exc}")
+
+    threading.Thread(target=_train_async, args=(df.copy(),), daemon=True).start()
 
 # ------------------- Health & Behavior Analysis Guide -------------------
 # Based on veterinary research and AAHA guidelines for early detection of health issues
@@ -795,16 +824,9 @@ def analyze_endpoint():
     df = fetch_logs_df(pet_id)
     print(f"[ANALYZE] Pet {pet_id}: Fetched {len(df)} logs for continuous training")
     
-    # Only train if we have sufficient data
+    # Only train if we have sufficient data, and schedule asynchronously to avoid blocking
     if not df.empty and len(df) >= 5:
-        try:
-            trained_clf, encoders = train_illness_model(df)
-            if trained_clf is not None:
-                print(f"[ANALYZE] Pet {pet_id}: ✓ Model trained successfully with {len(df)} samples")
-            else:
-                print(f"[ANALYZE] Pet {pet_id}: Model training returned None (class imbalance or insufficient quality)")
-        except Exception as e:
-            print(f"[ANALYZE] Pet {pet_id}: ⚠ Model training error: {e}")
+        schedule_pet_model_training(pet_id, df)
     else:
         print(f"[ANALYZE] Pet {pet_id}: ⚠ Insufficient data for training ({len(df)} logs, need ≥5)")
 
@@ -1514,7 +1536,7 @@ def analyze_illness_duration_and_patterns(df):
         
         df_copy['is_unhealthy'] = df_copy.apply(is_unhealthy_log, axis=1)
         
-        # Find consecutive unhealthy period
+        # Find consecutive unhealthy period by log order (for pattern analysis)
         unhealthy_streak = 0
         max_streak = 0
         unhealthy_start_idx = None
@@ -1530,14 +1552,47 @@ def analyze_illness_duration_and_patterns(df):
                     max_streak_start_idx = unhealthy_start_idx
             else:
                 unhealthy_streak = 0
-        
-        # Calculate illness duration based on actual days covered by the longest unhealthy streak
-        illness_duration_days = 0
-        if max_streak_start_idx is not None and max_streak > 0:
-            streak_start_date = df_copy.iloc[max_streak_start_idx]['log_date']
-            streak_end_idx = min(max_streak_start_idx + max_streak - 1, len(df_copy) - 1)
-            streak_end_date = df_copy.iloc[streak_end_idx]['log_date']
-            illness_duration_days = max(1, (streak_end_date - streak_start_date).days + 1)
+
+        # Calculate illness duration in consecutive days (ignoring gaps with no logs)
+        daily_health = (
+            df_copy[['log_date', 'is_unhealthy']]
+            .assign(log_day=lambda d: d['log_date'].dt.normalize())
+            .groupby('log_day', as_index=False)['is_unhealthy']
+            .any()
+            .sort_values('log_day')
+        )
+
+        day_streak = 0
+        longest_day_streak = 0
+        streak_start_date = None
+        longest_streak_start = None
+        prev_unhealthy_day = None
+
+        for _, row in daily_health.iterrows():
+            current_day = row['log_day']
+            if row['is_unhealthy']:
+                if day_streak == 0:
+                    day_streak = 1
+                    streak_start_date = current_day
+                else:
+                    if prev_unhealthy_day and (current_day - prev_unhealthy_day).days == 1:
+                        day_streak += 1
+                    else:
+                        day_streak = 1
+                        streak_start_date = current_day
+                prev_unhealthy_day = current_day
+                if day_streak > longest_day_streak:
+                    longest_day_streak = day_streak
+                    longest_streak_start = streak_start_date
+            else:
+                day_streak = 0
+                streak_start_date = None
+                prev_unhealthy_day = None
+
+        illness_duration_days = longest_day_streak
+        if illness_duration_days == 0 and max_streak > 0:
+            # Single unhealthy day without consecutive confirmation still counts as 1
+            illness_duration_days = 1
 
         is_persistent = illness_duration_days > 7
         
