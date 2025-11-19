@@ -532,6 +532,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       final data = response as List?;
       print('DEBUG: _fetchLatestHealthInsights - Got ${data?.length ?? 0} behavior logs for pet $petId');
       
+      // Determine if backend flagged a persistent illness
+      final bool persistentFromNotice = _illnessRiskNotice?['is_persistent'] == true;
+      final bool persistentFromGuidance = _healthGuidance?['is_persistent_illness'] == true;
+      final bool hasPersistentIllness = persistentFromNotice || persistentFromGuidance;
+      final int? persistenceDays = (_illnessRiskNotice?['persistence_days'] as num?)?.toInt() ??
+          (_healthGuidance?['illness_duration_days'] as num?)?.toInt();
+
       // Generate insights based on backend's trained model prediction (_isUnhealthy flag)
       List<Widget> insights = [];
       
@@ -549,15 +556,40 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         }).toList();
         
         print('DEBUG: Filtered to ${logsInLast7Days.length} logs in last 7 days (total: ${data.length})');
-        
-        // Only generate problem-specific insights if backend detected health issues
-        if (_isUnhealthy) {
+        if (logsInLast7Days.isEmpty && !hasPersistentIllness) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No behavior logs recorded in the last 7 days. Add new entries to keep insights current.'),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+
+        final List<dynamic> logsForAnalysis = (hasPersistentIllness && data.isNotEmpty)
+            ? data
+            : logsInLast7Days;
+        final String analysisWindowLabel = hasPersistentIllness
+            ? 'persistent window (${persistenceDays != null ? '$persistenceDays days' : 'full history'})'
+            : 'last 7 days';
+        print('DEBUG: Using ${logsForAnalysis.length} logs for health insights ($analysisWindowLabel)');
+
+        if (logsForAnalysis.isEmpty) {
+          final notice = hasPersistentIllness
+              ? 'Illness marked persistent but no logs exist in the analyzed window. Add new logs for updated insights.'
+              : 'No logs available for analysis. Log new behavior entries to generate insights.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(notice),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        } else if (_isUnhealthy) {
           print('DEBUG: Backend detected unhealthy status (risk: $_illnessRisk), analyzing specific issues...');
           
-          // Extract issues from the actual logs that triggered the unhealthy flag (last 7 days only)
+          // Extract issues from the actual logs that triggered the unhealthy flag
           List<String> problems = [];
           
-          for (final log in logsInLast7Days) { // Check logs from last 7 days for recent issues
+          for (final log in logsForAnalysis) {
             final foodIntake = log['food_intake']?.toString().toLowerCase() ?? '';
             final waterIntake = log['water_intake']?.toString().toLowerCase() ?? '';
             final bathroomHabits = log['bathroom_habits']?.toString().toLowerCase() ?? '';
@@ -681,6 +713,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             ));
           }
         }
+      }
+      else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No behavior logs found in the past 30 days. Add new logs to receive health insights.'),
+            duration: Duration(seconds: 4),
+          ),
+        );
       }
       
       print('DEBUG: Generated ${insights.length} insights based on backend analysis (unhealthy: $_isUnhealthy)');
@@ -5822,8 +5862,8 @@ void _disconnectDevice() async {
   Widget _buildIllnessRiskNoticeCard(Map<String, dynamic> notice) {
     final status = notice['status']?.toString() ?? 'unknown';
     final message = notice['message']?.toString() ?? '';
-    final isPeristent = notice['is_persistent'] ?? false;
-    final persistenceDays = notice['persistence_days'] ?? 0;
+    final bool isPersistent = notice['is_persistent'] ?? false;
+    final int? persistenceDays = (notice['persistence_days'] as num?)?.toInt();
     
     // Determine color based on risk status
     Color cardColor;
@@ -5842,8 +5882,9 @@ void _disconnectDevice() async {
     
     // Build persistence indicator if present
     String persistenceText = '';
-    if (isPeristent && persistenceDays != null && persistenceDays > 0) {
-      persistenceText = ' (Persistent: $persistenceDays+ days)';
+    if (isPersistent && persistenceDays != null && persistenceDays > 0) {
+      final dayLabel = '$persistenceDays day${persistenceDays == 1 ? '' : 's'}';
+      persistenceText = ' (Persistent for $dayLabel)';
     }
     
     final displayMessage = message + persistenceText;
@@ -5884,6 +5925,15 @@ void _disconnectDevice() async {
     final detectedSymptoms = (guidance['detected_symptoms'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final recommendations = (guidance['recommendations'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final detectedHealthIssues = (guidance['detected_health_issues'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    final int? illnessDurationDays = (guidance['illness_duration_days'] as num?)?.toInt();
+    final bool persistentIllness = guidance['is_persistent_illness'] == true;
+    String? analysisCoverage;
+    if (illnessDurationDays != null && illnessDurationDays > 0) {
+      final durationLabel = '$illnessDurationDays day${illnessDurationDays == 1 ? '' : 's'}';
+      analysisCoverage = persistentIllness
+          ? 'Health concerns persistent for $durationLabel of unhealthy logs.'
+          : 'Health concerns based on $durationLabel of recent logs.';
+    }
     
     // Determine urgency color
     Color urgencyColor;
@@ -5942,6 +5992,21 @@ void _disconnectDevice() async {
               ),
             ],
           ),
+
+          if (analysisCoverage != null) ...[
+            SizedBox(height: 6),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Text(
+                analysisCoverage,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontStyle: FontStyle.italic,
+                  color: Color(0xFFB82132).withOpacity(0.85),
+                ),
+              ),
+            ),
+          ],
           
           // Detected health issues (problems/concerns that may cause illness)
           if (detectedHealthIssues.isNotEmpty) ...[

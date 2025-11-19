@@ -1531,8 +1531,14 @@ def analyze_illness_duration_and_patterns(df):
             else:
                 unhealthy_streak = 0
         
-        # Calculate illness duration in days
-        illness_duration_days = max_streak
+        # Calculate illness duration based on actual days covered by the longest unhealthy streak
+        illness_duration_days = 0
+        if max_streak_start_idx is not None and max_streak > 0:
+            streak_start_date = df_copy.iloc[max_streak_start_idx]['log_date']
+            streak_end_idx = min(max_streak_start_idx + max_streak - 1, len(df_copy) - 1)
+            streak_end_date = df_copy.iloc[streak_end_idx]['log_date']
+            illness_duration_days = max(1, (streak_end_date - streak_start_date).days + 1)
+
         is_persistent = illness_duration_days > 7
         
         # Determine pattern type
@@ -1653,7 +1659,7 @@ def generate_health_guidance(symptoms_list, df=None, historical_context=None):
         duration = historical_context.get('illness_duration_days', 0)
         if max_urgency in ['low', 'medium']:
             max_urgency = 'high'  # Upgrade persistent illness
-        recommendations.append(f"[ALERT] PERSISTENT ILLNESS: Clinical signs lasting {duration}+ days requires veterinary evaluation")
+        recommendations.append(f"[ALERT] PERSISTENT ILLNESS: Clinical signs lasting {duration} day{'s' if duration != 1 else ''} requires veterinary evaluation")
     
     if max_urgency == "critical":
         recommendations.append("EMERGENCY: Seek immediate veterinary care")
