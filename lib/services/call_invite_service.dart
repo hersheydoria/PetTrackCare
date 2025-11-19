@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
+import '../widgets/call_dialogs.dart';
 
 class CallInviteService {
   static final CallInviteService _instance = CallInviteService._internal();
@@ -32,11 +33,14 @@ class CallInviteService {
   }
 
   BuildContext? _context;
+  GlobalKey<NavigatorState>? _navigatorKey;
+  NavigatorState? _activeDialogNavigator;
+  BuildContext? _activeDialogContext;
   bool _isInitialized = false;
   bool _isStartingMonitoring = false; // Prevent double initialization
   RealtimeChannel? _callChannel;
   String? _currentUserId;
-  Set<String> _processedCallIds = {};
+  final Set<String> _activeCallGuards = {};
   bool _isShowingDialog = false;
   String? _activeCallId;
   bool _isRingtonePlaying = false;
@@ -48,7 +52,6 @@ class CallInviteService {
     print('📞 CallInviteService: Initializing with context');
     _context = context;
     
-    // Try to initialize if we have a user but haven't started monitoring yet
     if (!_isInitialized && !_isStartingMonitoring) {
       _currentUserId = _supabase.auth.currentUser?.id;
       if (_currentUserId != null) {
@@ -66,11 +69,22 @@ class CallInviteService {
       print('📞 CallInviteService: Already initialized, just updating context');
     }
   }
-
-  // Update context when navigating between screens
   void updateContext(BuildContext context) {
     print('📞 CallInviteService: Updating context');
     _context = context;
+  }
+
+  // Register navigator key so dialogs can be shown regardless of current page
+  void registerNavigatorKey(GlobalKey<NavigatorState>? navigatorKey) {
+    _navigatorKey = navigatorKey;
+  }
+
+  BuildContext? _currentContext() {
+    final navContext = _navigatorKey?.currentContext;
+    if (navContext != null) {
+      return navContext;
+    }
+    return _context;
   }
 
   // Start monitoring for incoming calls
@@ -108,7 +122,12 @@ class CallInviteService {
           event: 'call_invite',
           callback: (payload, [ref]) async {
             print('📞 CallInviteService: 🔔🔔🔔 RECEIVED call_invite BROADCAST! 🔔🔔🔔');
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            Map<String, dynamic>? body;
+            try {
+              body = Map<String, dynamic>.from(payload as Map);
+            } catch (_) {
+              body = null;
+            }
             if (body == null) {
               print('📞 CallInviteService: Invalid payload');
               return;
@@ -131,7 +150,7 @@ class CallInviteService {
               return;
             }
 
-            if (_processedCallIds.contains(callId)) {
+            if (_activeCallGuards.contains(callId)) {
               print('📞 CallInviteService: Call already processed, ignoring');
               return;
             }
@@ -141,13 +160,14 @@ class CallInviteService {
               return;
             }
 
-            _processedCallIds.add(callId);
+            _activeCallGuards.add(callId);
             _isShowingDialog = true;
 
             // Get caller info
             final callerName = await _getCallerName(from);
 
-            if (_context != null && _context!.mounted) {
+            final activeContext = _currentContext();
+            if (activeContext != null && activeContext.mounted) {
               print('📞 CallInviteService: Showing incoming call dialog');
               _showIncomingCallDialog(from, to, callId, mode, callerName);
             } else {
@@ -160,7 +180,12 @@ class CallInviteService {
           event: 'call_cancel',
           callback: (payload, [ref]) {
             print('📞 CallInviteService: Received call_cancel broadcast');
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            Map<String, dynamic>? body;
+            try {
+              body = Map<String, dynamic>.from(payload as Map);
+            } catch (_) {
+              body = null;
+            }
             if (body == null) return;
 
             final callId = (body['call_id'] ?? '').toString();
@@ -170,19 +195,26 @@ class CallInviteService {
             // Always stop ringtone when call is canceled
             _stopRingtone();
 
-            if (_isShowingDialog && _activeCallId == callId) {
+            final matchesActiveCall = _activeCallId == null || callId.isEmpty || _activeCallId == callId;
+            if (_isShowingDialog && matchesActiveCall) {
               print('📞 CallInviteService: Dismissing call dialog due to cancellation');
               _dismissDialog();
             } else {
               print('📞 CallInviteService: No matching dialog to dismiss (dialog showing: $_isShowingDialog, callId match: ${_activeCallId == callId})');
             }
+            _activeCallGuards.remove(callId);
           },
         )
         .onBroadcast(
           event: 'call_hangup',
           callback: (payload, [ref]) {
             print('📞 CallInviteService: Received call_hangup broadcast');
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            Map<String, dynamic>? body;
+            try {
+              body = Map<String, dynamic>.from(payload as Map);
+            } catch (_) {
+              body = null;
+            }
             if (body == null) return;
 
             final callId = (body['call_id'] ?? '').toString();
@@ -190,10 +222,12 @@ class CallInviteService {
 
             if (_activeCallId == callId) {
               print('📞 CallInviteService: Active call ended, navigating back');
-              if (_context != null && _context!.mounted) {
-                Navigator.of(_context!, rootNavigator: true).popUntil((route) => route.isFirst);
+              final activeContext = _currentContext();
+              if (activeContext != null && activeContext.mounted) {
+                Navigator.of(activeContext, rootNavigator: true).popUntil((route) => route.isFirst);
               }
             }
+            _activeCallGuards.remove(callId);
           },
         )
         .subscribe((status, [error]) {
@@ -242,11 +276,15 @@ class CallInviteService {
 
   // Show incoming call dialog
   void _showIncomingCallDialog(String from, String to, String callId, String mode, String callerName) {
-    if (_context == null || !_context!.mounted) {
+    final activeContext = _currentContext();
+    if (activeContext == null || !activeContext.mounted) {
       print('📞 CallInviteService: Context is null or unmounted - cannot show dialog');
       print('   _context == null: ${_context == null}');
       if (_context != null) {
         print('   _context.mounted: ${_context!.mounted}');
+      }
+      if (_navigatorKey == null) {
+        print('   _navigatorKey is null - no navigator context available');
       }
       return;
     }
@@ -265,111 +303,45 @@ class CallInviteService {
     print('   Caller: $callerName');
 
     try {
-      // Use a post-frame callback to ensure we're on the main thread
-      // and the widget tree is ready
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!_context!.mounted) {
-          print('📞 CallInviteService: Context unmounted during post-frame callback');
+      Future.microtask(() {
+        if (!activeContext.mounted) {
+          print('📞 CallInviteService: Active context unmounted before showing dialog');
           return;
         }
 
         showDialog<bool>(
-          context: _context!,
+          context: activeContext,
           barrierDismissible: false,
-          builder: (dialogContext) => WillPopScope(
-            onWillPop: () async => false,
-            child: AlertDialog(
-              title: Row(
-                children: [
-                  Icon(
-                    isVideo ? Icons.videocam : Icons.phone,
-                    color: Color(0xFFB82132),
-                    size: 28,
-                  ),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Incoming ${isVideo ? "Video" : "Voice"} Call',
-                      style: TextStyle(fontSize: 18),
-                    ),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircleAvatar(
-                    radius: 40,
-                    backgroundColor: Color(0xFFB82132).withOpacity(0.1),
-                    child: Icon(
-                      Icons.person,
-                      size: 40,
-                      color: Color(0xFFB82132),
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  Text(
-                    callerName,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'is calling you...',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => _declineCall(dialogContext, from, to, callId),
-                  style: TextButton.styleFrom(
-                    backgroundColor: Colors.red.withOpacity(0.1),
-                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.call_end, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Decline', style: TextStyle(color: Colors.red)),
-                    ],
-                  ),
-                ),
-                SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () => _acceptCall(dialogContext, from, to, callId, isVideo),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.call, color: Colors.white),
-                      SizedBox(width: 8),
-                      Text('Accept', style: TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+          useRootNavigator: true,
+          builder: (dialogContext) {
+            _activeDialogNavigator = Navigator.of(dialogContext, rootNavigator: true);
+            _activeDialogContext = dialogContext;
+            return IncomingCallDialog(
+              callerName: callerName,
+              isVideo: isVideo,
+              subtitle: 'is calling you right now',
+              onAccept: (ctx) async => _acceptCall(ctx, from, to, callId, isVideo),
+              onDecline: (ctx) async => _declineCall(ctx, from, to, callId),
+            );
+          },
         ).then((_) {
           print('📞 CallInviteService: Dialog dismissed/closed');
           _isShowingDialog = false;
+          if (callId.isNotEmpty) {
+            _activeCallGuards.remove(callId);
+          }
           _activeCallId = null;
+          _activeDialogNavigator = null;
+          _activeDialogContext = null;
         });
         print('📞 CallInviteService: Dialog shown successfully');
       });
     } catch (e) {
       print('📞 CallInviteService: ERROR showing dialog: $e');
       _isShowingDialog = false;
+      if (callId.isNotEmpty) {
+        _activeCallGuards.remove(callId);
+      }
       _activeCallId = null;
     }
   }
@@ -383,6 +355,8 @@ class CallInviteService {
     
     // Close the dialog
     Navigator.of(dialogContext).pop(true);
+    _activeDialogNavigator = null;
+    _activeDialogContext = null;
     _isShowingDialog = false;
 
     // Send accept signal
@@ -424,6 +398,8 @@ class CallInviteService {
     
     // Close the dialog
     Navigator.of(dialogContext).pop(false);
+    _activeDialogNavigator = null;
+    _activeDialogContext = null;
     _isShowingDialog = false;
 
     // Send decline signal
@@ -446,11 +422,16 @@ class CallInviteService {
     } catch (e) {
       print('📞 CallInviteService: Error inserting decline message: $e');
     }
+
+    if (callId.isNotEmpty) {
+      _activeCallGuards.remove(callId);
+    }
   }
 
   // Join Zego call
   Future<void> _joinZegoCall({required String callId, required bool video, required String userId}) async {
-    if (_context == null || !_context!.mounted) return;
+    final activeContext = _currentContext();
+    if (activeContext == null || !activeContext.mounted) return;
 
     // Request permissions
     final mic = await Permission.microphone.request();
@@ -508,7 +489,7 @@ class CallInviteService {
 
     // Navigate to call screen
     await Navigator.push(
-      _context!,
+      activeContext,
       MaterialPageRoute(
         builder: (context) => ZegoUIKitPrebuiltCall(
           appID: appId,
@@ -522,6 +503,9 @@ class CallInviteService {
     );
 
     print('📞 CallInviteService: Call ended, returned from Zego');
+    if (callId.isNotEmpty) {
+      _activeCallGuards.remove(callId);
+    }
   }
 
   // Send signal to another user
@@ -551,12 +535,51 @@ class CallInviteService {
 
   // Dismiss dialog
   void _dismissDialog() {
-    if (_context != null && _context!.mounted && _isShowingDialog) {
-      _stopRingtone(); // Stop ringtone when dialog is dismissed
-      Navigator.of(_context!, rootNavigator: true).pop();
-      _isShowingDialog = false;
-      _activeCallId = null;
+    if (!_isShowingDialog) {
+      _stopRingtone();
+      return;
     }
+
+    _stopRingtone();
+    bool dismissed = false;
+
+    if (_activeDialogNavigator != null) {
+      try {
+        if (_activeDialogNavigator!.canPop()) {
+          _activeDialogNavigator!.pop();
+        } else {
+          _activeDialogNavigator!.maybePop();
+        }
+        dismissed = true;
+      } catch (e) {
+        print('📞 CallInviteService: Error popping dialog navigator: $e');
+      }
+      _activeDialogNavigator = null;
+    }
+
+    if (!dismissed && _activeDialogContext != null) {
+      try {
+        Navigator.of(_activeDialogContext!, rootNavigator: true).maybePop();
+        dismissed = true;
+      } catch (e) {
+        print('📞 CallInviteService: Error dismissing via dialog context: $e');
+      }
+      _activeDialogContext = null;
+    }
+
+    if (!dismissed) {
+      final activeContext = _currentContext();
+      if (activeContext != null && activeContext.mounted) {
+        Navigator.of(activeContext, rootNavigator: true).maybePop();
+      }
+    }
+
+    _isShowingDialog = false;
+    if (_activeCallId != null) {
+      _activeCallGuards.remove(_activeCallId!);
+    }
+    _activeCallId = null;
+    _activeDialogContext = null;
   }
 
   // Play ringtone for incoming call
@@ -597,6 +620,6 @@ class CallInviteService {
     _callChannel?.unsubscribe();
     _callChannel = null;
     _isInitialized = false;
-    _processedCallIds.clear();
+    _activeCallGuards.clear();
   }
 }

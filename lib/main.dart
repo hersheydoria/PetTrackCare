@@ -46,6 +46,7 @@ class PetTrackCareApp extends StatefulWidget {
 
 class _PetTrackCareAppState extends State<PetTrackCareApp> {
   final AutoMigrationService _autoMigrationService = AutoMigrationService();
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   /// Run auto-migration in background without blocking the UI
   void _runAutoMigrationInBackground() {
@@ -103,9 +104,11 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
     print('🚀 PetTrackCareApp: Starting with initial route: $initialRoute');
     
     return CallInviteWrapper(
+      navigatorKey: _navigatorKey,
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'PetTrackCare',
+        navigatorKey: _navigatorKey,
       theme: ThemeData(
         primaryColor: Color(0xFFB82132), // Main red color
         scaffoldBackgroundColor: Color(0xFFF6DED8), // Light blush background

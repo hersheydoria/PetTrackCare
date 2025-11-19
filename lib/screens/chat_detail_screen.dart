@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image/image.dart' as img;
@@ -9,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/notification_service.dart';
+import '../widgets/call_dialogs.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -42,6 +44,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String? _recordedFilePath;
   DateTime? _recordingStartTime;
   Duration _recordingDuration = Duration.zero;
+  final FocusNode _messageFocusNode = FocusNode();
+  late final VoidCallback _messageTextListener;
 
   // NEW: player state for voice playback
   FlutterSoundPlayer? _player;
@@ -56,12 +60,34 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String _outgoingCallMode = 'voice';
   bool _awaitingAccept = false;
   bool _callingDialogOpen = false;
+  bool _isIncomingRingtonePlaying = false;
+  bool _incomingDialogOpen = false;
 
   // NEW: realtime signaling channels cache
   RealtimeChannel? _callRx;
   final Map<String, RealtimeChannel> _sigChans = {};
 
   final ScrollController _scrollController = ScrollController();
+  final List<_ConversationHighlight> _conversationHighlights = const [
+    _ConversationHighlight(
+      icon: Icons.pets_outlined,
+      title: 'Share pet update',
+      template: 'Quick check-in: here is how our pet is doing today...',
+      color: Color(0xFFEF6C82),
+    ),
+    _ConversationHighlight(
+      icon: Icons.location_on_outlined,
+      title: 'Send live location',
+      template: 'Sharing our live location so you can see where we are.',
+      color: Color(0xFF4C9F70),
+    ),
+    _ConversationHighlight(
+      icon: Icons.medical_services_outlined,
+      title: 'Vet reminder',
+      template: 'Reminder: our vet appointment is coming up soon.',
+      color: Color(0xFF4C7DFF),
+    ),
+  ];
   
   // Reply functionality
   Map<String, dynamic>? _replyingToMessage;
@@ -69,9 +95,55 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // Receiver profile picture
   String? _receiverProfilePicture;
 
+  void _playIncomingCallTone() {
+    if (_isIncomingRingtonePlaying) return;
+    try {
+      FlutterRingtonePlayer().play(
+        android: AndroidSounds.ringtone,
+        ios: IosSounds.electronic,
+        looping: true,
+        volume: 1.0,
+      );
+      _isIncomingRingtonePlaying = true;
+    } catch (e) {
+      print('📞 Error playing incoming ringtone: $e');
+    }
+  }
+
+  void _stopIncomingCallTone() {
+    if (!_isIncomingRingtonePlaying) return;
+    try {
+      FlutterRingtonePlayer().stop();
+    } catch (e) {
+      print('📞 Error stopping incoming ringtone: $e');
+    } finally {
+      _isIncomingRingtonePlaying = false;
+    }
+  }
+
+  void _dismissIncomingCallPrompt({BuildContext? dialogContext}) {
+    if (_incomingDialogOpen) {
+      final ctx = dialogContext ?? (mounted ? context : null);
+      if (ctx != null) {
+        try {
+          Navigator.of(ctx, rootNavigator: true).pop();
+        } catch (e) {
+          print('📞 Error dismissing incoming dialog: $e');
+        }
+      }
+    }
+    _incomingDialogOpen = false;
+    _incomingPromptedCallId = null;
+    _stopIncomingCallTone();
+  }
+
   @override
   void initState() {
     super.initState();
+    _messageTextListener = () {
+      if (mounted) setState(() {});
+    };
+    _messageController.addListener(_messageTextListener);
     _recorder = FlutterSoundRecorder();
     _initAudio(); // ask mic permission, open recorder & player
     fetchMessages().then((_) => _scrollToBottom());
@@ -414,7 +486,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             if (to != widget.userId || callId.isEmpty) return;
             // If the caller canceled before accept, just clear prompt (if any)
             if (_incomingPromptedCallId == callId) {
-              _incomingPromptedCallId = null;
+              _dismissIncomingCallPrompt();
             }
           },
         )
@@ -508,12 +580,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   @override
   void dispose() {
+    _messageController.removeListener(_messageTextListener);
     _messageController.dispose();
+    _messageFocusNode.dispose();
     _recorder?.closeRecorder();
     try {
       _player?.stopPlayer();
       _player?.closePlayer();
     } catch (_) {}
+    _stopIncomingCallTone();
     supabase.removeAllChannels();
     // No-op: removeAllChannels() already cleans up _callRx/_sigChans
     super.dispose();
@@ -580,64 +655,78 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
               if (!mounted) return;
               final callerId = from?.toString();
-              final accept = await showDialog<bool>(
-                context: context,
-                barrierDismissible: true,
-                builder: (_) => AlertDialog(
-                  title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
-                  content: const Text('Join this call?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Decline'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Accept'),
-                    ),
-                  ],
-                ),
-              );
+              if (callerId == null || callerId.isEmpty) {
+                _incomingPromptedCallId = null;
+                return;
+              }
+              final callerName = callerId == widget.receiverId ? widget.userName : 'Incoming caller';
+              _playIncomingCallTone();
+              _incomingDialogOpen = true;
 
-              if (accept == true && mounted) {
-                // Notify caller that callee accepted (DB + realtime)
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': widget.userId,
-                    'receiver_id': callerId,
-                    'type': 'call_accept',
-                    'call_id': callId,
-                    'call_mode': mode,
-                    'content': '[call_accept]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _sendSignal(callerId!, 'call_accept', {
-                  'from': widget.userId,
-                  'to': callerId,
-                  'call_id': callId,
-                  'mode': mode,
-                });
-                await _joinZegoCall(callId: callId, video: mode == 'video');
-              } else {
-                // Notify decline (DB + realtime)
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': widget.userId,
-                    'receiver_id': callerId,
-                    'type': 'call_decline',
-                    'call_id': callId,
-                    'call_mode': mode,
-                    'content': '[call_decline]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _sendSignal(callerId!, 'call_decline', {
-                  'from': widget.userId,
-                  'to': callerId,
-                  'call_id': callId,
-                  'mode': mode,
-                });
+              await showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                useRootNavigator: true,
+                builder: (dialogContext) => IncomingCallDialog(
+                  callerName: callerName,
+                  isVideo: mode == 'video',
+                  subtitle: 'wants to start a ${mode == 'video' ? 'video' : 'voice'} call',
+                  onAccept: (ctx) async {
+                    _dismissIncomingCallPrompt(dialogContext: ctx);
+
+                    if (!mounted) return;
+                    try {
+                      await supabase.from('messages').insert({
+                        'sender_id': widget.userId,
+                        'receiver_id': callerId,
+                        'type': 'call_accept',
+                        'call_id': callId,
+                        'call_mode': mode,
+                        'content': '[call_accept]',
+                        'is_seen': false,
+                      });
+                    } catch (_) {}
+                    await _sendSignal(callerId, 'call_accept', {
+                      'from': widget.userId,
+                      'to': callerId,
+                      'call_id': callId,
+                      'mode': mode,
+                    });
+                    await _joinZegoCall(callId: callId, video: mode == 'video');
+                  },
+                  onDecline: (ctx) async {
+                    _dismissIncomingCallPrompt(dialogContext: ctx);
+
+                    try {
+                      await supabase.from('messages').insert({
+                        'sender_id': widget.userId,
+                        'receiver_id': callerId,
+                        'type': 'call_decline',
+                        'call_id': callId,
+                        'call_mode': mode,
+                        'content': '[call_decline]',
+                        'is_seen': false,
+                      });
+                    } catch (_) {}
+                    await _sendSignal(callerId, 'call_decline', {
+                      'from': widget.userId,
+                      'to': callerId,
+                      'call_id': callId,
+                      'mode': mode,
+                    });
+                  },
+                ),
+              ).whenComplete(() {
+                _incomingDialogOpen = false;
+                _stopIncomingCallTone();
+                _incomingPromptedCallId = null;
+              });
+            }
+
+            if (to == widget.userId && from == widget.receiverId && msg['type'] == 'call_cancel') {
+              final callId = (msg['call_id'] ?? '').toString().trim();
+              if (_incomingPromptedCallId == callId) {
+                _dismissIncomingCallPrompt();
               }
             }
 
@@ -702,40 +791,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => WillPopScope(
-        onWillPop: () async => false,
-        child: AlertDialog(
-          title: Text('Calling ${widget.userName}...'),
-          content: const Text('Waiting for recipient to accept'),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                // Send cancel to recipient (DB + realtime)
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': widget.userId,
-                    'receiver_id': widget.receiverId,
-                    'type': 'call_cancel',
-                    'call_id': callId,
-                    'call_mode': video ? 'video' : 'voice',
-                    'content': '[call_cancel]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _sendSignal(widget.receiverId, 'call_cancel', {
-                  'from': widget.userId,
-                  'to': widget.receiverId,
-                  'call_id': callId,
-                  'mode': video ? 'video' : 'voice',
-                });
-                _awaitingAccept = false;
-                _callingDialogOpen = false;
-                if (mounted) Navigator.of(context, rootNavigator: true).pop();
-              },
-              child: const Text('Cancel', style: TextStyle(color: Colors.red)),
-            ),
-          ],
-        ),
+      useRootNavigator: true,
+      builder: (dialogContext) => OutgoingCallDialog(
+        calleeName: widget.userName,
+        isVideo: video,
+        subtitle: 'Waiting for ${widget.userName} to answer',
+        onCancel: (ctx) async {
+          try {
+            await supabase.from('messages').insert({
+              'sender_id': widget.userId,
+              'receiver_id': widget.receiverId,
+              'type': 'call_cancel',
+              'call_id': callId,
+              'call_mode': video ? 'video' : 'voice',
+              'content': '[call_cancel]',
+              'is_seen': false,
+            });
+          } catch (_) {}
+          await _sendSignal(widget.receiverId, 'call_cancel', {
+            'from': widget.userId,
+            'to': widget.receiverId,
+            'call_id': callId,
+            'mode': video ? 'video' : 'voice',
+          });
+          _awaitingAccept = false;
+          _callingDialogOpen = false;
+          Navigator.of(ctx, rootNavigator: true).pop();
+        },
       ),
     ).then((_) {
       _callingDialogOpen = false;
@@ -2446,148 +2528,128 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       }
     }
 
+    final bool isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+
     return Scaffold(
       backgroundColor: lightBlush,
-      appBar: AppBar(
-        backgroundColor: deepRed,
-        elevation: 0,
-        leading: IconButton(
-          icon: Container(
-            padding: EdgeInsets.all(8),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(130),
+        child: AppBar(
+          automaticallyImplyLeading: false,
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          toolbarHeight: 72,
+          flexibleSpace: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              Icons.arrow_back,
-              color: Colors.white,
-              size: 20,
+              gradient: LinearGradient(
+                colors: [deepRed, deepRed.withOpacity(0.85), coral.withOpacity(0.9)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: deepRed.withOpacity(0.28),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
             ),
           ),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: _receiverProfilePicture == null
-                    ? LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
-                      )
-                    : null,
-                border: Border.all(color: Colors.white, width: 2),
+          leadingWidth: 60,
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 12.0),
+            child: IconButton(
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.arrow_back, color: Colors.white, size: 20),
               ),
-              child: _receiverProfilePicture != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(20),
-                      child: Image.network(
-                        _getProfilePictureUrl(_receiverProfilePicture) ?? _receiverProfilePicture!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
-                              ),
-                            ),
-                            child: Center(
-                              child: Text(
-                                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          titleSpacing: 0,
+          title: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: _receiverProfilePicture == null
+                      ? LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                        )
+                      : null,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.08),
+                      blurRadius: 8,
+                      offset: Offset(0, 4),
                     )
-                  : Center(
+                  ],
+                ),
+                child: _receiverProfilePicture != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(24),
+                        child: Image.network(
+                          _getProfilePictureUrl(_receiverProfilePicture) ?? _receiverProfilePicture!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return _buildFallbackAvatar();
+                          },
+                        ),
+                      )
+                    : _buildFallbackAvatar(),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      widget.userName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    AnimatedSwitcher(
+                      duration: Duration(milliseconds: 250),
                       child: Text(
-                        widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                        otherUserTyping ? 'Typing…' : _presenceLabel(),
+                        key: ValueKey(otherUserTyping),
                         style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.85),
+                          fontStyle: otherUserTyping ? FontStyle.italic : FontStyle.normal,
                         ),
                       ),
                     ),
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.userName,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (otherUserTyping)
-                    Text(
-                      'Typing...',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white70,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
+          ),
+          actions: [
+            _buildAppBarAction(icon: Icons.call, label: 'Voice call', onTap: () => _startZegoCall(false)),
+            const SizedBox(width: 6),
+            _buildAppBarAction(icon: Icons.videocam, label: 'Video call', onTap: () => _startZegoCall(true)),
+            const SizedBox(width: 12),
           ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(48),
+            child: _buildHeaderMetaRow(),
+          ),
         ),
-        actions: [
-          Container(
-            margin: EdgeInsets.only(right: 4),
-            child: IconButton(
-              icon: Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.call,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              onPressed: () => _startZegoCall(false),
-            ),
-          ),
-          Container(
-            margin: EdgeInsets.only(right: 8),
-            child: IconButton(
-              icon: Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.videocam,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              onPressed: () => _startZegoCall(true),
-            ),
-          ),
-        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -2599,14 +2661,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
         child: Column(
           children: [
+            if (!isKeyboardOpen)
+              _buildConversationHighlights(),
             Expanded(
-              child: RefreshIndicator(
-                onRefresh: _refreshAll,
-                color: deepRed,
-                backgroundColor: Colors.white,
-                child: messages.isEmpty
-                    ? _buildEmptyState()
-                    : _buildMessagesList(lastSeenMessageId),
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 16,
+                      offset: Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: RefreshIndicator(
+                    onRefresh: _refreshAll,
+                    color: deepRed,
+                    backgroundColor: Colors.white,
+                    child: messages.isEmpty
+                        ? _buildEmptyState()
+                        : _buildMessagesList(lastSeenMessageId),
+                  ),
+                ),
               ),
             ),
             _buildMessageInput(),
@@ -2614,6 +2695,221 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildFallbackAvatar() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+        ),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAppBarAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeaderMetaRow() {
+    final presence = _presenceLabel();
+    final int count = messages.length;
+    final String messageLabel = _inActiveCall
+        ? 'On a call'
+        : (count == 0 ? 'No messages yet' : '$count messages');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Row(
+        children: [
+          _buildHeaderChip(Icons.schedule, presence),
+          const Spacer(),
+          _buildHeaderChip(
+            _inActiveCall ? Icons.wifi_calling_3 : Icons.chat_bubble_outline,
+            messageLabel,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _presenceLabel() {
+    if (otherUserTyping) return 'Typing now…';
+    if (messages.isEmpty) return 'Recently active';
+    final last = messages.last;
+    final lastTime = _parseMsgTime(last['sent_at']);
+    if (lastTime == null) return 'Recently active';
+    final diff = DateTime.now().difference(lastTime);
+    if (diff.inMinutes < 1) return 'Active now';
+    if (diff.inMinutes < 60) return 'Active ${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return 'Active ${diff.inHours}h ago';
+    return 'Active ${diff.inDays}d ago';
+  }
+
+  Widget _buildConversationHighlights() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(top: 12, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Row(
+              children: const [
+                Icon(Icons.auto_awesome, size: 16, color: Colors.black54),
+                SizedBox(width: 6),
+                Text(
+                  'Suggested actions',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black54,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 124,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemBuilder: (context, index) {
+                final highlight = _conversationHighlights[index];
+                return _buildHighlightCard(highlight);
+              },
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemCount: _conversationHighlights.length,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHighlightCard(_ConversationHighlight highlight) {
+    return GestureDetector(
+      onTap: () => _prefillMessage(highlight.template),
+      child: Container(
+        width: 180,
+        padding: const EdgeInsets.all(14),
+        constraints: const BoxConstraints(minHeight: 110),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: highlight.color.withOpacity(0.25),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
+            )
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: highlight.color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(highlight.icon, color: highlight.color),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              highlight.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Expanded(
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Text(
+                  'Tap to prefill message',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _prefillMessage(String template) {
+    _messageController.text = template;
+    _messageController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _messageController.text.length),
+    );
+    FocusScope.of(context).requestFocus(_messageFocusNode);
   }
 
   // Enhanced empty state
@@ -2740,6 +3036,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Swipeable message wrapper with controlled swipe distance
   Widget _buildSwipeableMessage(Map msg, bool sentByMe, bool isLastSeen, Widget content) {
+    final msgType = (msg['type'] ?? '').toString();
+    final msgContent = (msg['content'] ?? '').toString();
+    final String backgroundKey = msgType.isNotEmpty ? msgType : msgContent;
+    final Color? callBubbleColor = _callBubbleBackground(backgroundKey);
+
     return _SwipeToReplyWidget(
       onReply: () => _setReplyMessage(msg),
       swipeDirection: sentByMe ? SwipeDirection.rightToLeft : SwipeDirection.leftToRight,
@@ -2758,14 +3059,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               padding: EdgeInsets.all(12),
               margin: EdgeInsets.symmetric(vertical: 2, horizontal: 4),
               decoration: BoxDecoration(
-                gradient: sentByMe
+                gradient: sentByMe && callBubbleColor == null
                     ? LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [deepRed, coral],
                       )
                     : null,
-                color: sentByMe ? null : Colors.white,
+                color: callBubbleColor ?? (sentByMe ? null : Colors.white),
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
@@ -2774,9 +3075,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: sentByMe 
-                      ? deepRed.withOpacity(0.2) 
-                      : Colors.grey.withOpacity(0.1),
+                    color: callBubbleColor != null
+                        ? Colors.black.withOpacity(0.05)
+                        : sentByMe 
+                            ? deepRed.withOpacity(0.2) 
+                            : Colors.grey.withOpacity(0.1),
                     blurRadius: 8,
                     offset: Offset(0, 2),
                   ),
@@ -2784,7 +3087,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               ),
               child: DefaultTextStyle(
                 style: TextStyle(
-                  color: sentByMe ? Colors.white : Colors.grey.shade800,
+                  color: callBubbleColor != null
+                      ? Colors.grey.shade900
+                      : sentByMe 
+                          ? Colors.white 
+                          : Colors.grey.shade800,
                   fontSize: 15,
                 ),
                 child: content,
@@ -2817,6 +3124,28 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       ),
     );
+  }
+
+  Color? _callBubbleBackground(String rawType) {
+    final normalized = rawType
+        .toLowerCase()
+        .replaceAll('[', '')
+        .replaceAll(']', '');
+    if (!normalized.startsWith('call')) return null;
+
+    if (normalized.startsWith('call_accept')) {
+      return const Color(0xFFEAF6EF);
+    }
+
+    if (normalized.startsWith('call_cancel')) {
+      return const Color(0xFFFFF4EA);
+    }
+
+    if (normalized.startsWith('call_decline')) {
+      return const Color(0xFFFFEDEE);
+    }
+
+    return const Color(0xFFFFF5F2);
   }
 
   // Reply context widget
@@ -2871,6 +3200,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Enhanced message content
   Widget _buildMessageContent(Map msg) {
+    final msgType = (msg['type'] ?? '').toString();
+    final msgContent = (msg['content'] ?? '').toString();
+    if (msgType.startsWith('call') || msgContent.startsWith('[call_')) {
+      return _buildCallEventContent(msg);
+    }
+
     if (msg['type'] == 'image' && msg['media_url'] != null) {
       return FutureBuilder<String?>(
         future: _mediaUrl(msg),
@@ -2956,63 +3291,221 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
+  Widget _buildCallEventContent(Map msg) {
+    String type = (msg['type'] ?? '').toString();
+    final rawContent = (msg['content'] ?? '').toString();
+    if (type.isEmpty && rawContent.startsWith('[call_')) {
+      type = rawContent.replaceAll('[', '').replaceAll(']', '');
+    }
+    final mode = (msg['call_mode'] ?? '').toString();
+    final isVideo = mode == 'video' || (msg['content']?.toString().contains('video') ?? false);
+    final sentByMe = isSender(msg['sender_id']);
+
+    IconData icon;
+    Color color;
+    String title;
+    String subtitle;
+
+    switch (type) {
+      case 'call':
+      case 'call_attempt':
+        icon = isVideo ? Icons.videocam : Icons.phone;
+        color = deepRed;
+        title = isVideo ? 'Video call attempt' : 'Voice call attempt';
+        subtitle = sentByMe
+            ? 'You tried reaching ${widget.userName}'
+            : '${widget.userName} tried to reach you';
+        break;
+      case 'call_accept':
+      case 'call_accepted':
+        icon = Icons.call;
+        color = const Color(0xFF2E7D32);
+        title = 'Call connected';
+        subtitle = sentByMe
+            ? 'You accepted the call'
+            : '${widget.userName} accepted the call';
+        break;
+      case 'call_decline':
+      case 'call_declined':
+        icon = Icons.call_end;
+        color = const Color(0xFFB71C1C);
+        title = 'Call declined';
+        subtitle = sentByMe
+            ? 'You declined the call'
+            : '${widget.userName} declined the call';
+        break;
+      case 'call_cancel':
+      case 'call_canceled':
+      case 'call_cancelled':
+        icon = Icons.phone_missed;
+        color = const Color(0xFFF2994A);
+        title = 'Call canceled';
+        subtitle = sentByMe
+            ? 'You ended the ringing before it connected'
+            : '${widget.userName} canceled before it connected';
+        break;
+      default:
+        icon = Icons.call;
+        color = deepRed;
+        title = 'Call update';
+        subtitle = 'Call status changed';
+        break;
+    }
+
+    final bool showCallBackButton = !sentByMe && (
+      type == 'call' ||
+      type == 'call_attempt' ||
+      type.startsWith('call_cancel') ||
+      type.startsWith('call_decline')
+    );
+    final String callKindLabel = isVideo ? 'Video call' : 'Voice call';
+    final String directionLabel = sentByMe ? 'Outgoing' : 'Incoming';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            _buildCallMetaPill(callKindLabel, color),
+            _buildCallMetaPill(directionLabel, Colors.grey.shade600),
+          ],
+        ),
+        if (showCallBackButton)
+          Padding(
+            padding: const EdgeInsets.only(top: 12.0),
+            child: OutlinedButton.icon(
+              onPressed: () => _startZegoCall(isVideo),
+              icon: Icon(isVideo ? Icons.videocam : Icons.call, size: 18, color: color),
+              label: Text('Call back', style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: color.withOpacity(0.5)),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCallMetaPill(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
+  }
+
   // Enhanced message input with reply preview
   Widget _buildMessageInput() {
+    final hasTypedText = _messageController.text.trim().isNotEmpty;
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(
-          top: BorderSide(color: Colors.grey.shade200),
-        ),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 8,
-            offset: Offset(0, -2),
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 24,
+            offset: Offset(0, -4),
           ),
         ],
       ),
-      child: Column(
-        children: [
-          // Reply preview
-          if (_replyingToMessage != null)
-            _buildReplyPreview(),
-          // Input row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-            child: Row(
-              children: [
-                _buildVoiceButton(),
-                _buildInputButton(Icons.image, null, _pickImage),
-                _buildInputButton(Icons.camera_alt, null, _captureImage),
-                Expanded(
-                  child: Container(
-                    margin: EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: InputDecoration(
-                        hintText: _replyingToMessage != null 
-                          ? 'Reply to ${isSender(_replyingToMessage!['sender_id']) ? 'yourself' : widget.userName}...'
-                          : 'Type a message...',
-                        hintStyle: TextStyle(color: Colors.grey.shade500),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            if (_replyingToMessage != null)
+              _buildReplyPreview(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _buildVoiceButton(),
+                  _buildInputButton(Icons.image, null, _pickImage, tooltip: 'Send image from gallery'),
+                  _buildInputButton(Icons.camera_alt, null, _captureImage, tooltip: 'Capture photo'),
+                  Expanded(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: Colors.grey.shade200),
                       ),
-                      maxLines: null,
-                      textCapitalization: TextCapitalization.sentences,
+                      child: TextField(
+                        controller: _messageController,
+                        focusNode: _messageFocusNode,
+                        decoration: InputDecoration(
+                          hintText: _replyingToMessage != null 
+                            ? 'Reply to ${isSender(_replyingToMessage!['sender_id']) ? 'yourself' : widget.userName}...'
+                            : 'Type a message...',
+                          hintStyle: TextStyle(color: Colors.grey.shade500),
+                          border: InputBorder.none,
+                        ),
+                        maxLines: 5,
+                        minLines: 1,
+                        textCapitalization: TextCapitalization.sentences,
+                      ),
                     ),
                   ),
-                ),
-                _buildInputButton(Icons.send, deepRed, _sendMessage),
-              ],
+                  _buildSendButton(hasTypedText),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -3084,55 +3577,55 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Enhanced input button
   Widget _buildVoiceButton() {
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: 2),
+    return Tooltip(
+      message: isRecording ? 'Tap to stop recording' : 'Record voice note',
       child: GestureDetector(
         onTap: _recordOrSendVoice,
-        child: Container(
-          padding: EdgeInsets.all(8),
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: isRecording ? Colors.red : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isRecording ? Colors.red : coral.withOpacity(0.4),
+            ),
           ),
-          child: isRecording 
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.stop,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    _formatDuration(_recordingDuration),
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+          child: isRecording
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.stop, color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatDuration(_recordingDuration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
-              )
-            : Icon(
-                Icons.mic,
-                color: coral,
-                size: 20,
-              ),
+                  ],
+                )
+              : Icon(Icons.mic, color: coral, size: 20),
         ),
       ),
     );
   }
 
-  Widget _buildInputButton(IconData icon, Color? activeColor, VoidCallback onPressed) {
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: 2),
-      child: IconButton(
-        icon: Container(
-          padding: EdgeInsets.all(8),
+  Widget _buildInputButton(IconData icon, Color? activeColor, VoidCallback onPressed, {String? tooltip}) {
+    final button = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: activeColor ?? Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(14),
           ),
           child: Icon(
             icon,
@@ -3140,7 +3633,45 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             size: 20,
           ),
         ),
-        onPressed: onPressed,
+      ),
+    );
+    return tooltip != null ? Tooltip(message: tooltip, child: button) : button;
+  }
+
+  Widget _buildSendButton(bool enabled) {
+    return Tooltip(
+      message: enabled ? 'Send message' : 'Type something to send',
+      child: GestureDetector(
+        onTap: enabled ? _sendMessage : null,
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: enabled
+                ? LinearGradient(
+                    colors: [deepRed, coral],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: enabled ? null : Colors.grey.shade300,
+            boxShadow: enabled
+                ? [
+                    BoxShadow(
+                      color: deepRed.withOpacity(0.35),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : [],
+          ),
+          child: Icon(
+            Icons.send,
+            color: enabled ? Colors.white : Colors.grey.shade600,
+            size: 18,
+          ),
+        ),
       ),
     );
   }
@@ -3150,6 +3681,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     await fetchMessages();
     await markMessagesAsSeen();
   }
+}
+
+class _ConversationHighlight {
+  final IconData icon;
+  final String title;
+  final String template;
+  final Color color;
+
+  const _ConversationHighlight({
+    required this.icon,
+    required this.title,
+    required this.template,
+    required this.color,
+  });
 }
 
 // Enum for swipe direction

@@ -8,10 +8,12 @@ import '../services/call_invite_service.dart';
 /// global incoming call alerts across all screens.
 class CallInviteWrapper extends StatefulWidget {
   final Widget child;
+  final GlobalKey<NavigatorState>? navigatorKey;
   
   const CallInviteWrapper({
     Key? key,
     required this.child,
+    this.navigatorKey,
   }) : super(key: key);
 
   @override
@@ -29,6 +31,7 @@ class _CallInviteWrapperState extends State<CallInviteWrapper> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         print('📞 CallInviteWrapper: Initializing call service with context');
+        _callService.registerNavigatorKey(widget.navigatorKey);
         _callService.initialize(context);
       } else {
         print('📞 CallInviteWrapper: Widget not mounted, skipping initialization');
@@ -42,6 +45,7 @@ class _CallInviteWrapperState extends State<CallInviteWrapper> {
     print('📞 CallInviteWrapper: didChangeDependencies called - updating context');
     // Update context when dependencies change (e.g., navigation)
     _callService.updateContext(context);
+    _callService.registerNavigatorKey(widget.navigatorKey);
   }
 
   @override
