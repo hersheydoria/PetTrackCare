@@ -4737,8 +4737,6 @@ void _disconnectDevice() async {
       _waterIntake = null;
       _bathroomHabits = null;
       _selectedSymptoms = [];
-      _bodyTemperature = null;
-      _appetiteBehavior = null;
     });
   }
 
@@ -4749,8 +4747,6 @@ void _disconnectDevice() async {
     final foodIntake = (log['food_intake'] ?? '').toString();
     final waterIntake = (log['water_intake'] ?? '').toString();
     final bathroomHabits = (log['bathroom_habits'] ?? '').toString();
-    final bodyTemperature = (log['body_temperature'] ?? '').toString();
-    final appetiteBehavior = (log['appetite_behavior'] ?? '').toString();
     final rawDate = (log['log_date'] ?? '').toString();
     final createdAt = log['created_at']?.toString();
     
