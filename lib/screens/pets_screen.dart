@@ -139,8 +139,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String? _waterIntake; // "Not Drinking", "Drinking Less", "Normal", "Drinking More"
   String? _bathroomHabits; // "Normal", "Diarrhea", "Constipation", "Frequent Urination"
   List<String> _selectedSymptoms = []; // Multiple symptoms
-  String? _bodyTemperature; // "Normal", "Fever", "Cold"
-  String? _appetiteBehavior; // "Eager", "Normal", "Reluctant", "Refuses"
+  
 
   // illness risk returned by backend (high/low/null)
   String? _illnessRisk;
@@ -209,15 +208,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     "House soiling / accidents"
   ];
 
-  // Body temperature options
-  final List<String> temperatureOptions = [
-    "Normal", "Warm/Fever", "Cold"
-  ];
 
-  // Appetite behavior options
-  final List<String> appetiteOptions = [
-    "Eager to Eat", "Normal", "Reluctant", "Refuses Food"
-  ];
 
   // Clinical Signs (Physical Symptoms) - Expanded set directly based on health indicators
   final List<String> commonSymptoms = [
@@ -4952,30 +4943,6 @@ void _disconnectDevice() async {
 
                       SizedBox(height: 16),
 
-                      // Body Temperature Section
-                      if (bodyTemperature.isNotEmpty) ...[
-                        _buildDetailCard(
-                          title: 'Body Temperature',
-                          icon: Icons.thermostat,
-                          iconColor: Colors.red,
-                          value: bodyTemperature,
-                          isEmpty: false,
-                        ),
-                        SizedBox(height: 16),
-                      ],
-
-                      // Appetite Behavior Section
-                      if (appetiteBehavior.isNotEmpty) ...[
-                        _buildDetailCard(
-                          title: 'Appetite Behavior',
-                          icon: Icons.emoji_food_beverage,
-                          iconColor: Colors.amber,
-                          value: appetiteBehavior,
-                          isEmpty: false,
-                        ),
-                        SizedBox(height: 16),
-                      ],
-
                       // Symptoms Section
                       if (symptoms.isNotEmpty) ...[
                         _buildDetailCard(
@@ -6260,8 +6227,7 @@ void _disconnectDevice() async {
       _foodIntake = existing['food_intake']?.toString();
       _waterIntake = existing['water_intake']?.toString();
       _bathroomHabits = existing['bathroom_habits']?.toString();
-      _bodyTemperature = existing['body_temperature']?.toString();
-      _appetiteBehavior = existing['appetite_behavior']?.toString();
+      
       
       // Parse symptoms from JSON string or comma-separated string
       final symptomsData = existing['symptoms'];
