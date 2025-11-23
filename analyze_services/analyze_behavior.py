@@ -836,6 +836,11 @@ def analyze_endpoint():
     # ML illness_risk on latest log with BREED ADJUSTMENT
     illness_risk_ml = "low"
     breed_notice = None  # Will hold breed-aware explanation if applicable
+    activity_level = "unknown"
+    food_intake = "unknown"
+    water_intake = "unknown"
+    bathroom_habits = "unknown"
+    symptoms_detected = []
     try:
         if not df.empty:
             latest = df.sort_values("log_date", ascending=False).iloc[0]
@@ -940,55 +945,94 @@ def analyze_endpoint():
     
     # Always analyze behavioral concerns from current log state
     behavioral_concerns = []
+    feature_insights = []
+
+    def _add_insight(feature_key, text):
+        feature_insights.append({
+            "feature": feature_key,
+            "insight": text
+        })
     
     # Activity level concerns
     activity_lower = activity_level.lower()
     if 'low activity' in activity_lower or 'lethargy' in activity_lower:
         behavioral_concerns.append('Activity decreased significantly')
+        _add_insight('activity_level', 'Activity level is low; encourage short, gentle play sessions and extra rest to avoid exhaustion.')
     elif 'restlessness' in activity_lower or 'night' in activity_lower:
         behavioral_concerns.append('Restlessness or disrupted sleep patterns')
+        _add_insight('activity_level', 'Restless behaviors were noted; consider calming routines and an earlier bedtime.')
     elif 'weakness' in activity_lower or 'collapse' in activity_lower:
         behavioral_concerns.append('Weakness or inability to move normally')
+        _add_insight('activity_level', 'Weakness or collapse signals need for gentle handling and possible vet support.')
     elif 'high activity' in activity_lower:
         behavioral_concerns.append('Unusual hyperactivity or excessive energy')
+        _add_insight('activity_level', 'High activity levels could indicate anxiety or an injury; keep monitoring for persistent spikes.')
+    else:
+        _add_insight('activity_level', 'Activity level is within expected bounds; continue daily enrichment and checks.')
     
     # Food intake concerns
     food_lower = food_intake.lower()
     if 'not eating' in food_lower or 'loss of appetite' in food_lower:
         behavioral_concerns.append('Loss of appetite or refusing to eat')
+        _add_insight('food_intake', 'Food intake dropped or was refused; monitor appetite and hydration closely.')
     elif 'eating less' in food_lower:
         behavioral_concerns.append('Reduced appetite')
+        _add_insight('food_intake', 'Appetite is reduced; try offering favorite foods in smaller servings to stimulate interest.')
     elif 'eating more' in food_lower:
         behavioral_concerns.append('Increased appetite or excessive eating')
+        _add_insight('food_intake', 'Increased appetite noted; correlate with activity and stress for possible excitement behaviors.')
     elif 'weight loss' in food_lower:
         behavioral_concerns.append('Unexplained weight loss')
+        _add_insight('food_intake', 'Weight loss detected; ensure portion sizes match caloric needs and report to your vet if it continues.')
     elif 'weight gain' in food_lower:
         behavioral_concerns.append('Unexplained weight gain')
+        _add_insight('food_intake', 'Weight gain or overeating may be linked to metabolic changes or treats; track portion control.')
+    else:
+        _add_insight('food_intake', 'Food intake appears regular; continue balanced meals and scheduled feedings.')
     
     # Water intake concerns
     water_lower = water_intake.lower()
     if 'not drinking' in water_lower:
         behavioral_concerns.append('Not drinking water')
+        _add_insight('water_intake', 'Water was avoided; offer fresh bowls and monitor for dehydration.')
     elif 'drinking less' in water_lower:
         behavioral_concerns.append('Reduced water intake')
+        _add_insight('water_intake', 'Water intake is slightly lower; keep fresh water easily accessible.')
     elif 'excessive drinking' in water_lower or 'drinking more' in water_lower:
         behavioral_concerns.append('Increased thirst/excessive drinking')
+        _add_insight('water_intake', 'Excessive thirst could signal metabolic changes; note frequency and share with your vet.')
+    else:
+        _add_insight('water_intake', 'Water intake is steady; good hydration supports recovery and energy.')
     
     # Bathroom habits concerns
     bathroom_lower = bathroom_habits.lower()
     if 'diarrhea' in bathroom_lower:
         behavioral_concerns.append('Diarrhea or loose stools')
+        _add_insight('bathroom_habits', 'Diarrhea detected; track frequency and look for signs of discomfort or mucus/blood.')
     elif 'constipation' in bathroom_lower:
         behavioral_concerns.append('Constipation')
+        _add_insight('bathroom_habits', 'Constipation noted; ensure fiber and hydration; gentle tummy massages can help.')
     elif 'frequent urination' in bathroom_lower:
         behavioral_concerns.append('Frequent urination')
+        _add_insight('bathroom_habits', 'Frequent urination could hint at infections or diabetes; capture volume and color for vet review.')
     elif 'straining' in bathroom_lower:
         behavioral_concerns.append('Straining to urinate or defecate')
+        _add_insight('bathroom_habits', 'Straining is a red flag; this requires immediate vet attention if it persists.')
     elif 'blood' in bathroom_lower:
         behavioral_concerns.append('Blood in urine or stool')
+        _add_insight('bathroom_habits', 'Blood in urine/stool is critical; seek veterinary care urgently.')
     elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
         behavioral_concerns.append('Inappropriate toileting or house soiling')
+        _add_insight('bathroom_habits', 'House soiling may indicate stress or urinary issues; note context and timing for your vet.')
+    else:
+        _add_insight('bathroom_habits', 'Bathroom habits are within expected patterns.')
     
+    if symptoms_detected:
+        symptom_list = ', '.join(str(s).title() for s in symptoms_detected)
+        _add_insight('symptoms', f'Clinical symptoms reported: {symptom_list}.')
+    else:
+        _add_insight('symptoms', 'No clinical symptoms were reported in the latest log.')
+
     # Generate health guidance based on detected symptoms or behavioral changes
     # Combine behavioral concerns with any detected clinical symptoms for comprehensive health guidance
     all_health_issues = behavioral_concerns + (symptoms_detected if symptoms_detected else [])
@@ -999,6 +1043,8 @@ def analyze_endpoint():
     
     if final_is_unhealthy and historical_context.get('is_persistent'):
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
+    if feature_insights:
+        merged["feature_insights"] = feature_insights
     
     # Add data sufficiency notice for user
     # Also check data freshness - warn if latest log is too old
@@ -1339,73 +1385,86 @@ def public_pet_page(pet_id):
             html = f"""
             <!doctype html>
             <html>
-            <head>
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Pet Info - {pet_name}</title>
-              <style>
-                * {{ margin:0; padding:0; box-sizing:border-box; }}
-                body {{ font-family: Arial, sans-serif; background:#f6f6f6; padding:12px; min-height:100vh; }}
-                .card {{ max-width: 520px; margin:12px auto; background:#fff; border-radius:8px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }}
-                .label {{ color:#666; font-size:13px; margin-bottom:4px; }}
-                .value {{ color:#222; font-weight:600; font-size:16px; margin-bottom:12px; }}
-                .badge {{ display:inline-block;padding:6px 10px;border-radius:12px;font-weight:600;color:#fff;font-size:13px; }}
-                .profile-img {{ width:120px; height:120px; border-radius:12px; object-fit:cover; border:3px solid #e0e0e0; margin-bottom:12px; }}
-                .profile-container {{ display:flex; align-items:flex-start; gap:16px; margin-bottom:16px; }}
-                .profile-text {{ flex:1; }}
-                .owner-info {{ margin-top:16px; padding-top:16px; border-top:1px solid #eee; }}
-                h2 {{ font-size:20px; margin-bottom:16px; }}
-                h3 {{ font-size:18px; margin-bottom:12px; }}
-                h4 {{ font-size:16px; margin:16px 0 8px 0; }}
-                p {{ margin-bottom:8px; font-size:14px; }}
-                hr {{ margin:16px 0; border:none; border-top:1px solid #eee; }}
-                ul {{ margin-left:20px; margin-bottom:12px; }}
-                li {{ margin-bottom:6px; font-size:14px; }}
-                /* modal */
-                .modal-backdrop {{ position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; padding:16px; overflow-y:auto; }}
-                .modal {{ background:#fff; border-radius:10px; padding:20px; max-width:500px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 10px 30px rgba(0,0,0,0.3); }}
-                .close-btn {{ background:#B82132; color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; font-size:14px; }}
-                button {{ font-size:14px; }}
-                .more-btn {{ background:#eee; border-radius:6px; padding:8px 16px; border:none; cursor:pointer; }}
-                @media (max-width: 600px) {{
-                  .card {{ padding:12px; margin:8px auto; }}
-                  .modal {{ padding:16px; max-height:85vh; }}
-                  h2 {{ font-size:18px; }}
-                  h3 {{ font-size:16px; }}
-                }}
-              </style>
-            </head>
-            <body>
-              <div class="card">
-                <h2>Pet Quick Info</h2>
-                <div class="profile-container">
-                  {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div style="width:120px;height:120px;background:#e0e0e0;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#999;">No photo</div>'}
-                  <div class="profile-text">
-                    <p class="label">Name</p><p class="value">{pet_name}</p>
-                    <p class="label">Breed</p><p class="value">{pet_breed}</p>
-                    <p class="label">Age</p><p class="value">{pet_age if pet_age else 'Not available'}</p>
-                    <p class="label">Weight</p><p class="value">{pet_weight if pet_weight else 'Not specified'}</p>
-                  </div>
-                </div>
-                <p class="label">Gender</p><p class="value">{pet_gender}</p>
-                <p class="label">Health</p><p class="value">{pet_health}</p>
-                <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;">
-                  <div style="flex:1;min-width:200px;">
-                    <span class="label">Health Status</span><br/>
-                    <span class="badge" style="background:{risk_color};">{status_text}</span>
-                    <p><strong>Risk Level:</strong> {latest_risk.title() if latest_risk else 'None'}</p>
-                  </div>
-                </div>
-                <div class="owner-info">
-                  <div style="display:flex;gap:12px;align-items:center;">
-                    {f'<img src="{owner_profile_picture}" alt="{owner_name}" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0;">' if owner_profile_picture else '<div style="width:60px;height:60px;background:#e0e0e0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#999;font-size:24px;">👤</div>'}
-                    <div>
-                      <p class="label">Owner</p><p class="value">{owner_name}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </body>
-            </html>
+                        <head>
+                            <meta name="viewport" content="width=device-width, initial-scale=1">
+                            <title>Pet Info - {pet_name}</title>
+                            <style>
+                                * {{ margin:0; padding:0; box-sizing:border-box; }}
+                                body {{ font-family: 'Inter', Arial, sans-serif; background:#f6f6f6; padding:16px; min-height:100vh; color:#1c1c1c; }}
+                                .card {{ max-width: 540px; margin:12px auto; background:#fff; border-radius:16px; padding:24px; box-shadow:0 16px 32px rgba(0,0,0,0.08); display:flex; flex-direction:column; gap:24px; }}
+                                .card h2 {{ font-size:22px; letter-spacing:0.02em; color:#B82132; margin-bottom:4px; }}
+                                .card h3 {{ font-size:16px; color:#666; margin:0; text-transform:uppercase; letter-spacing:0.08em; }}
+                                .profile-container {{ display:flex; gap:16px; align-items:flex-start; }}
+                                .profile-img {{ width:130px; height:130px; border-radius:18px; object-fit:cover; border:3px solid #ffecec; box-shadow:0 10px 24px rgba(184, 33, 50, 0.18); }}
+                                .profile-placeholder {{ width:130px; height:130px; border-radius:18px; background:#e9e9e9; border:3px dashed #d0d0d0; display:flex; align-items:center; justify-content:center; color:#999; font-size:18px; }}
+                                .info-grid {{ flex:1; display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; }}
+                                .info-item {{ background:#fff7f6; border-radius:12px; padding:12px 14px; border:1px solid #ffe7e2; }}
+                                .info-item p {{ margin:0; }}
+                                .info-item .label {{ color:#777; font-size:12px; text-transform:uppercase; letter-spacing:0.1em; }}
+                                .info-item .value {{ font-size:16px; font-weight:600; color:#1c1c1c; margin-top:4px; }}
+                                .badge {{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; font-size:13px; font-weight:600; color:#fff; background:linear-gradient(120deg, #B82132, #D2665A); }}
+                                .owner-info {{ display:flex; align-items:center; gap:12px; padding:14px 0 0; border-top:1px solid #f0f0f0; }}
+                                .owner-info img {{ width:60px; height:60px; border-radius:50%; object-fit:cover; border:2px solid #e5e5e5; }}
+                                .owner-info .initials {{ width:60px; height:60px; border-radius:50%; background:#e0e0e0; display:flex; align-items:center; justify-content:center; font-size:24px; color:#999; }}
+                                .owner-info .label {{ font-size:12px; color:#666; margin-bottom:2px; }}
+                                .owner-info .value {{ font-size:16px; font-weight:600; color:#1c1c1c; }}
+                                .status-row {{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }}
+                                .status-chip {{ font-size:13px; font-weight:600; padding:6px 16px; border-radius:999px; border:1px solid rgba(184,33,50,0.3); background:rgba(255,230,226,0.7); color:#B82132; }}
+                                @media (max-width: 600px) {{
+                                    .card {{ padding:20px; }}
+                                    .profile-container {{ flex-direction:column; align-items:center; }}
+                                    .info-grid {{ grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); }}
+                                }}
+                            </style>
+                        </head>
+                        <body>
+                            <div class="card">
+                                <div class="status-row">
+                                    <div>
+                                        <h2>Pet Quick Info</h2>
+                                        <h3>Aligned for caregivers</h3>
+                                    </div>
+                                    <span class="status-chip">{status_text}</span>
+                                </div>
+                                <div class="profile-container">
+                                    {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div class="profile-placeholder">No photo</div>'}
+                                    <div class="info-grid">
+                                        <div class="info-item">
+                                            <p class="label">Name</p>
+                                            <p class="value">{pet_name}</p>
+                                        </div>
+                                        <div class="info-item">
+                                            <p class="label">Breed</p>
+                                            <p class="value">{pet_breed}</p>
+                                        </div>
+                                        <div class="info-item">
+                                            <p class="label">Age</p>
+                                            <p class="value">{pet_age if pet_age else 'Unknown'}</p>
+                                        </div>
+                                        <div class="info-item">
+                                            <p class="label">Weight</p>
+                                            <p class="value">{pet_weight if pet_weight else 'Not specified'}</p>
+                                        </div>
+                                        <div class="info-item">
+                                            <p class="label">Gender</p>
+                                            <p class="value">{pet_gender}</p>
+                                        </div>
+                                        <div class="info-item">
+                                            <p class="label">Health</p>
+                                            <p class="value">{pet_health}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="owner-info">
+                                    {f'<img src="{owner_profile_picture}" alt="{owner_name}" class="owner-avatar">' if owner_profile_picture else '<div class="initials">👤</div>'}
+                                    <div>
+                                        <p class="label">Owner</p>
+                                        <p class="value">{owner_name}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
             """
             return make_response(html, 200, {"Content-Type": "text/html"})
 
