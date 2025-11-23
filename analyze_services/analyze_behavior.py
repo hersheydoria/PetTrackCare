@@ -1430,7 +1430,7 @@ def public_pet_page(pet_id):
                                         <h2>Pet Quick Info</h2>
                                         <h3>Aligned for caregivers</h3>
                                     </div>
-                                    <span class="status-chip">{pet_health}</span>
+                                    <span class="status-chip">{status_text}</span>
                                 </div>
                                 <div class="profile-container">
                                     {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div class="profile-placeholder">No photo</div>'}
