@@ -1329,13 +1329,19 @@ def public_pet_page(pet_id):
         else:
             risk_color = "#666666"
 
-        status_text = "Healthy"
-        try:
-            lr = str(latest_risk).lower()
-            if ("high" in lr) or ("medium" in lr):
-                status_text = "Unhealthy"
-        except Exception:
+        health_flag = str(pet_health or "").strip().lower()
+        if health_flag == "bad":
+            status_text = "Unhealthy"
+        elif health_flag == "good":
             status_text = "Healthy"
+        else:
+            status_text = "Healthy"
+            try:
+                lr = str(latest_risk).lower()
+                if ("high" in lr) or ("medium" in lr):
+                    status_text = "Unhealthy"
+            except Exception:
+                status_text = "Healthy"
 
         # Build care tips for display using recent logs + current risk from analysis
         df_recent = fetch_logs_df(pet_id, limit=60)
@@ -1424,7 +1430,7 @@ def public_pet_page(pet_id):
                                         <h2>Pet Quick Info</h2>
                                         <h3>Aligned for caregivers</h3>
                                     </div>
-                                    <span class="status-chip">{status_text}</span>
+                                    <span class="status-chip">{pet_health}</span>
                                 </div>
                                 <div class="profile-container">
                                     {f'<img src="{pet_profile_picture}" alt="{pet_name}" class="profile-img">' if pet_profile_picture else '<div class="profile-placeholder">No photo</div>'}
@@ -1448,10 +1454,6 @@ def public_pet_page(pet_id):
                                         <div class="info-item">
                                             <p class="label">Gender</p>
                                             <p class="value">{pet_gender}</p>
-                                        </div>
-                                        <div class="info-item">
-                                            <p class="label">Health</p>
-                                            <p class="value">{pet_health}</p>
                                         </div>
                                     </div>
                                 </div>
