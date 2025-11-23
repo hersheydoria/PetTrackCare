@@ -3562,7 +3562,7 @@ Future<void> pickAndUploadImage() async {
                               ),
                               SizedBox(height: 12),
                               Text(
-                                '© 2024 PetTrackCare. All rights reserved.',
+                                '© 2025 PetTrackCare. All rights reserved.',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: Colors.grey[600],

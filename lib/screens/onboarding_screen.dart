@@ -34,7 +34,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     {
       'title': 'Pet Health Monitoring',
       'subtitle': 'Track Your Pet\'s Wellbeing',
-      'description': 'Log daily behaviors, monitor sleep patterns, track moods, and get health insights for your pets.',
+      'description': 'Log daily food and water intake, bathroom habits, activity level, and clinical signs. The system analyzes your pet\'s behavior logs and generates actionable health insights.',
       'icon': Icons.favorite,
       'color': coral,
     },

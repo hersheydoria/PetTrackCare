@@ -811,6 +811,8 @@ def analyze_pet(pet_id):
 def analyze_endpoint():
     data = request.get_json()
     pet_id = data.get("pet_id")
+    contact_number = data.get("contact_number")
+    contact_number = contact_number.strip() if isinstance(contact_number, str) else None
     if not pet_id:
         return jsonify({"error": "pet_id required"}), 400
 
@@ -911,6 +913,7 @@ def analyze_endpoint():
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
+    merged["contact_number"] = contact_number
     
     # Analyze historical patterns FIRST (before creating notice) to check persistence
     historical_context = analyze_illness_duration_and_patterns(df)
@@ -1293,6 +1296,14 @@ def public_pet_page(pet_id):
             except Exception as e:
                 print(f"DEBUG: Failed to fetch owner profile picture: {e}")
 
+        contact_number = request.args.get("contact")
+        if isinstance(contact_number, str):
+            contact_number = contact_number.strip()
+            if contact_number == "":
+                contact_number = None
+        else:
+            contact_number = None
+
         # Get current illness risk from fresh analysis (predictions table deprecated)
         # Fetch fresh analysis from /analyze endpoint to get latest prediction
         latest_prediction_text = ""
@@ -1371,19 +1382,14 @@ def public_pet_page(pet_id):
         future_predictions = []
         future_html = ""
 
-        # Determine if pet is unhealthy for conditional care tips display
-        is_unhealthy = status_text == "Unhealthy"
-        
-        # Build care tips section only if unhealthy
-        care_tips_section = ""
-        if is_unhealthy:
-            care_tips_section = f"""
-                  <hr/>
-                  <h4>Care Tips</h4>
-                  <p><strong>What to do</strong></p>
-                  <ul>{actions_html}</ul>
-                  <p><strong>What to expect</strong></p>
-                  <ul>{expectations_html}</ul>
+        owner_contact_html = ""
+        if contact_number:
+            safe_contact = contact_number.replace('<', '').replace('>', '')
+            owner_contact_html = f"""
+                                    <div class=\"owner-contact\">
+                                        <p class=\"label\">Contact</p>
+                                        <a href=\"tel:{safe_contact}\" class=\"value\">{safe_contact}</a>
+                                    </div>
             """
 
         if "text/html" in request.headers.get("Accept", ""):
@@ -1410,6 +1416,8 @@ def public_pet_page(pet_id):
                                 .info-item .value {{ font-size:16px; font-weight:600; color:#1c1c1c; margin-top:4px; }}
                                 .badge {{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; font-size:13px; font-weight:600; color:#fff; background:linear-gradient(120deg, #B82132, #D2665A); }}
                                 .owner-info {{ display:flex; align-items:center; gap:12px; padding:14px 0 0; border-top:1px solid #f0f0f0; }}
+                                .owner-contact {{ margin-left:auto; text-align:right; display:flex; flex-direction:column; gap:4px; }}
+                                .owner-contact .value {{ color:#1c1c1c; text-decoration:none; font-weight:600; }}
                                 .owner-info img {{ width:60px; height:60px; border-radius:50%; object-fit:cover; border:2px solid #e5e5e5; }}
                                 .owner-info .initials {{ width:60px; height:60px; border-radius:50%; background:#e0e0e0; display:flex; align-items:center; justify-content:center; font-size:24px; color:#999; }}
                                 .owner-info .label {{ font-size:12px; color:#666; margin-bottom:2px; }}
@@ -1428,7 +1436,7 @@ def public_pet_page(pet_id):
                                 <div class="status-row">
                                     <div>
                                         <h2>Pet Quick Info</h2>
-                                        <h3>Aligned for caregivers</h3>
+                                        <h3>If seen, please contact the owner immediately.</h3>
                                     </div>
                                     <span class="status-chip">{status_text}</span>
                                 </div>
@@ -1463,6 +1471,7 @@ def public_pet_page(pet_id):
                                         <p class="label">Owner</p>
                                         <p class="value">{owner_name}</p>
                                     </div>
+                                    {owner_contact_html}
                                 </div>
                             </div>
                         </body>
@@ -1483,6 +1492,7 @@ def public_pet_page(pet_id):
                 "owner_name": owner_name,
                 "owner_email": owner_email,
                 "owner_role": owner_role,
+                "contact_number": contact_number,
             },
             "latest_prediction": {
                 "text": latest_prediction_text,

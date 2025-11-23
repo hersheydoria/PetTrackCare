@@ -130,9 +130,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   List<Widget> _healthInsights = []; // Health insights from latest log
 
   // 🔹 Moved from local scope to state variables
-  String? _selectedMood;
   String? _activityLevel;
-  String? _notes;
 
   // New health tracking fields
   String? _foodIntake; // "Not Eating", "Eating Less", "Normal", "Eating More"
@@ -150,7 +148,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   
   // Backend messaging about analysis quality and data sufficiency
   Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
-  Map<String, dynamic>? _modelNotice; // tells user about analysis method (ML vs rule-based)
   Map<String, dynamic>? _healthGuidance; // evidence-based health guidance based on detected symptoms
   Map<String, dynamic>? _illnessRiskNotice; // illness risk status (low/medium/high)
 
@@ -171,13 +168,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   final TextEditingController _rewardAmountController = TextEditingController();
   final TextEditingController _customMessageController = TextEditingController();
   final TextEditingController _specialNotesController = TextEditingController();
+  bool _includeContactInQr = false;
+  final TextEditingController _qrContactController = TextEditingController();
   String _urgencyLevel = 'High';
   bool _hasReward = false;
-
-
-  final List<String> moods = [
-    "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
-  ];
 
   // Food Intake & Weight-Related Behavior
   final List<String> foodIntakeOptions = [
@@ -771,11 +765,17 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     final requestId = '${petId}_${DateTime.now().millisecondsSinceEpoch}';
     _currentAnalysisRequestId = requestId;
     
+    final contactNumber = _includeContactInQr ? _qrContactController.text.trim() : null;
+    final requestBody = {'pet_id': petId};
+    if (contactNumber?.isNotEmpty == true) {
+      requestBody['contact_number'] = contactNumber;
+    }
+
     try {
       final resp = await http.post(
         Uri.parse(backendUrl),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pet_id': petId}),
+        body: jsonEncode(requestBody),
       ).timeout(
         Duration(seconds: 8), // OPTIMIZATION: Reduced timeout from 10s to 8s for faster feedback
         onTimeout: () => throw TimeoutException('Analysis request timed out'),
@@ -826,7 +826,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
           // Parse data_notice and model_notice from backend response
           _dataNotice = body['data_notice'] as Map<String, dynamic>?;
-          _modelNotice = body['model_notice'] as Map<String, dynamic>?;
           _healthGuidance = body['health_guidance'] as Map<String, dynamic>?;
           _illnessRiskNotice = body['illness_risk_notice'] as Map<String, dynamic>?;
         });
@@ -1112,16 +1111,18 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=0');
       if (kDebugMode) print('🔍 Fetching address for: $lat, $lng');
       
-      final resp = await http.get(
-        url, 
-        headers: {'User-Agent': 'PetTrackCare/1.0 (pettrackcare.app)'}
-      ).timeout(
-        Duration(seconds: 15), // Increased from 8 to 15 seconds to handle network latency
-        onTimeout: () {
-          if (kDebugMode) print('⏱️ Reverse geocoding timeout for lat: $lat, lng: $lng');
-          throw TimeoutException('Reverse geocoding request timed out after 15 seconds');
-        }
-      );
+      final resp = await http
+          .get(
+            url,
+            headers: {'User-Agent': 'PetTrackCare/1.0 (pettrackcare.app)'},
+          )
+          .timeout(
+            Duration(seconds: 15),
+            onTimeout: () {
+              if (kDebugMode) print('⏱️ Reverse geocoding timeout for lat: $lat, lng: $lng');
+              throw TimeoutException('Reverse geocoding request timed out after 15 seconds');
+            },
+          );
       
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -1217,9 +1218,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   @override
   void initState() {
     super.initState();
+    final contactNumber = user?.userMetadata?['phone']?.toString();
+    if (contactNumber?.isNotEmpty == true) {
+      _qrContactController.text = contactNumber!;
+    }
     _tabController = TabController(length: 3, vsync: this);
     _fetchPets();
     
+    _loadQrContactPreference();
     // Register callback for when location data is migrated from Firebase
     _autoMigrationService.setOnLocationDataMigrated(() {
       print('🔄 Location data migration callback triggered - refreshing location display');
@@ -1364,6 +1370,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _rewardAmountController.dispose();
     _customMessageController.dispose();
     _specialNotesController.dispose();
+    _qrContactController.dispose();
     _tabController.dispose();
     // Unsubscribe from realtime listeners
     if (_selectedPetChannel != null) {
@@ -4243,15 +4250,67 @@ void _disconnectDevice() async {
     }
   }
 
+  String _buildQrPayload(String baseUrl) {
+    if (!_includeContactInQr) return baseUrl;
+    final contact = _qrContactController.text.trim();
+    if (contact.isEmpty) return baseUrl;
+    final separator = baseUrl.contains('?') ? '&' : '?';
+    final encodedContact = Uri.encodeComponent(contact);
+    return '$baseUrl${separator}contact=$encodedContact';
+  }
+
+  Future<void> _confirmContactNumber() async {
+    final contact = _qrContactController.text.trim();
+    if (contact.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Enter a contact number before including it in the QR code.')),
+      );
+      return;
+    }
+    setState(() {
+      _includeContactInQr = true;
+    });
+    FocusScope.of(context).unfocus();
+    await _saveQrContactPreference(include: true);
+  }
+
+  Future<void> _saveQrContactPreference({bool? include}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final contact = _qrContactController.text.trim();
+    if (contact.isNotEmpty) {
+      await prefs.setString('qr_shared_contact', contact);
+    } else {
+      await prefs.remove('qr_shared_contact');
+    }
+    await prefs.setBool('qr_include_contact', include ?? _includeContactInQr);
+  }
+
+  Future<void> _loadQrContactPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedContact = prefs.getString('qr_shared_contact');
+    final storedInclude = prefs.getBool('qr_include_contact') ?? false;
+    if (storedContact != null && storedContact.isNotEmpty) {
+      _qrContactController.text = storedContact;
+    }
+    if (mounted) {
+      setState(() {
+        _includeContactInQr = storedInclude && (storedContact?.isNotEmpty == true);
+      });
+    }
+  }
+
   Widget _buildQRCodeSection() {
     if (_selectedPet == null) {
       return _buildTabContent('No pet selected');
     }
 
+    final contactTextValue = _qrContactController.text.trim();
+    final hasContactInput = contactTextValue.isNotEmpty;
+
     // Build a public URL that opens the pet info page (works even without the app)
     final baseBackend = backendUrl.replaceAll(RegExp(r'/analyze/?\$'), '');
     final publicUrl = '$baseBackend/pet/${_selectedPet!['id']}';
-    final payloadStr = publicUrl;
+    final payloadStr = _buildQrPayload(publicUrl);
 
     return Container(
       decoration: BoxDecoration(
@@ -4330,6 +4389,99 @@ void _disconnectDevice() async {
             ),
 
             SizedBox(height: 24),
+
+            // Contact sharing preference card (keep above the QR so it's visible)
+            Container(
+              padding: EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey.shade200),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 10,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Include contact number in QR',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: deepRed,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Optional: embed a phone number so whoever scans the QR can reach you immediately.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    activeColor: deepRed,
+                    inactiveThumbColor: Colors.grey.shade600,
+                    inactiveTrackColor: Colors.grey.shade300,
+                    value: _includeContactInQr,
+                    onChanged: (value) async {
+                      if (value && !hasContactInput) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Type a contact number before turning on this option.')),
+                        );
+                        return;
+                      }
+                      setState(() => _includeContactInQr = value);
+                      await _saveQrContactPreference(include: value);
+                    },
+                    tileColor: Colors.grey.shade50,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _qrContactController,
+                          keyboardType: TextInputType.phone,
+                          textInputAction: TextInputAction.done,
+                          onChanged: (_) => setState(() {}),
+                          onSubmitted: (_) => _confirmContactNumber(),
+                          decoration: InputDecoration(
+                            labelText: 'Contact number to share',
+                            prefixIcon: Icon(Icons.phone, color: deepRed),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      ElevatedButton(
+                        onPressed: hasContactInput ? _confirmContactNumber : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: deepRed,
+                          padding: EdgeInsets.symmetric(vertical: 14, horizontal: 22),
+                        ),
+                        child: Text('Enter'),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    _includeContactInQr
+                        ? 'This number is encoded inside the QR payload and displayed on the pet info page.'
+                        : 'Enter a contact number first, then press Enter to enable sharing via the QR code.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ),
+
+            SizedBox(height: 16),
 
             // QR Code Section
             Container(
@@ -4648,7 +4800,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Link: $publicUrl',
+                            'Link: $payloadStr',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.blue.shade700,
@@ -4730,9 +4882,7 @@ void _disconnectDevice() async {
 
   void _clearBehaviorForm() {
     setState(() {
-      _selectedMood = null;
       _activityLevel = null;
-      _notes = null;
       _foodIntake = null;
       _waterIntake = null;
       _bathroomHabits = null;
@@ -5177,15 +5327,56 @@ void _disconnectDevice() async {
     }
 
     // Bathroom habits insights
-    if (normalizedBathroom.contains('diarrhea') || normalizedBathroom.contains('constipation')) {
+
+    if (normalizedBathroom.contains('diarrhea')) {
       insights.add(_buildInsightItem(
-        'Digestive Issue Detected',
-        'Monitor closely and consider consulting a veterinarian if it persists.',
+        'Diarrhea Observed',
+        'Loose stools can indicate sensitive digestion, infection, or dietary upset; track frequency and mucus/blood.',
+        Icons.health_and_safety,
+        Colors.red,
+      ));
+    }
+    if (normalizedBathroom.contains('constipation')) {
+      insights.add(_buildInsightItem(
+        'Constipation Warning',
+        'Hard or infrequent stools may require increased fiber, hydration, or veterinary review.',
+        Icons.health_and_safety,
+        Colors.orange,
+      ));
+    }
+    if (normalizedBathroom.contains('frequent urination') ||
+        (normalizedBathroom.contains('frequent') && normalizedBathroom.contains('urination'))) {
+      insights.add(_buildInsightItem(
+        'Frequent Urination',
+        'Frequent trips to pee can signal a urinary tract issue or diabetes; note color, volume, and wet spots.',
+        Icons.water_drop,
+        Colors.orange,
+      ));
+    }
+    if (normalizedBathroom.contains('straining')) {
+      insights.add(_buildInsightItem(
+        'Straining to Go',
+        'Straining may mean discomfort, a blockage, or inflammation; do not delay a vet check if it continues.',
         Icons.warning,
         Colors.red,
       ));
     }
-
+    if (normalizedBathroom.contains('blood')) {
+      insights.add(_buildInsightItem(
+        'Blood in Urine or Stool',
+        'Blood indicates a serious concern—seek veterinary care immediately to identify the source.',
+        Icons.error,
+        Colors.red,
+      ));
+    }
+    if (normalizedBathroom.contains('accident') || normalizedBathroom.contains('soiling') || normalizedBathroom.contains('house soiling')) {
+      insights.add(_buildInsightItem(
+        'House Soiling or Accidents',
+        'Inappropriate toileting can point to stress, urinary issues, or mobility changes—record where/when it happens.',
+        Icons.home,
+        Colors.orange,
+      ));
+    }
     // Activity insights
     if (normalizedActivity.contains('low')) {
       insights.add(_buildInsightItem(
@@ -6217,9 +6408,7 @@ void _disconnectDevice() async {
   void _showBehaviorModal(BuildContext context, DateTime selectedDate, {Map<String, dynamic>? existing}) {
     // Initialize form values from existing data if editing
     if (existing != null) {
-      _selectedMood = existing['mood']?.toString();
       _activityLevel = existing['activity_level']?.toString();
-      _notes = existing['notes']?.toString();
       _foodIntake = existing['food_intake']?.toString();
       _waterIntake = existing['water_intake']?.toString();
       _bathroomHabits = existing['bathroom_habits']?.toString();
