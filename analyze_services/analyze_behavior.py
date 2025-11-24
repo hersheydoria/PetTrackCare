@@ -1324,7 +1324,6 @@ def analyze_endpoint():
     health_issues = _merge_health_issue_lists(behavioral_concerns, recent_health_issues)
     if symptoms_detected:
         symptom_entries = []
-        context_label = _format_context_date(latest_log_date)
         for symptom in symptoms_detected:
             description = str(symptom).strip()
             if not description:
@@ -1336,7 +1335,6 @@ def analyze_endpoint():
                 "reference": _infer_health_reference_key(description),
                 "urgency": "medium",
                 "source": "symptom",
-                **({"context": context_label} if context_label else {})
             })
         health_issues = _merge_health_issue_lists(health_issues, symptom_entries)
 
@@ -2115,20 +2113,8 @@ def _infer_health_reference_key(description: str | None) -> str | None:
                 return key
     return None
 
-def _format_context_date(log_date) -> str | None:
-    if log_date is None:
-        return None
-    if isinstance(log_date, date):
-        return log_date.strftime("%b %d")
-    try:
-        parsed = pd.to_datetime(log_date)
-        return parsed.strftime("%b %d")
-    except Exception:
-        return str(log_date)
-
 def _extract_health_concerns_from_row(row, *, source: str, log_date) -> list[dict]:
     issues = []
-    context_label = _format_context_date(log_date)
     def _make_issue(description, feature, reference, urgency, value):
         issue = {
             "description": description,
@@ -2138,8 +2124,6 @@ def _extract_health_concerns_from_row(row, *, source: str, log_date) -> list[dic
             "urgency": urgency,
             "source": source
         }
-        if context_label:
-            issue["context"] = f"{context_label}"
         return issue
 
     activity_lower = str(row.get('activity_level', '')).lower()
@@ -2212,7 +2196,6 @@ def _extract_health_concerns_from_row(row, *, source: str, log_date) -> list[dic
             "reference": reference,
             "urgency": "medium",
             "source": source,
-            **({"context": context_label} if context_label else {})
         })
 
     return issues
@@ -2239,7 +2222,6 @@ def _collect_recent_health_concerns(df, days=7):
         key = (
             issue.get('reference'),
             issue.get('description'),
-            issue.get('context'),
             issue.get('feature')
         )
         if key in seen:
@@ -2257,7 +2239,6 @@ def _merge_health_issue_lists(primary: list[dict], secondary: list[dict]) -> lis
         key = (
             issue.get('reference'),
             issue.get('description'),
-            issue.get('context'),
             issue.get('feature')
         )
         if key in seen:
@@ -2312,10 +2293,6 @@ def generate_health_guidance(health_issues, df=None, historical_context=None, an
             value_str = str(issue_value).strip()
             if value_str and value_str.lower() not in description.lower():
                 display_description = f"{description} (current: {value_str})"
-
-        context = issue.get("context")
-        if context:
-            display_description = f"{display_description} (logged {context})"
 
         if not reference:
             reference = _infer_health_reference_key(description)
