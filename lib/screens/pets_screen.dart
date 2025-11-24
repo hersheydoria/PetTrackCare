@@ -5932,13 +5932,16 @@ void _disconnectDevice() async {
 
   Widget _buildHealthGuidanceCard(Map<String, dynamic> guidance) {
     final urgency = guidance['urgency']?.toString() ?? 'none';
-    final detectedSymptoms = (guidance['detected_symptoms'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final recommendations = (guidance['recommendations'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final detectedHealthIssues = (guidance['detected_health_issues'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final int? illnessDurationDays = (guidance['illness_duration_days'] as num?)?.toInt();
     final bool persistentIllness = guidance['is_persistent_illness'] == true;
+    final int? analysisWindowDays = (guidance['analysis_window_days'] as num?)?.toInt();
     String? analysisCoverage;
-    if (illnessDurationDays != null && illnessDurationDays > 0) {
+    if (analysisWindowDays != null && analysisWindowDays > 0) {
+      final windowLabel = '$analysisWindowDays day${analysisWindowDays == 1 ? '' : 's'}';
+      analysisCoverage = 'Health concerns detected across the past $windowLabel of logs.';
+    } else if (illnessDurationDays != null && illnessDurationDays > 0) {
       final durationLabel = '$illnessDurationDays day${illnessDurationDays == 1 ? '' : 's'}';
       analysisCoverage = persistentIllness
           ? 'Health concerns persistent for $durationLabel of unhealthy logs.'
@@ -6035,43 +6038,10 @@ void _disconnectDevice() async {
                     ),
                   ),
                   SizedBox(height: 8),
-                  ...detectedHealthIssues.take(5).map((issue) => Padding(
+                  ...detectedHealthIssues.map((issue) => Padding(
                     padding: EdgeInsets.only(bottom: 4),
                     child: Text(
                       '• $issue',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFFB82132).withOpacity(0.85),
-                        height: 1.4,
-                      ),
-                    ),
-                  )).toList(),
-                ],
-              ),
-            ),
-          ],
-          
-          // Detected clinical symptoms (actual physical signs)
-          if (detectedSymptoms.isNotEmpty) ...[
-            SizedBox(height: 10),
-            Padding(
-              padding: EdgeInsets.only(left: 30),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Detected Clinical Signs:',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFB82132),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  ...detectedSymptoms.take(5).map((symptom) => Padding(
-                    padding: EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      '• $symptom',
                       style: TextStyle(
                         fontSize: 13,
                         color: Color(0xFFB82132).withOpacity(0.85),

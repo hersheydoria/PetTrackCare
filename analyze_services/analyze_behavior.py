@@ -1,7 +1,7 @@
 import os
 import re
 import html
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, make_response
 import pandas as pd
@@ -1000,6 +1000,7 @@ def analyze_endpoint():
     water_intake = "unknown"
     bathroom_habits = "unknown"
     symptoms_detected = []
+    latest_log_date = None
     try:
         if not df.empty:
             latest = df.sort_values("log_date", ascending=False).iloc[0]
@@ -1007,6 +1008,7 @@ def analyze_endpoint():
             food_intake = str(latest.get("food_intake", "") or "Unknown").lower()
             water_intake = str(latest.get("water_intake", "") or "Unknown").lower()
             bathroom_habits = str(latest.get("bathroom_habits", "") or "Unknown").lower()
+            latest_log_date = latest.get("log_date")
             
             # Count symptoms from latest log
             symptom_count = 0
@@ -1318,20 +1320,28 @@ def analyze_endpoint():
     else:
         _add_insight('symptoms', 'No clinical symptoms were reported in the latest log.')
 
-    # Generate health guidance based on detected symptoms or behavioral changes
-    # Combine behavioral concerns with any detected clinical symptoms for comprehensive health guidance
-    health_issues = list(behavioral_concerns)
+    recent_health_issues, window_days = _collect_recent_health_concerns(df, days=7)
+    health_issues = _merge_health_issue_lists(behavioral_concerns, recent_health_issues)
     if symptoms_detected:
+        symptom_entries = []
+        context_label = _format_context_date(latest_log_date)
         for symptom in symptoms_detected:
-            description = str(symptom).strip() if symptom is not None else ""
-            if description:
-                health_issues.append({
-                    "description": description,
-                    "source": "symptom",
-                    "value": description
-                })
+            description = str(symptom).strip()
+            if not description:
+                continue
+            symptom_entries.append({
+                "description": description,
+                "feature": "symptom",
+                "value": description,
+                "reference": _infer_health_reference_key(description),
+                "urgency": "medium",
+                "source": "symptom",
+                **({"context": context_label} if context_label else {})
+            })
+        health_issues = _merge_health_issue_lists(health_issues, symptom_entries)
+
     if health_issues:
-        health_guidance = generate_health_guidance(health_issues, df, historical_context)
+        health_guidance = generate_health_guidance(health_issues, df, historical_context, analysis_window_days=window_days or 7)
         merged["health_guidance"] = health_guidance
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(health_issues)} health issue(s) ({len(behavioral_concerns)} behavioral + {len(symptoms_detected) if symptoms_detected else 0} clinical)")
     
@@ -2105,7 +2115,158 @@ def _infer_health_reference_key(description: str | None) -> str | None:
                 return key
     return None
 
-def generate_health_guidance(health_issues, df=None, historical_context=None):
+def _format_context_date(log_date) -> str | None:
+    if log_date is None:
+        return None
+    if isinstance(log_date, date):
+        return log_date.strftime("%b %d")
+    try:
+        parsed = pd.to_datetime(log_date)
+        return parsed.strftime("%b %d")
+    except Exception:
+        return str(log_date)
+
+def _extract_health_concerns_from_row(row, *, source: str, log_date) -> list[dict]:
+    issues = []
+    context_label = _format_context_date(log_date)
+    def _make_issue(description, feature, reference, urgency, value):
+        issue = {
+            "description": description,
+            "feature": feature,
+            "value": value,
+            "reference": reference,
+            "urgency": urgency,
+            "source": source
+        }
+        if context_label:
+            issue["context"] = f"{context_label}"
+        return issue
+
+    activity_lower = str(row.get('activity_level', '')).lower()
+    food_lower = str(row.get('food_intake', '')).lower()
+    water_lower = str(row.get('water_intake', '')).lower()
+    bathroom_lower = str(row.get('bathroom_habits', '')).lower()
+
+    if 'low activity' in activity_lower or 'lethargy' in activity_lower or activity_lower == 'low':
+        issues.append(_make_issue('Activity decreased significantly', 'activity_level', 'lethargy', 'high', row.get('activity_level')))
+    elif 'restlessness' in activity_lower or 'night' in activity_lower:
+        issues.append(_make_issue('Restlessness or disrupted sleep patterns', 'activity_level', 'restlessness_night', 'medium', row.get('activity_level')))
+    elif 'weakness' in activity_lower or 'collapse' in activity_lower:
+        issues.append(_make_issue('Weakness or inability to move normally', 'activity_level', 'difficulty_moving', 'high', row.get('activity_level')))
+    elif 'high activity' in activity_lower or 'hyperactivity' in activity_lower:
+        issues.append(_make_issue('Unusual hyperactivity or excessive energy', 'activity_level', 'hyperactivity', 'medium', row.get('activity_level')))
+
+    if 'not eating' in food_lower or 'loss of appetite' in food_lower:
+        issues.append(_make_issue('Loss of appetite or refusing to eat', 'food_intake', 'loss_appetite', 'medium', row.get('food_intake')))
+    elif 'eating less' in food_lower:
+        issues.append(_make_issue('Reduced appetite', 'food_intake', 'loss_appetite', 'low', row.get('food_intake')))
+    elif 'eating more' in food_lower or 'increased appetite' in food_lower:
+        issues.append(_make_issue('Increased appetite or excessive eating', 'food_intake', 'increased_hunger', 'low', row.get('food_intake')))
+    elif 'weight loss' in food_lower:
+        issues.append(_make_issue('Unexplained weight loss', 'food_intake', 'weight_loss', 'medium', row.get('food_intake')))
+    elif 'weight gain' in food_lower:
+        issues.append(_make_issue('Unexplained weight gain', 'food_intake', 'weight_gain', 'low', row.get('food_intake')))
+
+    if 'not drinking' in water_lower:
+        issues.append(_make_issue('Not drinking water', 'water_intake', 'not_drinking', 'high', row.get('water_intake')))
+    elif 'drinking less' in water_lower:
+        issues.append(_make_issue('Reduced water intake', 'water_intake', 'drinking_less', 'medium', row.get('water_intake')))
+    elif 'excessive drinking' in water_lower or 'drinking more' in water_lower:
+        issues.append(_make_issue('Increased thirst/excessive drinking', 'water_intake', 'excessive_thirst', 'medium', row.get('water_intake')))
+
+    if 'diarrhea' in bathroom_lower:
+        issues.append(_make_issue('Diarrhea or loose stools', 'bathroom_habits', 'diarrhea', 'high', row.get('bathroom_habits')))
+    elif 'constipation' in bathroom_lower:
+        issues.append(_make_issue('Constipation', 'bathroom_habits', 'constipation', 'medium', row.get('bathroom_habits')))
+    elif 'frequent urination' in bathroom_lower:
+        issues.append(_make_issue('Frequent urination', 'bathroom_habits', 'excessive_urination', 'medium', row.get('bathroom_habits')))
+    elif 'straining' in bathroom_lower:
+        issues.append(_make_issue('Straining to urinate or defecate', 'bathroom_habits', 'straining_urinate', 'high', row.get('bathroom_habits')))
+    elif 'blood' in bathroom_lower:
+        issues.append(_make_issue('Blood in urine or stool', 'bathroom_habits', 'blood_urine', 'high', row.get('bathroom_habits')))
+    elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
+        issues.append(_make_issue('Inappropriate toileting or house soiling', 'bathroom_habits', 'house_soiling', 'medium', row.get('bathroom_habits')))
+
+    # Include clinical symptoms from logs
+    symptoms_raw = row.get('symptoms')
+    try:
+        if isinstance(symptoms_raw, str):
+            symptoms = json.loads(symptoms_raw)
+        else:
+            symptoms = symptoms_raw or []
+    except Exception:
+        symptoms = []
+
+    for symptom in symptoms:
+        if not symptom:
+            continue
+        desc = str(symptom).strip()
+        lower = desc.lower()
+        if lower in ["none of the above", "none", "", "unknown"]:
+            continue
+        reference = _infer_health_reference_key(desc)
+        issues.append({
+            "description": desc,
+            "feature": "symptom",
+            "value": desc,
+            "reference": reference,
+            "urgency": "medium",
+            "source": source,
+            **({"context": context_label} if context_label else {})
+        })
+
+    return issues
+
+def _collect_recent_health_concerns(df, days=7):
+    if df is None or df.empty:
+        return [], 0
+    df_dates = pd.to_datetime(df['log_date'])
+    latest = df_dates.max()
+    if pd.isna(latest):
+        return [], 0
+    window_start = (latest - timedelta(days=days - 1)).date()
+    recent = df[df['log_date'] >= window_start]
+    if recent.empty:
+        return [], 0
+    earliest = pd.to_datetime(recent['log_date']).min()
+    actual_window = max(1, (latest.date() - earliest.date()).days + 1)
+    issues = []
+    for _, row in recent.iterrows():
+        issues.extend(_extract_health_concerns_from_row(row, source='7day', log_date=row.get('log_date')))
+    unique = []
+    seen = set()
+    for issue in issues:
+        key = (
+            issue.get('reference'),
+            issue.get('description'),
+            issue.get('context'),
+            issue.get('feature')
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(issue)
+    return unique, min(actual_window, days)
+
+def _merge_health_issue_lists(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    merged = []
+    seen = set()
+    for issue in (primary or []) + (secondary or []):
+        if not isinstance(issue, dict):
+            continue
+        key = (
+            issue.get('reference'),
+            issue.get('description'),
+            issue.get('context'),
+            issue.get('feature')
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(issue)
+    return merged
+
+def generate_health_guidance(health_issues, df=None, historical_context=None, analysis_window_days: int | None = None):
     """
     Generate health guidance and recommendations based on detected health concerns.
     Uses HEALTH_SYMPTOMS_REFERENCE to provide evidence-based information.
@@ -2151,6 +2312,10 @@ def generate_health_guidance(health_issues, df=None, historical_context=None):
             value_str = str(issue_value).strip()
             if value_str and value_str.lower() not in description.lower():
                 display_description = f"{description} (current: {value_str})"
+
+        context = issue.get("context")
+        if context:
+            display_description = f"{display_description} (logged {context})"
 
         if not reference:
             reference = _infer_health_reference_key(description)
@@ -2227,6 +2392,7 @@ def generate_health_guidance(health_issues, df=None, historical_context=None):
         "pattern_context": context_insights,
         "illness_duration_days": historical_context.get('illness_duration_days') if historical_context else None,
         "is_persistent_illness": historical_context.get('is_persistent') if historical_context else False,
+        "analysis_window_days": analysis_window_days,
         "details": guidance_items
     }
 
