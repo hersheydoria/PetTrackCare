@@ -170,6 +170,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   final TextEditingController _specialNotesController = TextEditingController();
   String _urgencyLevel = 'High';
   bool _hasReward = false;
+  String? _lastMissingPostId;
 
   // Food Intake & Weight-Related Behavior
   final List<String> foodIntakeOptions = [
@@ -1882,6 +1883,10 @@ void _disconnectDevice() async {
            postId: postId,
          );
 
+        setState(() {
+          _lastMissingPostId = postId;
+        });
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -1894,7 +1899,7 @@ void _disconnectDevice() async {
                 label: 'View',
                 textColor: Colors.white,
                 onPressed: () {
-                  // Navigate to community screen to view the post
+                  _navigateToMissingCommunityPost();
                 },
               ),
             ),
@@ -1911,6 +1916,15 @@ void _disconnectDevice() async {
         }
       }
     }
+  }
+
+  void _navigateToMissingCommunityPost() {
+    final postId = _lastMissingPostId;
+    if (postId == null) return;
+    Navigator.of(context).pushNamed(
+      '/community',
+      arguments: {'postId': postId, 'scrollToPost': true},
+    );
   }
 
   // Enhanced missing modal with detailed information and options
