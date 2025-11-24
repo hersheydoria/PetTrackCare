@@ -313,7 +313,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                               ),
                               SizedBox(height: 4),
                               Text(
-                                'Stay in sync with pet caregivers',
+                                'Stay in sync with pet sitters',
                                 style: TextStyle(color: Colors.white70, fontSize: 13),
                               ),
                             ],

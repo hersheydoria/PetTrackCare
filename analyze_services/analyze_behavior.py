@@ -1,4 +1,6 @@
 import os
+import re
+import html
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, make_response
 import pandas as pd
@@ -805,14 +807,122 @@ def analyze_pet(pet_id):
     df = fetch_logs_df(pet_id)
     return analyze_pet_df(pet_id, df, prediction_date=datetime.utcnow().date().isoformat())
 
+# ------------------- Missing Alert Helpers -------------------
+MISSING_ALERT_PATTERNS = {
+    "custom_message": re.compile(r"📝 Additional Details:\s*(?P<value>.*?)(?=\n\n|$)", re.DOTALL),
+    "special_notes": re.compile(r"⚠️ Important Notes:\s*(?P<value>.*?)(?=\n\n|$)", re.DOTALL),
+    "emergency_contact": re.compile(r"📞 Emergency Contact:\s*(?P<value>[^\n]+)"),
+    "reward": re.compile(r"💰 Reward Offered:\s*₱\s*(?P<value>[^\n]+)")
+}
+URGENCY_LABELS = {
+    "🚨 CRITICAL MISSING PET ALERT 🚨": "Critical",
+    "⚠️ URGENT: MISSING PET ⚠️": "High",
+    "🔍 Missing Pet Alert": "Medium",
+}
+
+
+def _parse_missing_alert_content(content: str) -> dict:
+    if not content:
+        return {}
+    details: dict[str, str] = {}
+    for key, pattern in MISSING_ALERT_PATTERNS.items():
+        match = pattern.search(content)
+        if match:
+            value = match.group("value").strip()
+            if value:
+                details[key] = value
+    for token, label in URGENCY_LABELS.items():
+        if token in content:
+            details["urgency"] = label
+            break
+    details.setdefault("urgency", "Medium")
+    return details
+
+
+def _match_missing_alert_post(posts: list[dict], pet_id: str | None, owner_id: str | None, pet_name: str | None) -> dict | None:
+    normalized_name = (pet_name or "").strip().lower()
+    for post in posts:
+        if not post:
+            continue
+        post_pet_id = post.get("pet_id")
+        if pet_id and post_pet_id and str(post_pet_id) == str(pet_id):
+            return post
+    if owner_id or normalized_name:
+        for post in posts:
+            if not post:
+                continue
+            if owner_id and post.get("user_id") == owner_id:
+                content = (post.get("content") or "").lower()
+                if not normalized_name or normalized_name in content:
+                    return post
+    for post in posts:
+        if not post:
+            continue
+        content = (post.get("content") or "").lower()
+        if normalized_name and normalized_name in content:
+            return post
+    return None
+
+
+def get_latest_missing_alert_details(pet_id: str | None, pet_name: str | None, owner_id: str | None) -> dict | None:
+    try:
+        resp = supabase.table("community_posts").select("*").eq("type", "missing").order("created_at", desc=True).limit(12).execute()
+        posts = resp.data or []
+    except Exception as exc:
+        print(f"[DEBUG] Failed to load missing alert posts for pet {pet_id}: {exc}")
+        return None
+    post = _match_missing_alert_post(posts, pet_id, owner_id, pet_name)
+    if not post:
+        return None
+    parsed = _parse_missing_alert_content(post.get("content") or "")
+    details = {
+        "post_id": str(post.get("id")) if post.get("id") is not None else None,
+        "created_at": post.get("created_at"),
+        "urgency": parsed.get("urgency"),
+        "emergency_contact": parsed.get("emergency_contact"),
+        "reward": parsed.get("reward"),
+        "custom_message": parsed.get("custom_message"),
+        "special_notes": parsed.get("special_notes"),
+        "post_address": post.get("address"),
+        "latitude": post.get("latitude"),
+        "longitude": post.get("longitude"),
+    }
+    return {k: v for k, v in details.items() if v is not None}
+
+
+def _render_missing_alert_card(details: dict | None) -> str:
+    if not details:
+        return ""
+    rows: list[str] = []
+    def add_row(label: str, key: str):
+        value = details.get(key)
+        if value:
+            rows.append(f"""<div class=\"missing-detail-row\"><span class=\"missing-label\">{label}</span><span class=\"missing-value\">{html.escape(str(value))}</span></div>""")
+    add_row("Urgency", "urgency")
+    add_row("Reward", "reward")
+    add_row("Emergency Contact", "emergency_contact")
+    add_row("Custom Message", "custom_message")
+    add_row("Special Notes", "special_notes")
+    add_row("Location", "post_address")
+    content_html = "".join(rows) if rows else "<p class=\"missing-alert-empty\">Missing alert posted but no extra details were captured.</p>"
+    meta_html = ""
+    if details.get("created_at"):
+        meta_html = f"<div class=\"missing-alert-meta\">Posted: {html.escape(str(details['created_at']))}</div>"
+    return f"""
+        <div class=\"missing-alert-card\">
+            <div class=\"missing-alert-heading\">Missing Alert Details</div>
+            {content_html}
+            {meta_html}
+        </div>
+    """
+
+
 # ------------------- Flask API -------------------
  
 @app.route("/analyze", methods=["POST"])
 def analyze_endpoint():
     data = request.get_json()
     pet_id = data.get("pet_id")
-    contact_number = data.get("contact_number")
-    contact_number = contact_number.strip() if isinstance(contact_number, str) else None
     if not pet_id:
         return jsonify({"error": "pet_id required"}), 400
 
@@ -913,7 +1023,6 @@ def analyze_endpoint():
     merged["pet_id"] = pet_id  # Include pet_id in response for clarity
     merged["log_count"] = len(df)  # Include count of logs analyzed
     merged["breed"] = pet_breed  # Include breed for reference
-    merged["contact_number"] = contact_number
     
     # Analyze historical patterns FIRST (before creating notice) to check persistence
     historical_context = analyze_illness_duration_and_patterns(df)
@@ -1296,14 +1405,6 @@ def public_pet_page(pet_id):
             except Exception as e:
                 print(f"DEBUG: Failed to fetch owner profile picture: {e}")
 
-        contact_number = request.args.get("contact")
-        if isinstance(contact_number, str):
-            contact_number = contact_number.strip()
-            if contact_number == "":
-                contact_number = None
-        else:
-            contact_number = None
-
         # Get current illness risk from fresh analysis (predictions table deprecated)
         # Fetch fresh analysis from /analyze endpoint to get latest prediction
         latest_prediction_text = ""
@@ -1377,20 +1478,14 @@ def public_pet_page(pet_id):
         actions_html = "".join(f"<li>{a}</li>" for a in (care_tips.get("actions") or [])[:6]) or "<li>Ensure fresh water and rest today.</li>"
         expectations_html = "".join(f"<li>{e}</li>" for e in (care_tips.get("expectations") or [])[:6]) or "<li>Expect normal behavior with routine care.</li>"
 
+        pet_missing = bool(pet.get("is_missing"))
+        missing_alert_details = get_latest_missing_alert_details(pet.get("id"), pet_name, owner_id) if pet_missing else None
+        missing_alert_card_html = _render_missing_alert_card(missing_alert_details)
+
         # The 7-day future predictions feature has been removed.
         # Keep an empty placeholder so API responses maintain a stable shape.
         future_predictions = []
         future_html = ""
-
-        owner_contact_html = ""
-        if contact_number:
-            safe_contact = contact_number.replace('<', '').replace('>', '')
-            owner_contact_html = f"""
-                                    <div class=\"owner-contact\">
-                                        <p class=\"label\">Contact</p>
-                                        <a href=\"tel:{safe_contact}\" class=\"value\">{safe_contact}</a>
-                                    </div>
-            """
 
         if "text/html" in request.headers.get("Accept", ""):
             # Simple HTML with modal dialog - auto-open on load, responsive and scrollable
@@ -1422,6 +1517,51 @@ def public_pet_page(pet_id):
                                 .owner-info .initials {{ width:60px; height:60px; border-radius:50%; background:#e0e0e0; display:flex; align-items:center; justify-content:center; font-size:24px; color:#999; }}
                                 .owner-info .label {{ font-size:12px; color:#666; margin-bottom:2px; }}
                                 .owner-info .value {{ font-size:16px; font-weight:600; color:#1c1c1c; }}
+                                .missing-alert-card {{
+                                    margin-top: 16px;
+                                    padding: 14px 16px 12px;
+                                    border-radius: 14px;
+                                    border: 1px solid #ffe7e2;
+                                    background: #fff5f2;
+                                    box-shadow: 0 12px 28px rgba(184, 33, 50, 0.15);
+                                }}
+                                .missing-alert-heading {{
+                                    font-size: 15px;
+                                    font-weight: 600;
+                                    color: #b82132;
+                                    margin-bottom: 8px;
+                                    letter-spacing: 0.05em;
+                                }}
+                                .missing-detail-row {{
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: flex-start;
+                                    gap: 12px;
+                                    margin-bottom: 6px;
+                                }}
+                                .missing-label {{
+                                    font-size: 11px;
+                                    text-transform: uppercase;
+                                    letter-spacing: 0.08em;
+                                    color: #777;
+                                }}
+                                .missing-value {{
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    color: #1c1c1c;
+                                    text-align: right;
+                                }}
+                                .missing-alert-meta {{
+                                    margin-top: 10px;
+                                    font-size: 12px;
+                                    color: #444;
+                                    letter-spacing: 0.02em;
+                                }}
+                                .missing-alert-empty {{
+                                    font-size: 13px;
+                                    color: #666;
+                                    margin-bottom: 0;
+                                }}
                                 .status-row {{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }}
                                 .status-chip {{ font-size:13px; font-weight:600; padding:6px 16px; border-radius:999px; border:1px solid rgba(184,33,50,0.3); background:rgba(255,230,226,0.7); color:#B82132; }}
                                 @media (max-width: 600px) {{
@@ -1471,8 +1611,8 @@ def public_pet_page(pet_id):
                                         <p class="label">Owner</p>
                                         <p class="value">{owner_name}</p>
                                     </div>
-                                    {owner_contact_html}
                                 </div>
+                                {missing_alert_card_html}
                             </div>
                         </body>
                         </html>
@@ -1492,7 +1632,6 @@ def public_pet_page(pet_id):
                 "owner_name": owner_name,
                 "owner_email": owner_email,
                 "owner_role": owner_role,
-                "contact_number": contact_number,
             },
             "latest_prediction": {
                 "text": latest_prediction_text,
@@ -1505,6 +1644,7 @@ def public_pet_page(pet_id):
             "care_tips": care_tips,
             "health_status": status_text,
             "risk_color": risk_color,
+            "missing_alert": missing_alert_details,
         })
     except Exception as e:
         return make_response(f"<h3>Error: {str(e)}</h3>", 500)

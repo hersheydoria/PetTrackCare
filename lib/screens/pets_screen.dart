@@ -10,7 +10,7 @@ import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
 import 'package:flutter/services.dart'; // for Clipboard and HapticFeedback
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'dart:async'; 
+import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
@@ -168,8 +168,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   final TextEditingController _rewardAmountController = TextEditingController();
   final TextEditingController _customMessageController = TextEditingController();
   final TextEditingController _specialNotesController = TextEditingController();
-  bool _includeContactInQr = false;
-  final TextEditingController _qrContactController = TextEditingController();
   String _urgencyLevel = 'High';
   bool _hasReward = false;
 
@@ -765,11 +763,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     final requestId = '${petId}_${DateTime.now().millisecondsSinceEpoch}';
     _currentAnalysisRequestId = requestId;
     
-    final contactNumber = _includeContactInQr ? _qrContactController.text.trim() : null;
     final requestBody = {'pet_id': petId};
-    if (contactNumber?.isNotEmpty == true) {
-      requestBody['contact_number'] = contactNumber;
-    }
 
     try {
       final resp = await http.post(
@@ -1218,14 +1212,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   @override
   void initState() {
     super.initState();
-    final contactNumber = user?.userMetadata?['phone']?.toString();
-    if (contactNumber?.isNotEmpty == true) {
-      _qrContactController.text = contactNumber!;
-    }
     _tabController = TabController(length: 3, vsync: this);
     _fetchPets();
-    
-    _loadQrContactPreference();
     // Register callback for when location data is migrated from Firebase
     _autoMigrationService.setOnLocationDataMigrated(() {
       print('🔄 Location data migration callback triggered - refreshing location display');
@@ -1370,7 +1358,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _rewardAmountController.dispose();
     _customMessageController.dispose();
     _specialNotesController.dispose();
-    _qrContactController.dispose();
     _tabController.dispose();
     // Unsubscribe from realtime listeners
     if (_selectedPetChannel != null) {
@@ -1834,6 +1821,7 @@ void _disconnectDevice() async {
     _hasReward = false;
 
     _urgencyLevel = 'High';
+
 
     // Show enhanced modal
     final confirmed = await _showEnhancedMissingModal(
@@ -2704,7 +2692,7 @@ void _disconnectDevice() async {
   }
 
   // Helper widget for info rows
-  Widget _buildInfoRow(IconData icon, String label, String value) {
+  Widget _buildInfoRow(IconData icon, String label, String value, {int maxLines = 2}) {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -2728,7 +2716,7 @@ void _disconnectDevice() async {
               value,
               style: TextStyle(fontSize: 12),
               overflow: TextOverflow.ellipsis,
-              maxLines: 2,
+              maxLines: maxLines,
             ),
           ),
         ],
@@ -4250,67 +4238,13 @@ void _disconnectDevice() async {
     }
   }
 
-  String _buildQrPayload(String baseUrl) {
-    if (!_includeContactInQr) return baseUrl;
-    final contact = _qrContactController.text.trim();
-    if (contact.isEmpty) return baseUrl;
-    final separator = baseUrl.contains('?') ? '&' : '?';
-    final encodedContact = Uri.encodeComponent(contact);
-    return '$baseUrl${separator}contact=$encodedContact';
-  }
-
-  Future<void> _confirmContactNumber() async {
-    final contact = _qrContactController.text.trim();
-    if (contact.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Enter a contact number before including it in the QR code.')),
-      );
-      return;
-    }
-    setState(() {
-      _includeContactInQr = true;
-    });
-    FocusScope.of(context).unfocus();
-    await _saveQrContactPreference(include: true);
-  }
-
-  Future<void> _saveQrContactPreference({bool? include}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final contact = _qrContactController.text.trim();
-    if (contact.isNotEmpty) {
-      await prefs.setString('qr_shared_contact', contact);
-    } else {
-      await prefs.remove('qr_shared_contact');
-    }
-    await prefs.setBool('qr_include_contact', include ?? _includeContactInQr);
-  }
-
-  Future<void> _loadQrContactPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    final storedContact = prefs.getString('qr_shared_contact');
-    final storedInclude = prefs.getBool('qr_include_contact') ?? false;
-    if (storedContact != null && storedContact.isNotEmpty) {
-      _qrContactController.text = storedContact;
-    }
-    if (mounted) {
-      setState(() {
-        _includeContactInQr = storedInclude && (storedContact?.isNotEmpty == true);
-      });
-    }
-  }
-
   Widget _buildQRCodeSection() {
     if (_selectedPet == null) {
       return _buildTabContent('No pet selected');
     }
 
-    final contactTextValue = _qrContactController.text.trim();
-    final hasContactInput = contactTextValue.isNotEmpty;
-
-    // Build a public URL that opens the pet info page (works even without the app)
     final baseBackend = backendUrl.replaceAll(RegExp(r'/analyze/?\$'), '');
-    final publicUrl = '$baseBackend/pet/${_selectedPet!['id']}';
-    final payloadStr = _buildQrPayload(publicUrl);
+    final payloadStr = '$baseBackend/pet/${_selectedPet!['id']}';
 
     return Container(
       decoration: BoxDecoration(
@@ -4364,7 +4298,7 @@ void _disconnectDevice() async {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Pet ID & Contact Card',
+                              'Pet ID & Missing Info',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -4390,96 +4324,7 @@ void _disconnectDevice() async {
 
             SizedBox(height: 24),
 
-            // Contact sharing preference card (keep above the QR so it's visible)
-            Container(
-              padding: EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.shade200),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 10,
-                    offset: Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                      'Include contact number in QR',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: deepRed,
-                      ),
-                    ),
-                    subtitle: Text(
-                      'Optional: embed a phone number so whoever scans the QR can reach you immediately.',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                    activeColor: deepRed,
-                    inactiveThumbColor: Colors.grey.shade600,
-                    inactiveTrackColor: Colors.grey.shade300,
-                    value: _includeContactInQr,
-                    onChanged: (value) async {
-                      if (value && !hasContactInput) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Type a contact number before turning on this option.')),
-                        );
-                        return;
-                      }
-                      setState(() => _includeContactInQr = value);
-                      await _saveQrContactPreference(include: value);
-                    },
-                    tileColor: Colors.grey.shade50,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _qrContactController,
-                          keyboardType: TextInputType.phone,
-                          textInputAction: TextInputAction.done,
-                          onChanged: (_) => setState(() {}),
-                          onSubmitted: (_) => _confirmContactNumber(),
-                          decoration: InputDecoration(
-                            labelText: 'Contact number to share',
-                            prefixIcon: Icon(Icons.phone, color: deepRed),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      ElevatedButton(
-                        onPressed: hasContactInput ? _confirmContactNumber : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: deepRed,
-                          padding: EdgeInsets.symmetric(vertical: 14, horizontal: 22),
-                        ),
-                        child: Text('Enter'),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 6),
-                  Text(
-                    _includeContactInQr
-                        ? 'This number is encoded inside the QR payload and displayed on the pet info page.'
-                        : 'Enter a contact number first, then press Enter to enable sharing via the QR code.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ],
-              ),
-            ),
+            _buildMissingAlertInfoCard(),
 
             SizedBox(height: 16),
 
@@ -5282,6 +5127,78 @@ void _disconnectDevice() async {
                          iconColor.withOpacity(0.8),
                 ),
               ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMissingAlertInfoCard() {
+    final emergencyContact = _emergencyContactController.text.trim();
+    final customMessage = _customMessageController.text.trim();
+    final specialNotes = _specialNotesController.text.trim();
+    final rewardAmount = (_hasReward && _rewardAmountController.text.trim().isNotEmpty)
+        ? '₱${_rewardAmountController.text.trim()}'
+        : null;
+    final hasAdditionalDetails = emergencyContact.isNotEmpty || rewardAmount != null ||
+        customMessage.isNotEmpty || specialNotes.isNotEmpty;
+
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.list_alt, color: deepRed, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Missing Alert Details',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: deepRed,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 6),
+          Text(
+            'This card mirrors any contact, reward, or notes you add when reporting a pet missing so the QR data stays aligned.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+          ),
+          SizedBox(height: 12),
+          _buildInfoRow(Icons.priority_high, 'Urgency', _urgencyLevel),
+          if (emergencyContact.isNotEmpty) ...[
+            _buildInfoRow(Icons.contact_phone, 'Emergency Contact', emergencyContact),
+          ],
+          if (rewardAmount != null) ...[
+            _buildInfoRow(Icons.monetization_on, 'Reward', rewardAmount),
+          ],
+          if (customMessage.isNotEmpty) ...[
+            _buildInfoRow(Icons.message, 'Custom Message', customMessage, maxLines: 4),
+          ],
+          if (specialNotes.isNotEmpty) ...[
+            _buildInfoRow(Icons.note_alt, 'Special Notes', specialNotes, maxLines: 4),
+          ],
+          if (!hasAdditionalDetails) ...[
+            SizedBox(height: 12),
+            Text(
+              'No additional alert data yet. Tap "Mark as Missing/Lost" to add emergency contact, reward, or notes that will also show here.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
           ],
         ],
