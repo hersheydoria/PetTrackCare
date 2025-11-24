@@ -270,6 +270,24 @@ HEALTH_SYMPTOMS_REFERENCE = {
         "urgency": "low",
         "action": "Routine vet visit for evaluation"
     },
+    "not_drinking": {
+        "description": "Avoiding water or refusing to drink",
+        "possible_causes": ["nausea", "oral pain", "dehydration", "kidney issues"],
+        "urgency": "high",
+        "action": "Offer small amounts of water frequently and contact your vet if it continues"
+    },
+    "drinking_less": {
+        "description": "Drinking less water than usual",
+        "possible_causes": ["mild dehydration", "illness", "medication side effects"],
+        "urgency": "medium",
+        "action": "Keep water bowls accessible and monitor intake closely"
+    },
+    "hyperactivity": {
+        "description": "Hyperactivity or unusually high energy",
+        "possible_causes": ["anxiety", "pain", "neurological issue", "environmental stress"],
+        "urgency": "medium",
+        "action": "Ensure ample exercise and calm enrichment; rule out medical causes"
+    },
     
     # Sleep and energy
     "excessive_sleeping": {
@@ -290,6 +308,16 @@ HEALTH_SYMPTOMS_REFERENCE = {
         "urgency": "high",
         "action": "Vet evaluation needed"
     },
+}
+
+HEALTH_REFERENCE_SYNONYMS = {
+    "blood_urine": [
+        "blood in urine",
+        "bloody urine",
+        "blood in stool",
+        "bloody stool",
+        "blood urine"
+    ],
 }
 
 # Ensure a stable models directory
@@ -1087,16 +1115,44 @@ def analyze_endpoint():
     # Activity level concerns
     activity_lower = activity_level.lower()
     if 'low activity' in activity_lower or 'lethargy' in activity_lower:
-        behavioral_concerns.append('Activity decreased significantly')
+        behavioral_concerns.append({
+            "description": 'Activity decreased significantly',
+            "feature": 'activity_level',
+            "value": activity_level,
+            "reference": 'lethargy',
+            "source": 'behavior',
+            "urgency": 'high'
+        })
         _add_insight('activity_level', 'Activity level is low; encourage short, gentle play sessions and extra rest to avoid exhaustion.')
     elif 'restlessness' in activity_lower or 'night' in activity_lower:
-        behavioral_concerns.append('Restlessness or disrupted sleep patterns')
+        behavioral_concerns.append({
+            "description": 'Restlessness or disrupted sleep patterns',
+            "feature": 'activity_level',
+            "value": activity_level,
+            "reference": 'restlessness_night',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('activity_level', 'Restless behaviors were noted; consider calming routines and an earlier bedtime.')
     elif 'weakness' in activity_lower or 'collapse' in activity_lower:
-        behavioral_concerns.append('Weakness or inability to move normally')
+        behavioral_concerns.append({
+            "description": 'Weakness or inability to move normally',
+            "feature": 'activity_level',
+            "value": activity_level,
+            "reference": 'difficulty_moving',
+            "source": 'behavior',
+            "urgency": 'high'
+        })
         _add_insight('activity_level', 'Weakness or collapse signals need for gentle handling and possible vet support.')
     elif 'high activity' in activity_lower:
-        behavioral_concerns.append('Unusual hyperactivity or excessive energy')
+        behavioral_concerns.append({
+            "description": 'Unusual hyperactivity or excessive energy',
+            "feature": 'activity_level',
+            "value": activity_level,
+            "reference": 'hyperactivity',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('activity_level', 'High activity levels could indicate anxiety or an injury; keep monitoring for persistent spikes.')
     else:
         _add_insight('activity_level', 'Activity level is within expected bounds; continue daily enrichment and checks.')
@@ -1104,19 +1160,54 @@ def analyze_endpoint():
     # Food intake concerns
     food_lower = food_intake.lower()
     if 'not eating' in food_lower or 'loss of appetite' in food_lower:
-        behavioral_concerns.append('Loss of appetite or refusing to eat')
+        behavioral_concerns.append({
+            "description": 'Loss of appetite or refusing to eat',
+            "feature": 'food_intake',
+            "value": food_intake,
+            "reference": 'loss_appetite',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('food_intake', 'Food intake dropped or was refused; monitor appetite and hydration closely.')
     elif 'eating less' in food_lower:
-        behavioral_concerns.append('Reduced appetite')
+        behavioral_concerns.append({
+            "description": 'Reduced appetite',
+            "feature": 'food_intake',
+            "value": food_intake,
+            "reference": 'loss_appetite',
+            "source": 'behavior',
+            "urgency": 'low'
+        })
         _add_insight('food_intake', 'Appetite is reduced; try offering favorite foods in smaller servings to stimulate interest.')
     elif 'eating more' in food_lower:
-        behavioral_concerns.append('Increased appetite or excessive eating')
+        behavioral_concerns.append({
+            "description": 'Increased appetite or excessive eating',
+            "feature": 'food_intake',
+            "value": food_intake,
+            "reference": 'increased_hunger',
+            "source": 'behavior',
+            "urgency": 'low'
+        })
         _add_insight('food_intake', 'Increased appetite noted; correlate with activity and stress for possible excitement behaviors.')
     elif 'weight loss' in food_lower:
-        behavioral_concerns.append('Unexplained weight loss')
+        behavioral_concerns.append({
+            "description": 'Unexplained weight loss',
+            "feature": 'food_intake',
+            "value": food_intake,
+            "reference": 'weight_loss',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('food_intake', 'Weight loss detected; ensure portion sizes match caloric needs and report to your vet if it continues.')
     elif 'weight gain' in food_lower:
-        behavioral_concerns.append('Unexplained weight gain')
+        behavioral_concerns.append({
+            "description": 'Unexplained weight gain',
+            "feature": 'food_intake',
+            "value": food_intake,
+            "reference": 'weight_gain',
+            "source": 'behavior',
+            "urgency": 'low'
+        })
         _add_insight('food_intake', 'Weight gain or overeating may be linked to metabolic changes or treats; track portion control.')
     else:
         _add_insight('food_intake', 'Food intake appears regular; continue balanced meals and scheduled feedings.')
@@ -1124,13 +1215,34 @@ def analyze_endpoint():
     # Water intake concerns
     water_lower = water_intake.lower()
     if 'not drinking' in water_lower:
-        behavioral_concerns.append('Not drinking water')
+        behavioral_concerns.append({
+            "description": 'Not drinking water',
+            "feature": 'water_intake',
+            "value": water_intake,
+            "reference": 'not_drinking',
+            "source": 'behavior',
+            "urgency": 'high'
+        })
         _add_insight('water_intake', 'Water was avoided; offer fresh bowls and monitor for dehydration.')
     elif 'drinking less' in water_lower:
-        behavioral_concerns.append('Reduced water intake')
+        behavioral_concerns.append({
+            "description": 'Reduced water intake',
+            "feature": 'water_intake',
+            "value": water_intake,
+            "reference": 'drinking_less',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('water_intake', 'Water intake is slightly lower; keep fresh water easily accessible.')
     elif 'excessive drinking' in water_lower or 'drinking more' in water_lower:
-        behavioral_concerns.append('Increased thirst/excessive drinking')
+        behavioral_concerns.append({
+            "description": 'Increased thirst/excessive drinking',
+            "feature": 'water_intake',
+            "value": water_intake,
+            "reference": 'excessive_thirst',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('water_intake', 'Excessive thirst could signal metabolic changes; note frequency and share with your vet.')
     else:
         _add_insight('water_intake', 'Water intake is steady; good hydration supports recovery and energy.')
@@ -1138,22 +1250,64 @@ def analyze_endpoint():
     # Bathroom habits concerns
     bathroom_lower = bathroom_habits.lower()
     if 'diarrhea' in bathroom_lower:
-        behavioral_concerns.append('Diarrhea or loose stools')
+        behavioral_concerns.append({
+            "description": 'Diarrhea or loose stools',
+            "feature": 'bathroom_habits',
+            "value": bathroom_habits,
+            "reference": 'diarrhea',
+            "source": 'behavior',
+            "urgency": 'high'
+        })
         _add_insight('bathroom_habits', 'Diarrhea detected; track frequency and look for signs of discomfort or mucus/blood.')
     elif 'constipation' in bathroom_lower:
-        behavioral_concerns.append('Constipation')
+        behavioral_concerns.append({
+            "description": 'Constipation',
+            "feature": 'bathroom_habits',
+            "value": bathroom_habits,
+            "reference": 'constipation',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('bathroom_habits', 'Constipation noted; ensure fiber and hydration; gentle tummy massages can help.')
     elif 'frequent urination' in bathroom_lower:
-        behavioral_concerns.append('Frequent urination')
+        behavioral_concerns.append({
+            "description": 'Frequent urination',
+            "feature": 'bathroom_habits',
+            "value": bathroom_habits,
+            "reference": 'excessive_urination',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('bathroom_habits', 'Frequent urination could hint at infections or diabetes; capture volume and color for vet review.')
     elif 'straining' in bathroom_lower:
-        behavioral_concerns.append('Straining to urinate or defecate')
+        behavioral_concerns.append({
+            "description": 'Straining to urinate or defecate',
+            "feature": 'bathroom_habits',
+            "value": bathroom_habits,
+            "reference": 'straining_urinate',
+            "source": 'behavior',
+            "urgency": 'high'
+        })
         _add_insight('bathroom_habits', 'Straining is a red flag; this requires immediate vet attention if it persists.')
     elif 'blood' in bathroom_lower:
-        behavioral_concerns.append('Blood in urine or stool')
+        behavioral_concerns.append({
+            "description": 'Blood in urine or stool',
+            "feature": 'bathroom_habits',
+            "value": bathroom_habits,
+            "reference": 'blood_urine',
+            "source": 'behavior',
+            "urgency": 'high'
+        })
         _add_insight('bathroom_habits', 'Blood in urine/stool is critical; seek veterinary care urgently.')
     elif 'accidents' in bathroom_lower or 'soiling' in bathroom_lower:
-        behavioral_concerns.append('Inappropriate toileting or house soiling')
+        behavioral_concerns.append({
+            "description": 'Inappropriate toileting or house soiling',
+            "feature": 'bathroom_habits',
+            "value": bathroom_habits,
+            "reference": 'house_soiling',
+            "source": 'behavior',
+            "urgency": 'medium'
+        })
         _add_insight('bathroom_habits', 'House soiling may indicate stress or urinary issues; note context and timing for your vet.')
     else:
         _add_insight('bathroom_habits', 'Bathroom habits are within expected patterns.')
@@ -1166,11 +1320,20 @@ def analyze_endpoint():
 
     # Generate health guidance based on detected symptoms or behavioral changes
     # Combine behavioral concerns with any detected clinical symptoms for comprehensive health guidance
-    all_health_issues = behavioral_concerns + (symptoms_detected if symptoms_detected else [])
-    if all_health_issues:
-        health_guidance = generate_health_guidance(all_health_issues, df, historical_context)
+    health_issues = list(behavioral_concerns)
+    if symptoms_detected:
+        for symptom in symptoms_detected:
+            description = str(symptom).strip() if symptom is not None else ""
+            if description:
+                health_issues.append({
+                    "description": description,
+                    "source": "symptom",
+                    "value": description
+                })
+    if health_issues:
+        health_guidance = generate_health_guidance(health_issues, df, historical_context)
         merged["health_guidance"] = health_guidance
-        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(all_health_issues)} health issue(s) ({len(behavioral_concerns)} behavioral + {len(symptoms_detected) if symptoms_detected else 0} clinical)")
+        print(f"[ANALYZE-RESPONSE] Pet {pet_id}: Health guidance generated for {len(health_issues)} health issue(s) ({len(behavioral_concerns)} behavioral + {len(symptoms_detected) if symptoms_detected else 0} clinical)")
     
     if final_is_unhealthy and historical_context.get('is_persistent'):
         print(f"[ANALYZE-RESPONSE] Pet {pet_id}: [ERROR] PERSISTENT ILLNESS: {historical_context.get('illness_duration_days')} days of unhealthy patterns detected")
@@ -1925,21 +2088,38 @@ def analyze_illness_duration_and_patterns(df):
         print(f"[PATTERN-ANALYSIS] Error analyzing patterns: {e}")
         return {"illness_duration_days": 0, "is_persistent": False, "pattern_type": None}
 
-def generate_health_guidance(symptoms_list, df=None, historical_context=None):
+def _infer_health_reference_key(description: str | None) -> str | None:
+    if not description:
+        return None
+    normalized = str(description).lower()
+    for key in HEALTH_SYMPTOMS_REFERENCE:
+        key_norm = key.replace('_', ' ').lower()
+        if key_norm and key_norm in normalized:
+            return key
+        key_parts = [part for part in key_norm.split() if part]
+        if key_parts and all(part in normalized for part in key_parts):
+            return key
+    for key, synonyms in HEALTH_REFERENCE_SYNONYMS.items():
+        for synonym in synonyms:
+            if synonym in normalized:
+                return key
+    return None
+
+def generate_health_guidance(health_issues, df=None, historical_context=None):
     """
-    Generate health guidance and recommendations based on detected symptoms.
+    Generate health guidance and recommendations based on detected health concerns.
     Uses HEALTH_SYMPTOMS_REFERENCE to provide evidence-based information.
-    Now includes historical context (duration, patterns, sudden changes).
+    Includes historical context (duration, patterns, sudden changes).
     
     Args:
-        symptoms_list: List of symptom strings detected from the pet's logs
+        health_issues: List of dicts describing the concerning features (behavioral or clinical)
         df: Optional DataFrame with all logs for historical analysis
         historical_context: Optional dict with pattern analysis results
         
     Returns:
         dict with guidance, urgency level, and recommended actions
     """
-    if not symptoms_list:
+    if not health_issues:
         return {
             "guidance": "No specific health concerns detected. Continue regular monitoring.",
             "urgency": "none",
@@ -1953,16 +2133,48 @@ def generate_health_guidance(symptoms_list, df=None, historical_context=None):
     guidance_items = []
     max_urgency = "none"
     urgency_levels = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-    
-    for symptom in symptoms_list:
-        symptom_lower = str(symptom).lower().strip()
-        # Try to find matching symptom in reference
-        for key, info in HEALTH_SYMPTOMS_REFERENCE.items():
-            if key in symptom_lower or symptom_lower in key:
-                guidance_items.append(info)
-                if urgency_levels.get(info.get("urgency", "none"), 0) > urgency_levels.get(max_urgency, 0):
-                    max_urgency = info.get("urgency", "none")
-                break
+
+    for issue in health_issues:
+        if isinstance(issue, dict):
+            description = str(issue.get("description") or "").strip()
+            reference = issue.get("reference")
+            issue_value = issue.get("value")
+        else:
+            description = str(issue).strip()
+            reference = None
+            issue_value = None
+        if not description:
+            continue
+
+        display_description = description
+        if issue_value:
+            value_str = str(issue_value).strip()
+            if value_str and value_str.lower() not in description.lower():
+                display_description = f"{description} (current: {value_str})"
+
+        if not reference:
+            reference = _infer_health_reference_key(description)
+
+        if reference and reference in HEALTH_SYMPTOMS_REFERENCE:
+            info = HEALTH_SYMPTOMS_REFERENCE[reference].copy()
+        else:
+            info = {
+                "description": description,
+                "possible_causes": [],
+                "urgency": (issue.get("urgency") if isinstance(issue, dict) else "medium") or "medium",
+                "action": issue.get("action") if isinstance(issue, dict) else None
+            }
+
+        info["issue_description"] = display_description
+        info["issue_reference"] = reference
+        info["feature"] = issue.get("feature") if isinstance(issue, dict) else None
+        info["source"] = issue.get("source") if isinstance(issue, dict) else "unspecified"
+        info["description"] = info.get("description") or display_description
+
+        issue_urgency = info.get("urgency", "none")
+        if urgency_levels.get(issue_urgency, 0) > urgency_levels.get(max_urgency, 0):
+            max_urgency = issue_urgency
+        guidance_items.append(info)
     
     # Build recommendations
     recommendations = []
@@ -2005,11 +2217,12 @@ def generate_health_guidance(symptoms_list, df=None, historical_context=None):
         if historical_context.get('recovery_history'):
             context_insights.append("History: Your pet has recovered from similar episodes before")
     
+    detected_texts = [item.get("issue_description") or item.get("description") for item in guidance_items]
     return {
         "guidance": f"Detected {len(guidance_items)} health concern(s). {HEALTH_SYMPTOMS_REFERENCE.get('summary', 'See details below.')}",
         "urgency": max_urgency,
-        "detected_symptoms": [item.get("description") for item in guidance_items],
-        "detected_health_issues": symptoms_list,  # Raw behavioral and clinical health concerns
+        "detected_symptoms": detected_texts,
+        "detected_health_issues": detected_texts,
         "recommendations": recommendations[:7],  # Up to 7 recommendations
         "pattern_context": context_insights,
         "illness_duration_days": historical_context.get('illness_duration_days') if historical_context else None,

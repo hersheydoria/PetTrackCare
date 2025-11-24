@@ -12,7 +12,7 @@ pet_ids = [
 
 for pet_id in pet_ids:
     print(f"Testing accuracy for pet {pet_id}...")
-    r = requests.post(f"{API_URL}/test_accuracy_quick",
+    r = requests.post(f"{API_URL}/test_accuracy",
                       json={"pet_id": pet_id, "test_days": TEST_DAYS})
     try:
         print(r.json())
