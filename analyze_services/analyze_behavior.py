@@ -2271,170 +2271,156 @@ def train_endpoint():
 @app.route("/test_accuracy", methods=["POST"])
 def test_model_accuracy():
     """
-    Test the accuracy of illness prediction models.
-    Uses time-series cross-validation: train on past data, test on future data.
-    [WARNING] This endpoint can be slow on limited resources. Test with specific pet_id for speed.
-    
+    Evaluate the illness prediction model using time-series cross-validation.
+    This endpoint trains on earlier logs and tests on the most recent `test_days`.
+
     Request body:
     {
-        "pet_id": "optional - test specific pet or first available pet if omitted",
-        "test_days": 7  # how many days into future to test predictions
+        "pet_id": "optional",
+        "test_days": 7
     }
-    
-    For faster results, provide a pet_id. Otherwise, it will test the first available pet.
     """
+
     data = request.get_json(silent=True) or {}
     pet_id = data.get("pet_id")
     test_days = int(data.get("test_days", 7))
-    
+
     try:
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, mean_absolute_error, mean_squared_error, r2_score
-        
+        from sklearn.metrics import (
+            accuracy_score, precision_score, recall_score,
+            f1_score, confusion_matrix
+        )
+
         results = {
-            "illness_prediction": {
-                "accuracy": None,
-                "precision": None,
-                "recall": None,
-                "f1_score": None,
-                "confusion_matrix": None,
-                "test_samples": 0,
-                "details": []
-            },
-            "sleep_forecast": {
-                "mae": None,
-                "rmse": None,
-                "r2": None,
-                "test_samples": 0,
-                "details": []
-            }
+            "accuracy": None,
+            "precision": None,
+            "recall": None,
+            "f1_score": None,
+            "confusion_matrix": None,
+            "test_samples": 0,
+            "details": []
         }
-        
-        # Get pets to test - limit to 1 by default for speed on limited resources
+
+        # -----------------------------
+        # SELECT PET(S)
+        # -----------------------------
         if pet_id:
             pet_ids = [pet_id]
         else:
-            # Default: test only the first pet (instead of 50) for faster response
-            try:
-                pets_resp = supabase.table("pets").select("id").limit(1).execute()
-                pet_ids = [p["id"] for p in (pets_resp.data or [])]
-            except:
-                return jsonify({"error": "Could not fetch pets", "note": "Please provide pet_id parameter for faster results"}), 400
-        
+            pets_resp = supabase.table("pets").select("id").limit(1).execute()
+            pet_ids = [p["id"] for p in (pets_resp.data or [])]
+
         if not pet_ids:
-            return jsonify({"warning": "No pets found", "recommendation": "Log behavior data for pets first"}), 200
-        
-        illness_y_true, illness_y_pred = [], []
-        sleep_y_true, sleep_y_pred = [], []
-        
+            return jsonify({"warning": "No pets found"}), 200
+
+        y_true, y_pred = [], []
+
+        # -----------------------------
+        # PROCESS EACH PET
+        # -----------------------------
         for pid in pet_ids:
+
             df = fetch_logs_df(pid, limit=500)
             if df.empty or len(df) < test_days + 10:
                 continue
-            
+
             df = df.copy()
-            df['log_date'] = pd.to_datetime(df['log_date'])
-            df = df.sort_values('log_date')
-            
-            # Split: use all but last test_days for training, last test_days for testing
+            df["log_date"] = pd.to_datetime(df["log_date"])
+            df = df.sort_values("log_date")
+
+            # train/test split
             split_idx = len(df) - test_days
             train_df = df.iloc[:split_idx]
             test_df = df.iloc[split_idx:]
-            
-            # --- Test Illness Prediction ---
+
+            # ---------------------------------
+            # TRAIN MODEL ON TRAIN SUBSET ONLY
+            # ---------------------------------
             try:
-                # Train model on training data
-                train_illness_model(train_df)
-                
-                for _, row in test_df.iterrows():
-                    activity = str(row.get("activity_level", ""))
-                    food_intake = str(row.get("food_intake", ""))
-                    water_intake = str(row.get("water_intake", ""))
-                    bathroom_habits = str(row.get("bathroom_habits", ""))
-                    
-                    # Count symptoms
-                    symptom_count = 0
-                    try:
-                        import json
-                        symptoms_str = str(row.get("symptoms", "[]"))
-                        symptoms = json.loads(symptoms_str) if isinstance(symptoms_str, str) else []
-                        filtered = [s for s in symptoms if str(s).lower().strip() not in ["none of the above", "", "none", "unknown"]]
-                        symptom_count = len(filtered)
-                    except:
-                        symptom_count = 0
-                    
-                    # Predict
-                    pred_risk = predict_illness_risk(activity, food_intake, water_intake, bathroom_habits, symptom_count)
-                    
-                    # Ground truth: use same logic as training
-                    actual_unhealthy = (
-                        (food_intake.lower() in ['not eating', 'eating less']) or
-                        (water_intake.lower() in ['not drinking', 'drinking less']) or
-                        (bathroom_habits.lower() in ['diarrhea', 'constipation', 'frequent urination']) or
-                        (symptom_count >= 2) or
-                        (activity.lower() == 'low')
-                    )
-                    actual_risk = "high" if actual_unhealthy else "low"
-                    
-                    # Convert to binary for metrics (unhealthy=1, healthy=0)
-                    illness_y_true.append(1 if actual_risk in ["high", "medium"] else 0)
-                    illness_y_pred.append(1 if pred_risk in ["high", "medium"] else 0)
-                    
-                    results["illness_prediction"]["details"].append({
-                        "pet_id": pid,
-                        "date": str(row['log_date'].date()),
-                        "predicted": pred_risk,
-                        "actual": actual_risk,
-                        "correct": pred_risk == actual_risk
-                    })
+                trained = train_illness_model(train_df)
+                if not trained:
+                    continue
             except Exception as e:
-                print(f"Illness test error for pet {pid}: {e}")
-            
-            # Sleep forecast has been removed
-        
-        # Calculate illness prediction metrics
-        if illness_y_true and illness_y_pred:
-            results["illness_prediction"]["test_samples"] = len(illness_y_true)
-            results["illness_prediction"]["accuracy"] = round(accuracy_score(illness_y_true, illness_y_pred), 3)
-            results["illness_prediction"]["precision"] = round(precision_score(illness_y_true, illness_y_pred, zero_division=0), 3)
-            results["illness_prediction"]["recall"] = round(recall_score(illness_y_true, illness_y_pred, zero_division=0), 3)
-            results["illness_prediction"]["f1_score"] = round(f1_score(illness_y_true, illness_y_pred, zero_division=0), 3)
-            
-            cm = confusion_matrix(illness_y_true, illness_y_pred)
-            results["illness_prediction"]["confusion_matrix"] = {
-                "true_negative": int(cm[0][0]) if cm.shape == (2, 2) else 0,
-                "false_positive": int(cm[0][1]) if cm.shape == (2, 2) else 0,
-                "false_negative": int(cm[1][0]) if cm.shape == (2, 2) else 0,
-                "true_positive": int(cm[1][1]) if cm.shape == (2, 2) else 0
-            }
-        
-        # Calculate sleep forecasting metrics
-        if sleep_y_true and sleep_y_pred:
-            results["sleep_forecast"]["test_samples"] = len(sleep_y_true)
-            results["sleep_forecast"]["mae"] = round(mean_absolute_error(sleep_y_true, sleep_y_pred), 3)
-            results["sleep_forecast"]["rmse"] = round(np.sqrt(mean_squared_error(sleep_y_true, sleep_y_pred)), 3)
-            
-            try:
-                r2 = r2_score(sleep_y_true, sleep_y_pred)
-                results["sleep_forecast"]["r2"] = round(r2, 3)
-            except:
-                results["sleep_forecast"]["r2"] = None
-        
-        # Add interpretation
-        results["interpretation"] = {
-            "illness_prediction": _interpret_illness_metrics(
-                results["illness_prediction"]["accuracy"],
-                results["illness_prediction"]["f1_score"]
-            ),
-            "sleep_forecast": _interpret_sleep_metrics(
-                results["sleep_forecast"]["mae"],
-                results["sleep_forecast"]["r2"]
-            )
-        }
-        
+                print(f"Training error for pet {pid}: {e}")
+                continue
+
+            # ---------------------------------
+            # RUN PREDICTIONS ON TEST SUBSET
+            # ---------------------------------
+            import json
+
+            for _, row in test_df.iterrows():
+
+                activity = str(row.get("activity_level", ""))
+                food = str(row.get("food_intake", ""))
+                water = str(row.get("water_intake", ""))
+                bathroom = str(row.get("bathroom_habits", ""))
+
+                # count symptoms
+                symptom_count = 0
+                try:
+                    raw = row.get("symptoms", "[]")
+                    arr = json.loads(raw) if isinstance(raw, str) else []
+                    filtered = [
+                        s for s in arr
+                        if str(s).lower().strip() not in ["none", "none of the above", ""]
+                    ]
+                    symptom_count = len(filtered)
+                except:
+                    symptom_count = 0
+
+                # predicted
+                pred = predict_illness_risk(
+                    activity, food, water, bathroom, symptom_count
+                )
+
+                # ground truth based on the SAME heuristic used for training labels
+                actual_unhealthy = (
+                    (food.lower() in ["not eating", "eating less"]) or
+                    (water.lower() in ["not drinking", "drinking less"]) or
+                    (bathroom.lower() in ["diarrhea", "constipation", "frequent urination"]) or
+                    (symptom_count >= 2) or
+                    (activity.lower() == "low")
+                )
+                actual = "high" if actual_unhealthy else "low"
+
+                # convert to binary (same as training)
+                y_true.append(1 if actual == "high" else 0)
+                y_pred.append(1 if pred in ["high", "medium"] else 0)
+
+                results["details"].append({
+                    "pet_id": pid,
+                    "date": str(row["log_date"].date()),
+                    "predicted": pred,
+                    "actual": actual,
+                    "correct": (pred == actual)
+                })
+
+        # -----------------------------
+        # COMPUTE METRICS
+        # -----------------------------
+        if y_true and y_pred:
+            results["test_samples"] = len(y_true)
+            results["accuracy"] = round(accuracy_score(y_true, y_pred), 3)
+            results["precision"] = round(precision_score(y_true, y_pred, zero_division=0), 3)
+            results["recall"] = round(recall_score(y_true, y_pred, zero_division=0), 3)
+            results["f1_score"] = round(f1_score(y_true, y_pred, zero_division=0), 3)
+
+            cm = confusion_matrix(y_true, y_pred)
+            if cm.shape == (2, 2):
+                results["confusion_matrix"] = {
+                    "true_negative": int(cm[0][0]),
+                    "false_positive": int(cm[0][1]),
+                    "false_negative": int(cm[1][0]),
+                    "true_positive": int(cm[1][1])
+                }
+            else:
+                results["confusion_matrix"] = "Invalid shape"
+
         return jsonify(results)
-        
+
     except Exception as e:
-        return jsonify({"error": str(e), "details": "Error during accuracy testing"}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/test_accuracy_quick", methods=["POST"])
 def test_model_accuracy_quick():
