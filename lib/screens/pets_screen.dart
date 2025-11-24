@@ -2622,9 +2622,9 @@ void _disconnectDevice() async {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    isOwner 
-                      ? 'This will create a community alert and notify all nearby users.'
-                      : 'This will immediately alert the owner and all community members.',
+                    isOwner
+                    ? 'This will create a community alert and notify nearby users. It will also update the pet’s QR code status.'
+                    : 'This will alert the owner and the community. It will also update the pet’s QR code status.',
                     style: TextStyle(
                       color: Colors.amber.shade700,
                       fontSize: 12,
@@ -4324,10 +4324,6 @@ void _disconnectDevice() async {
 
             SizedBox(height: 24),
 
-            _buildMissingAlertInfoCard(),
-
-            SizedBox(height: 16),
-
             // QR Code Section
             Container(
               padding: EdgeInsets.all(24),
@@ -4353,11 +4349,12 @@ void _disconnectDevice() async {
                     ),
                   ),
                   SizedBox(height: 8),
-                  Text(
-                    'Anyone can scan to view pet information',
+                 Text(
+                    'Anyone can scan to view pet information and missing alerts.',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
-                      color: Colors.grey.shade600,
+                      color: Colors.grey,
                     ),
                   ),
                   SizedBox(height: 20),
@@ -5127,78 +5124,6 @@ void _disconnectDevice() async {
                          iconColor.withOpacity(0.8),
                 ),
               ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMissingAlertInfoCard() {
-    final emergencyContact = _emergencyContactController.text.trim();
-    final customMessage = _customMessageController.text.trim();
-    final specialNotes = _specialNotesController.text.trim();
-    final rewardAmount = (_hasReward && _rewardAmountController.text.trim().isNotEmpty)
-        ? '₱${_rewardAmountController.text.trim()}'
-        : null;
-    final hasAdditionalDetails = emergencyContact.isNotEmpty || rewardAmount != null ||
-        customMessage.isNotEmpty || specialNotes.isNotEmpty;
-
-    return Container(
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.list_alt, color: deepRed, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Missing Alert Details',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: deepRed,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 6),
-          Text(
-            'This card mirrors any contact, reward, or notes you add when reporting a pet missing so the QR data stays aligned.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-          ),
-          SizedBox(height: 12),
-          _buildInfoRow(Icons.priority_high, 'Urgency', _urgencyLevel),
-          if (emergencyContact.isNotEmpty) ...[
-            _buildInfoRow(Icons.contact_phone, 'Emergency Contact', emergencyContact),
-          ],
-          if (rewardAmount != null) ...[
-            _buildInfoRow(Icons.monetization_on, 'Reward', rewardAmount),
-          ],
-          if (customMessage.isNotEmpty) ...[
-            _buildInfoRow(Icons.message, 'Custom Message', customMessage, maxLines: 4),
-          ],
-          if (specialNotes.isNotEmpty) ...[
-            _buildInfoRow(Icons.note_alt, 'Special Notes', specialNotes, maxLines: 4),
-          ],
-          if (!hasAdditionalDetails) ...[
-            SizedBox(height: 12),
-            Text(
-              'No additional alert data yet. Tap "Mark as Missing/Lost" to add emergency contact, reward, or notes that will also show here.',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
           ],
         ],

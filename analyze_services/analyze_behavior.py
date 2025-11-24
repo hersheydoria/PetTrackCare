@@ -2,6 +2,7 @@ import os
 import re
 import html
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, make_response
 import pandas as pd
 import numpy as np
@@ -905,9 +906,27 @@ def _render_missing_alert_card(details: dict | None) -> str:
     add_row("Special Notes", "special_notes")
     add_row("Location", "post_address")
     content_html = "".join(rows) if rows else "<p class=\"missing-alert-empty\">Missing alert posted but no extra details were captured.</p>"
+    def _format_ph_datetime(value: str) -> str | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except Exception:
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+                parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))
+            except Exception:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))
+        manila = parsed.astimezone(ZoneInfo("Asia/Manila"))
+        return manila.strftime("%b %d, %Y • %I:%M %p")
+
     meta_html = ""
-    if details.get("created_at"):
-        meta_html = f"<div class=\"missing-alert-meta\">Posted: {html.escape(str(details['created_at']))}</div>"
+    created_at = details.get("created_at")
+    formatted_timestamp = _format_ph_datetime(str(created_at)) if created_at else None
+    if formatted_timestamp:
+        meta_html = f"<div class=\"missing-alert-meta\">Posted: {html.escape(formatted_timestamp)} (Asia/Manila)</div>"
     return f"""
         <div class=\"missing-alert-card\">
             <div class=\"missing-alert-heading\">Missing Alert Details</div>
