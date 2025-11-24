@@ -1478,7 +1478,15 @@ def public_pet_page(pet_id):
         actions_html = "".join(f"<li>{a}</li>" for a in (care_tips.get("actions") or [])[:6]) or "<li>Ensure fresh water and rest today.</li>"
         expectations_html = "".join(f"<li>{e}</li>" for e in (care_tips.get("expectations") or [])[:6]) or "<li>Expect normal behavior with routine care.</li>"
 
-        pet_missing = bool(pet.get("is_missing"))
+        def _is_pet_missing(value):
+            if value is None:
+                return False
+            if isinstance(value, bool):
+                return value
+            string_val = str(value).strip().lower()
+            return string_val not in ("", "0", "false", "none", "null")
+
+        pet_missing = _is_pet_missing(pet.get("is_missing"))
         missing_alert_details = get_latest_missing_alert_details(pet.get("id"), pet_name, owner_id) if pet_missing else None
         missing_alert_card_html = _render_missing_alert_card(missing_alert_details)
 
