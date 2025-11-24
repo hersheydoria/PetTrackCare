@@ -22,12 +22,10 @@ class MissingPetAlertService {
   // Initialize the service with the app's main context
   void initialize(BuildContext context) {
     print('🔔 MissingPetAlertService: Initializing with context');
-    
-    // Force reinitialize sets to ensure proper String type 
-    _resetSets();
-    
     _context = context;
     if (!_isInitialized) {
+      // Force reinitialize sets to ensure proper String type when starting fresh
+      _resetSets();
       print('🔔 MissingPetAlertService: Starting alert monitoring');
       _startMissingPetAlerts();
       _isInitialized = true;
@@ -189,7 +187,7 @@ class MissingPetAlertService {
           : 'just now';
 
       // Extract pet name from content
-      final petNameMatch = RegExp(r'"([^"]+)"').firstMatch(content);
+      final petNameMatch = RegExp(r'"([^\"]+)"').firstMatch(content);
       final petName = petNameMatch?.group(1) ?? 'Pet';
 
       // Process location information
@@ -219,11 +217,14 @@ class MissingPetAlertService {
         }
       }
 
-      // Extract time information from content if available
-      String timeText = timeAgo;
-      final timeMatch = RegExp(r'on (.+?)\.').firstMatch(content);
-      if (timeMatch != null) {
-        timeText = timeMatch.group(1) ?? timeAgo;
+      final lastSeenLocation = _extractField(content, 'Last seen');
+      if (lastSeenLocation.isNotEmpty) {
+        locationText = lastSeenLocation;
+      }
+
+      String timeText = _extractField(content, 'Time');
+      if (timeText.isEmpty) {
+        timeText = timeAgo;
       }
 
       print('🔔 MissingPetAlertService: Showing dialog for pet: $petName, poster: $posterName, location: $locationText');
@@ -264,7 +265,7 @@ class MissingPetAlertService {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '🚨 MISSING PET ALERT',
+                    'MISSING PET ALERT',
                     style: TextStyle(
                       color: Colors.red.shade700,
                       fontWeight: FontWeight.bold,
@@ -275,6 +276,14 @@ class MissingPetAlertService {
               ],
             ),
             SizedBox(height: 4),
+              if (_hasSectionContent(originalContent, 'Additional Details'))
+                _buildSection('Additional Details', _extractSection(originalContent, 'Additional Details'), Icons.edit, Colors.orange.shade400),
+              if (_hasSectionContent(originalContent, 'Important Notes'))
+                _buildSection('Important Notes', _extractSection(originalContent, 'Important Notes'), Icons.warning_amber, Colors.amber.shade400),
+              if (_hasSectionContent(originalContent, 'Reward Offered'))
+                _buildSection('Reward Offered', _extractSection(originalContent, 'Reward Offered'), Icons.monetization_on, Colors.green.shade400),
+              if (_hasSectionContent(originalContent, 'Emergency Contact'))
+                _buildSection('Emergency Contact', _extractSection(originalContent, 'Emergency Contact'), Icons.contact_phone, Colors.blue.shade400),
             Text(
               'This alert will only show once',
               style: TextStyle(
@@ -364,6 +373,14 @@ class MissingPetAlertService {
                 ),
               ),
               SizedBox(height: 12),
+              if (_hasSectionContent(originalContent, 'Additional Details'))
+                _buildSection('Additional Details', _extractSection(originalContent, 'Additional Details'), Icons.edit, Colors.orange.shade400),
+              if (_hasSectionContent(originalContent, 'Important Notes'))
+                _buildSection('Important Notes', _extractSection(originalContent, 'Important Notes'), Icons.warning_amber, Colors.amber.shade400),
+              if (_hasSectionContent(originalContent, 'Reward Offered'))
+                _buildSection('Reward Offered', _extractSection(originalContent, 'Reward Offered'), Icons.monetization_on, Colors.green.shade400),
+              if (_hasSectionContent(originalContent, 'Emergency Contact'))
+                _buildSection('Emergency Contact', _extractSection(originalContent, 'Emergency Contact'), Icons.contact_phone, Colors.blue.shade400),
               Container(
                 padding: EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -414,6 +431,65 @@ class MissingPetAlertService {
         ],
       );
       },
+    );
+  }
+
+  String _extractSection(String content, String label) {
+    final escapedLabel = RegExp.escape(label);
+    final regex = RegExp('$escapedLabel:\\s*\\n([\\s\\S]+?)(?=\\n\\n|\\z)', caseSensitive: false);
+    final match = regex.firstMatch(content);
+    if (match != null) {
+      return match.group(1)?.trim() ?? '';
+    }
+    return '';
+  }
+
+  bool _hasSectionContent(String content, String label) {
+    return _extractSection(content, label).isNotEmpty;
+  }
+
+  String _extractField(String content, String label) {
+    final escapedLabel = RegExp.escape(label);
+    final regex = RegExp('$escapedLabel:\s*(.+?)(?=\n|\z)', caseSensitive: false);
+    final match = regex.firstMatch(content);
+    if (match != null) {
+      return match.group(1)?.trim() ?? '';
+    }
+    return '';
+  }
+
+  Widget _buildSection(String title, String value, IconData icon, Color iconColor) {
+    return Container(
+      margin: EdgeInsets.symmetric(vertical: 6),
+      padding: EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: iconColor.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: iconColor.withOpacity(0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: iconColor),
+          SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(fontWeight: FontWeight.bold, color: iconColor),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  value,
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade900),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -1994,13 +1994,13 @@ void _disconnectDevice() async {
     // Urgency header
     switch (_urgencyLevel) {
       case 'Critical':
-        content += '🚨 CRITICAL MISSING PET ALERT 🚨\n\n';
+        content += 'CRITICAL MISSING PET ALERT\n\n';
         break;
       case 'High':
-        content += '⚠️ URGENT: MISSING PET ⚠️\n\n';
+        content += 'URGENT: MISSING PET ALERT\n\n';
         break;
       case 'Medium':
-        content += '🔍 Missing Pet Alert\n\n';
+        content += 'Missing Pet Alert\n\n';
         break;
     }
     
@@ -2008,33 +2008,33 @@ void _disconnectDevice() async {
     if (isOwner) {
       content += 'My beloved pet "$petName" ($breed) is missing!\n\n';
     } else {
-      content += 'URGENT: Pet "$petName" ($breed) went missing while under my care as a pet sitter.\n\n';
+      content += 'URGENT: Pet "$petName" ($breed) went missing while under my care as a pet sitter.\n';
     }
     
     // Location and time
-    content += '📍 Last seen: $locationStr\n';
-    content += '⏰ Time: $lastSeen\n\n';
+    content += 'Last seen: $locationStr\n';
+    content += 'Time: $lastSeen\n';
     
     // Custom message if provided
     if (_customMessageController.text.isNotEmpty) {
-      content += '📝 Additional Details:\n${_customMessageController.text}\n\n';
+      content += 'Additional Details: ${_customMessageController.text}\n';
     }
     
     // Special notes if provided
     if (_specialNotesController.text.isNotEmpty) {
-      content += '⚠️ Important Notes:\n${_specialNotesController.text}\n\n';
+      content += 'Important Notes: ${_specialNotesController.text}\n';
     }
     
 
     
     // Reward info
     if (_hasReward && _rewardAmountController.text.isNotEmpty) {
-      content += '💰 Reward Offered: ₱ ${_rewardAmountController.text}\n\n';
+      content += 'Reward Offered: ₱ ${_rewardAmountController.text}\n';
     }
     
     // Contact info
     if (_emergencyContactController.text.isNotEmpty) {
-      content += '📞 Emergency Contact: ${_emergencyContactController.text}\n\n';
+      content += 'Emergency Contact: ${_emergencyContactController.text}\n';
     }
     
     return content;
@@ -2623,8 +2623,8 @@ void _disconnectDevice() async {
                 Expanded(
                   child: Text(
                     isOwner
-                    ? 'This will create a community alert and notify nearby users. It will also update the pet’s QR code status.'
-                    : 'This will alert the owner and the community. It will also update the pet’s QR code status.',
+                    ? 'This will create a community alert and notify nearby users. It will also reflect in the pet’s QR code.'
+                    : 'This will alert the owner and the community. It will also reflect in the pet’s QR code.',
                     style: TextStyle(
                       color: Colors.amber.shade700,
                       fontSize: 12,
