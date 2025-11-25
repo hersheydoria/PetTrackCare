@@ -4739,7 +4739,6 @@ class _AddPetFormState extends State<_AddPetForm> {
       await Supabase.instance.client.from('pets').update({
         'name': name,
         'breed': breed,
-        'age': age, // Keep for backward compatibility
         'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
         'gender': gender!,
@@ -4751,7 +4750,6 @@ class _AddPetFormState extends State<_AddPetForm> {
       final response = await Supabase.instance.client.from('pets').insert({
         'name': name,
         'breed': breed,
-        'age': age, // Keep for backward compatibility
         'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
         'gender': gender!,
