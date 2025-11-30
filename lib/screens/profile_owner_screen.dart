@@ -61,6 +61,57 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   String get address =>
       userData['address'] ?? metadata['address'] ?? metadata['location'] ?? 'No address provided';
 
+  // Helper method to get formatted age for pet display
+  String _getFormattedAge(Map<String, dynamic> pet) {
+    if (pet['date_of_birth'] != null) {
+      try {
+        final birthDate = DateTime.parse(pet['date_of_birth'].toString());
+        return _formatAgeFromBirthDate(birthDate);
+      } catch (e) {
+        // Fallback to old age format
+        final age = pet['age'] ?? 0;
+        return '$age ${age == 1 ? 'year' : 'years'} old';
+      }
+    } else {
+      // Fallback to old age format
+      final age = pet['age'] ?? 0;
+      return '$age ${age == 1 ? 'year' : 'years'} old';
+    }
+  }
+
+  // Helper method to format age from birth date
+  String _formatAgeFromBirthDate(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'} old';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'} old';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'} old';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'} old';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'} old';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -130,36 +181,87 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
 }
 
 Future<void> _pickProfileImage() async {
-  final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-  if (pickedFile == null) return;
+    // Show image source selection dialog
+    final ImageSource? source = await _showImageSourceDialog();
+    if (source == null) return;
 
-  final confirm = await showDialog<bool>(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: Text('Confirm Profile Picture'),
-        content: Image.file(File(pickedFile.path)),
-        actions: [
-          TextButton(
-            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
-            onPressed: () => Navigator.of(context).pop(false),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-            child: Text('Confirm'),
-            onPressed: () => Navigator.of(context).pop(true),
-          ),
-        ],
+    XFile? pickedFile;
+    try {
+      pickedFile = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
       );
-    },
-  );
+    } catch (e) {
+      // Handle permission or camera access errors
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.warning, color: Colors.white),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  source == ImageSource.camera 
+                    ? 'Camera access denied. Please enable camera permission in settings.'
+                    : 'Photo access denied. Please enable photo permission in settings.',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+    
+    if (pickedFile == null) {
+      // User cancelled the picker
+      return;
+    }
 
-  if (confirm != true) return;
+    // Show enhanced confirmation dialog
+    final confirm = await _showImageConfirmationDialog(pickedFile.path);
+    if (confirm != true) return;
 
   final file = File(pickedFile.path);
   final fileBytes = await file.readAsBytes();
   final fileName =
       'profile_images/${user!.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  // Show loading dialog
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        padding: EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: deepRed),
+            SizedBox(height: 16),
+            Text(
+              'Uploading profile picture...',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[700],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   try {
     final supabase = Supabase.instance.client;
@@ -185,10 +287,384 @@ Future<void> _pickProfileImage() async {
       userData['profile_picture'] = publicUrl;
     });
 
+    // Close loading dialog
+    Navigator.of(context).pop();
+
+    // Show success message
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.white),
+            SizedBox(width: 8),
+            Text('Profile picture updated successfully!'),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+
     print('✅ Profile picture updated!');
   } catch (e) {
+    // Close loading dialog
+    Navigator.of(context).pop();
+    
+    // Show error message
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.white),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text('Failed to update profile picture. Please try again.'),
+            ),
+          ],
+        ),
+        backgroundColor: deepRed,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: Duration(seconds: 4),
+      ),
+    );
+    
     print('❌ Error uploading profile image: $e');
   }
+}
+
+// Enhanced image source selection dialog
+Future<ImageSource?> _showImageSourceDialog() async {
+  return await showModalBottomSheet<ImageSource>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (context) => Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 20,
+            offset: Offset(0, -5),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              margin: EdgeInsets.only(top: 12, bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Header
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: coral.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.camera_alt, color: coral, size: 20),
+                  ),
+                  SizedBox(width: 12),
+                  Text(
+                    'Choose Photo Source',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 24),
+            // Options
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _buildImageSourceOption(
+                      icon: Icons.camera_alt,
+                      title: 'Camera',
+                      subtitle: 'Take a new photo',
+                      color: deepRed,
+                      onTap: () => Navigator.pop(context, ImageSource.camera),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: _buildImageSourceOption(
+                      icon: Icons.photo_library,
+                      title: 'Gallery',
+                      subtitle: 'Choose from photos',
+                      color: coral,
+                      onTap: () => Navigator.pop(context, ImageSource.gallery),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 24),
+            // Cancel button
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: 16),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+// Enhanced image confirmation dialog
+Future<bool?> _showImageConfirmationDialog(String imagePath) async {
+  return await showDialog<bool>(
+    context: context,
+    builder: (context) => Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 20,
+              offset: Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header
+            Container(
+              padding: EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [deepRed.withOpacity(0.1), coral.withOpacity(0.1)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: deepRed.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.photo, color: deepRed, size: 20),
+                  ),
+                  SizedBox(width: 12),
+                  Text(
+                    'Confirm Profile Picture',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: deepRed,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Image preview
+            Padding(
+              padding: EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  Container(
+                    width: 200,
+                    height: 200,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: coral.withOpacity(0.3), width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 10,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Image.file(
+                        File(imagePath),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  Text(
+                    'Use this photo as your profile picture?',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.grey[700],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+            // Action buttons
+            Padding(
+              padding: EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: Colors.red),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text(
+                        'Cancel',
+                        style: TextStyle(
+                          color: Colors.red,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 2,
+                      ),
+                      onPressed: () => Navigator.pop(context, true),
+                      child: Text(
+                        'Use Photo',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+// Helper widget for image source options
+Widget _buildImageSourceOption({
+  required IconData icon,
+  required String title,
+  required String subtitle,
+  required Color color,
+  required VoidCallback onTap,
+}) {
+  return Material(
+    color: Colors.transparent,
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          border: Border.all(color: color.withOpacity(0.2)),
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            colors: [
+              color.withOpacity(0.05),
+              color.withOpacity(0.02),
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                icon,
+                color: color,
+                size: 24,
+              ),
+            ),
+            SizedBox(height: 12),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey[800],
+              ),
+            ),
+            SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 Future<void> pickAndUploadImage() async {
@@ -297,7 +773,7 @@ Future<void> pickAndUploadImage() async {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        '${pet['breed'] ?? 'Unknown'} • ${pet['age'] ?? 0} ${(pet['age'] ?? 0) == 1 ? 'year' : 'years'} old',
+                        '${pet['breed'] ?? 'Unknown'} • ${_getFormattedAge(pet)}',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[600],
@@ -410,9 +886,9 @@ Future<void> pickAndUploadImage() async {
         title: Text("Delete pet?"),
         content: Text("This will permanently delete the pet record."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text("Cancel", style: TextStyle(color: Colors.red))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             onPressed: () => Navigator.pop(context, true),
             child: Text("Delete"),
           ),
@@ -476,10 +952,10 @@ Future<void> pickAndUploadImage() async {
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: Text('Cancel'),
+                      child: Text('Cancel', style: TextStyle(color: Colors.red)),
                     ),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                       onPressed: () => Navigator.pop(context, true),
                       child: Text('Logout'),
                     ),
@@ -527,48 +1003,122 @@ Future<void> pickAndUploadImage() async {
                   padding: EdgeInsets.all(20),
                   child: Column(
                     children: [
-                      // Profile picture with camera overlay
+                      // Enhanced Profile picture with camera overlay
                       Stack(
                         alignment: Alignment.bottomRight,
                         children: [
-                          CircleAvatar(
-                            radius: 60,
-                            backgroundColor: Colors.white,
-                            backgroundImage: _profileImage != null
-                                ? FileImage(_profileImage!)
-                                : (userData['profile_picture'] != null
-                                    ? NetworkImage(userData['profile_picture'])
-                                    : (metadata['profile_picture'] != null
-                                        ? NetworkImage(metadata['profile_picture'])
-                                        : null)),
-                            child: (_profileImage == null && 
-                                   userData['profile_picture'] == null && 
-                                   metadata['profile_picture'] == null)
-                                ? Icon(Icons.person, size: 60, color: deepRed)
-                                : null,
+                          Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: [Colors.white, lightBlush.withOpacity(0.3)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.15),
+                                  blurRadius: 20,
+                                  offset: Offset(0, 8),
+                                ),
+                                BoxShadow(
+                                  color: Colors.white.withOpacity(0.8),
+                                  blurRadius: 10,
+                                  offset: Offset(0, -2),
+                                ),
+                              ],
+                            ),
+                            child: CircleAvatar(
+                              radius: 62,
+                              backgroundColor: Colors.transparent,
+                              child: CircleAvatar(
+                                radius: 58,
+                                backgroundColor: lightBlush.withOpacity(0.3),
+                                backgroundImage: _profileImage != null
+                                    ? FileImage(_profileImage!)
+                                    : (userData['profile_picture'] != null
+                                        ? NetworkImage(userData['profile_picture'])
+                                        : (metadata['profile_picture'] != null
+                                            ? NetworkImage(metadata['profile_picture'])
+                                            : null)),
+                                child: (_profileImage == null && 
+                                       userData['profile_picture'] == null && 
+                                       metadata['profile_picture'] == null)
+                                    ? Container(
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: LinearGradient(
+                                            colors: [coral.withOpacity(0.1), deepRed.withOpacity(0.1)],
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                          ),
+                                        ),
+                                        child: Icon(
+                                          Icons.person,
+                                          size: 64,
+                                          color: deepRed.withOpacity(0.7),
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            ),
                           ),
                           Positioned(
-                            bottom: 4,
-                            right: 4,
-                            child: GestureDetector(
-                              onTap: _pickProfileImage,
-                              child: Container(
-                                padding: EdgeInsets.all(8),
+                            bottom: 8,
+                            right: 8,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _pickProfileImage,
+                                borderRadius: BorderRadius.circular(20),
+                                child: AnimatedContainer(
+                                  duration: Duration(milliseconds: 200),
+                                  padding: EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: LinearGradient(
+                                      colors: [deepRed, coral],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: deepRed.withOpacity(0.4),
+                                        blurRadius: 12,
+                                        offset: Offset(0, 4),
+                                      ),
+                                      BoxShadow(
+                                        color: Colors.white.withOpacity(0.8),
+                                        blurRadius: 6,
+                                        offset: Offset(0, -2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    Icons.camera_alt_rounded,
+                                    size: 20,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          // Add a subtle pulse animation hint
+                          Positioned(
+                            bottom: 8,
+                            right: 8,
+                            child: IgnorePointer(
+                              child: AnimatedContainer(
+                                duration: Duration(seconds: 2),
+                                curve: Curves.easeInOut,
+                                width: 44,
+                                height: 44,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: Colors.white,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 8,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: Icon(
-                                  Icons.camera_alt,
-                                  size: 18,
-                                  color: deepRed,
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.3),
+                                    width: 2,
+                                  ),
                                 ),
                               ),
                             ),
@@ -667,7 +1217,7 @@ Future<void> pickAndUploadImage() async {
                         margin: EdgeInsets.all(16),
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -955,14 +1505,14 @@ Future<void> pickAndUploadImage() async {
                             height: 56,
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [deepRed, coral],
+                                colors: [Colors.green, Colors.green.shade600],
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: deepRed.withOpacity(0.3),
+                                  color: Colors.green.withOpacity(0.3),
                                   blurRadius: 15,
                                   offset: Offset(0, 5),
                                 ),
@@ -1084,10 +1634,10 @@ Future<void> pickAndUploadImage() async {
                                     actions: [
                                       TextButton(
                                         onPressed: () => Navigator.pop(context, false),
-                                        child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+                                        child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                       ),
                                       ElevatedButton(
-                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                                         onPressed: () => Navigator.pop(context, true),
                                         child: Text('Delete'),
                                       ),
@@ -1338,14 +1888,14 @@ Future<void> pickAndUploadImage() async {
                             height: 56,
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [deepRed, coral],
+                                colors: [Colors.green, Colors.green.shade600],
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: deepRed.withOpacity(0.3),
+                                  color: Colors.green.withOpacity(0.3),
                                   blurRadius: 15,
                                   offset: Offset(0, 5),
                                 ),
@@ -1722,14 +2272,14 @@ Future<void> pickAndUploadImage() async {
                               height: 56,
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
-                                  colors: [deepRed, coral],
+                                  colors: [Colors.green, Colors.green.shade600],
                                   begin: Alignment.centerLeft,
                                   end: Alignment.centerRight,
                                 ),
                                 borderRadius: BorderRadius.circular(16),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: deepRed.withOpacity(0.3),
+                                    color: Colors.green.withOpacity(0.3),
                                     blurRadius: 15,
                                     offset: Offset(0, 5),
                                   ),
@@ -1945,7 +2495,7 @@ Future<void> pickAndUploadImage() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Close'),
+            child: Text('Close', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -2066,7 +2616,7 @@ Future<void> pickAndUploadImage() async {
                   height: 48,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: deepRed,
+                      backgroundColor: Colors.red,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -2325,7 +2875,7 @@ Future<void> pickAndUploadImage() async {
                         flex: 2,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -3012,7 +3562,7 @@ Future<void> pickAndUploadImage() async {
                               ),
                               SizedBox(height: 12),
                               Text(
-                                '© 2024 PetTrackCare. All rights reserved.',
+                                '© 2025 PetTrackCare. All rights reserved.',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: Colors.grey[600],
@@ -3069,98 +3619,7 @@ Future<void> pickAndUploadImage() async {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white,
-                lightBlush.withOpacity(0.2),
-              ],
-            ),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 20,
-                offset: Offset(0, -5),
-              ),
-            ],
-          ),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Enhanced Header
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.05),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(Icons.bookmark, color: deepRed, size: 20),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Saved Posts',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: deepRed,
-                          ),
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: IconButton(
-                          icon: Icon(Icons.close, color: Colors.grey[600]),
-                          onPressed: () => Navigator.pop(ctx),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Enhanced SavedPostsModal with modern container
-                Expanded(
-                  child: Container(
-                    margin: EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: coral.withOpacity(0.3)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 10,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: SavedPostsModal(userId: user?.id ?? ''),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (context) => SavedPostsModal(userId: user?.id ?? ''),
     );
   }
 
@@ -3226,13 +3685,57 @@ class _AddPetFormState extends State<_AddPetForm> {
   String name = '';
   String breed = '';
   int age = 0;
-  String health = '';
-  String gender = 'Male'; // added gender state
+  DateTime? dateOfBirth;
+  String health = 'Good'; // Default to Good 
+  String? gender; // added gender state - null to force selection
   double weight = 0.0;
   File? _petImage;
   bool _isLoading = false;
 
   final ImagePicker _picker = ImagePicker();
+
+  // Helper method to calculate age from date of birth
+  Map<String, int> _calculateAge(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    return {'years': years, 'months': months, 'days': days};
+  }
+
+  // Helper method to format age display
+  String _formatAge(DateTime birthDate) {
+    final ageMap = _calculateAge(birthDate);
+    final years = ageMap['years']!;
+    final months = ageMap['months']!;
+    final days = ageMap['days']!;
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'}';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'}';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'}';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'}';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'}';
+    }
+  }
 
   String _species = 'Dog'; // default
   // Expanded breed lists including common Philippine local mixes (Askal/Aspin)
@@ -3252,6 +3755,7 @@ class _AddPetFormState extends State<_AddPetForm> {
     'Maltese',
     'Papillon',
     'Pug',
+    'Other (e.g., Doodle mix, Terrier mix)',
   ];
 
   final List<String> catBreeds = [
@@ -3265,6 +3769,7 @@ class _AddPetFormState extends State<_AddPetForm> {
     'Sphynx',
     'American Shorthair',
     'Exotic Shorthair',
+    'Other (e.g., Tabby mix, Calico)',
   ];
 
   @override
@@ -3276,25 +3781,872 @@ class _AddPetFormState extends State<_AddPetForm> {
       name = p['name']?.toString() ?? '';
       breed = p['breed']?.toString() ?? '';
       age = (p['age'] is int) ? p['age'] : int.tryParse(p['age']?.toString() ?? '') ?? 0;
+      
+      // Handle date of birth if available, otherwise calculate from age
+      if (p['date_of_birth'] != null) {
+        try {
+          dateOfBirth = DateTime.parse(p['date_of_birth'].toString());
+        } catch (e) {
+          // If parsing fails, calculate from age
+          if (age > 0) {
+            dateOfBirth = DateTime.now().subtract(Duration(days: age * 365));
+          }
+        }
+      } else if (age > 0) {
+        // Calculate approximate date of birth from age
+        dateOfBirth = DateTime.now().subtract(Duration(days: age * 365));
+      }
+      
       health = p['health']?.toString() ?? 'Good';
       gender = p['gender']?.toString() ?? 'Male';
       weight = (p['weight'] is num) ? (p['weight'] as num).toDouble() : double.tryParse(p['weight']?.toString() ?? '') ?? 0.0;
       _species = (p['type'] ?? p['species'] ?? 'Dog').toString();
     } else {
-      // default breed selection
-      breed = dogBreeds.first;
+      // no default breed selection - user must choose
       health = 'Good'; // default health for new pets
-      gender = 'Male';
+      // no default gender - user must choose
     }
   }
 
+  // Enhanced pet image picker with camera/gallery options
   Future<void> _pickPetImage() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        _petImage = File(pickedFile.path);
-      });
+    await _showImageSourceDialog();
+  }
+
+  // Show dialog to choose camera or gallery
+  Future<void> _showImageSourceDialog() async {
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.add_a_photo,
+                        color: coral,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Add Pet Photo',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          Text(
+                            'Choose how to add your pet\'s photo',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Options
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
+                    // Camera option
+                    _buildImageSourceOption(
+                      icon: Icons.camera_alt,
+                      title: 'Take Photo',
+                      subtitle: 'Capture a new photo with camera',
+                      color: Colors.blue,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _selectImageSource(ImageSource.camera);
+                      },
+                    ),
+                    SizedBox(height: 12),
+                    // Gallery option
+                    _buildImageSourceOption(
+                      icon: Icons.photo_library,
+                      title: 'Choose from Gallery',
+                      subtitle: 'Select from your photo library',
+                      color: Colors.purple,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _selectImageSource(ImageSource.gallery);
+                      },
+                    ),
+                    // Remove photo option (if photo exists)
+                    if (_petImage != null || (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)) ...[
+                      SizedBox(height: 12),
+                      _buildImageSourceOption(
+                        icon: Icons.delete_outline,
+                        title: 'Remove Photo',
+                        subtitle: 'Remove current pet photo',
+                        color: Colors.red,
+                        onTap: () {
+                          Navigator.pop(context);
+                          _removeImage();
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Build image source option widget
+  Widget _buildImageSourceOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                icon,
+                color: color,
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: deepRed,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 16,
+              color: Colors.grey.shade400,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Select image from camera or gallery
+  Future<void> _selectImageSource(ImageSource source) async {
+    try {
+      final pickedFile = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      
+      if (pickedFile != null) {
+        await _showImageConfirmationDialog(File(pickedFile.path));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to pick image: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
+  }
+
+  // Show confirmation dialog with preview
+  Future<void> _showImageConfirmationDialog(File imageFile) async {
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding: EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [deepRed, coral],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.pets, color: Colors.white, size: 24),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Pet Photo Preview',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Image preview
+                Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 200,
+                        height: 200,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: coral.withOpacity(0.3), width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 10,
+                              offset: Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: Image.file(
+                            imageFile,
+                            fit: BoxFit.cover,
+                            width: 200,
+                            height: 200,
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      Text(
+                        'Use this photo for your pet?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: deepRed,
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: coral),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: Text(
+                                'Cancel',
+                                style: TextStyle(color: coral, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                setState(() {
+                                  _petImage = imageFile;
+                                });
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Pet photo updated!'),
+                                    backgroundColor: Colors.green,
+                                    behavior: SnackBarBehavior.floating,
+                                  ),
+                                );
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              child: Text(
+                                'Use Photo',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Remove current image
+  void _removeImage() {
+    setState(() {
+      _petImage = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Pet photo removed'),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // Show breed picker dialog
+  void _showBreedPicker() {
+    final breeds = _species == 'Dog' ? dogBreeds : catBreeds;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.category,
+                        color: coral,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Select Breed',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          Text(
+                            'Choose your ${_species.toLowerCase()}\'s breed',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Breed list
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: breeds.length,
+                  itemBuilder: (context, index) {
+                    final breedOption = breeds[index];
+                    final isSelected = breed == breedOption;
+                    final isOther = breedOption.startsWith('Other');
+                    
+                    return InkWell(
+                      onTap: () {
+                        if (isOther) {
+                          // Show custom breed input dialog
+                          Navigator.pop(context);
+                          _showCustomBreedDialog();
+                        } else {
+                          setState(() {
+                            breed = breedOption;
+                          });
+                          Navigator.pop(context);
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: EdgeInsets.all(16),
+                        margin: EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: isSelected ? coral.withOpacity(0.1) : (isOther ? Colors.blue.shade50 : Colors.transparent),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? coral : (isOther ? Colors.blue.shade200 : Colors.grey.shade200),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                breedOption,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: isSelected ? FontWeight.w600 : (isOther ? FontWeight.w500 : FontWeight.w400),
+                                  color: isSelected ? deepRed : (isOther ? Colors.blue.shade700 : Colors.black87),
+                                ),
+                              ),
+                            ),
+                            if (isSelected)
+                              Icon(
+                                Icons.check_circle,
+                                color: coral,
+                                size: 20,
+                              )
+                            else if (isOther)
+                              Icon(
+                                Icons.edit,
+                                color: Colors.blue.shade700,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Show custom breed input dialog
+  void _showCustomBreedDialog() {
+    final TextEditingController customBreedController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                  border: Border(
+                    bottom: BorderSide(color: Colors.blue.shade200, width: 1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade100,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.edit,
+                        color: Colors.blue.shade700,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Enter Custom Breed',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue.shade900,
+                            ),
+                          ),
+                          Text(
+                            'Not finding your ${_species.toLowerCase()}\'s breed?',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.blue.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Content
+              Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Breed Name',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade800,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    TextField(
+                      controller: customBreedController,
+                      decoration: InputDecoration(
+                        hintText: _species == 'Dog' 
+                          ? 'e.g., Labrador Mix, Street Dog, Terrier Mix' 
+                          : 'e.g., Tabby Mix, Calico, Bengal Mix',
+                        hintStyle: TextStyle(color: Colors.grey.shade400),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.blue.shade200),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.blue.shade200),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.blue.shade700, width: 2),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        prefixIcon: Icon(Icons.pets, color: Colors.blue.shade700),
+                      ),
+                      style: TextStyle(fontSize: 16),
+                      maxLength: 50,
+                    ),
+                  ],
+                ),
+              ),
+              // Action buttons
+              Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(
+                        'Cancel',
+                        style: TextStyle(color: Colors.grey.shade600),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: () {
+                        final customBreed = customBreedController.text.trim();
+                        if (customBreed.isNotEmpty) {
+                          setState(() {
+                            breed = customBreed;
+                          });
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Breed set to: $customBreed'),
+                              backgroundColor: Colors.blue,
+                              behavior: SnackBarBehavior.floating,
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Please enter a breed name'),
+                              backgroundColor: Colors.orange,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade700,
+                        padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: Text(
+                        'Confirm',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Show gender picker dialog
+  void _showGenderPicker() {
+    final genders = ['Male', 'Female', 'Unknown'];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: Offset(0, -5),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.person,
+                        color: coral,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Select Gender',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: deepRed,
+                            ),
+                          ),
+                          Text(
+                            'Choose your pet\'s gender',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Gender list
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: genders.map((genderOption) {
+                    final isSelected = gender == genderOption;
+                    return InkWell(
+                      onTap: () {
+                        setState(() {
+                          gender = genderOption;
+                        });
+                        Navigator.pop(context);
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: EdgeInsets.all(16),
+                        margin: EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: isSelected ? coral.withOpacity(0.1) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? coral : Colors.grey.shade200,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                genderOption,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                  color: isSelected ? deepRed : Colors.black87,
+                                ),
+                              ),
+                            ),
+                            if (isSelected)
+                              Icon(
+                                Icons.check_circle,
+                                color: coral,
+                                size: 20,
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<String?> _uploadPetImage(String userId) async {
@@ -3323,6 +4675,40 @@ class _AddPetFormState extends State<_AddPetForm> {
   void _submit() async {
   if (!_formKey.currentState!.validate()) return;
   _formKey.currentState!.save();
+
+  // Additional validation for required selections
+  if (breed.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a breed'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
+
+  if (gender == null || gender!.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a gender'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
+
+  if (dateOfBirth == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a date of birth'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
 
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return;
@@ -3353,9 +4739,9 @@ class _AddPetFormState extends State<_AddPetForm> {
       await Supabase.instance.client.from('pets').update({
         'name': name,
         'breed': breed,
-        'age': age,
+        'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
-        'gender': gender,
+        'gender': gender!,
         'weight': weight,
         'type': _species,
         if (imageUrl != null) 'profile_picture': imageUrl,
@@ -3364,9 +4750,9 @@ class _AddPetFormState extends State<_AddPetForm> {
       final response = await Supabase.instance.client.from('pets').insert({
         'name': name,
         'breed': breed,
-        'age': age,
+        'date_of_birth': dateOfBirth?.toIso8601String(),
         'health': health,
-        'gender': gender,
+        'gender': gender!,
         'weight': weight,
         'owner_id': userId,
         'type': _species, // store species/type
@@ -3523,125 +4909,416 @@ class _AddPetFormState extends State<_AddPetForm> {
                           ],
                         ),
                         SizedBox(height: 16),
+                        // Enhanced Pet Photo Section
                         Center(
-                          child: Stack(
-                            alignment: Alignment.bottomRight,
+                          child: Column(
                             children: [
-                              Container(
-                                width: 100,
-                                height: 100,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: coral.withOpacity(0.3), width: 3),
-                                  gradient: _petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null)
-                                      ? LinearGradient(
-                                          colors: [lightBlush.withOpacity(0.3), peach.withOpacity(0.1)],
-                                        )
-                                      : null,
-                                ),
-                                child: ClipOval(
-                                  child: _petImage != null 
-                                      ? Image.file(_petImage!, fit: BoxFit.cover, width: 100, height: 100)
-                                      : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
-                                          ? Image.network(widget.initialPet!['profile_picture'], fit: BoxFit.cover, width: 100, height: 100)
-                                          : Icon(Icons.pets, size: 40, color: coral),
+                              Text(
+                                'Pet Photo',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: deepRed,
                                 ),
                               ),
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: GestureDetector(
-                                  onTap: _pickPetImage,
-                                  child: Container(
-                                    padding: EdgeInsets.all(8),
+                              SizedBox(height: 12),
+                              Stack(
+                                alignment: Alignment.bottomRight,
+                                children: [
+                                  // Main photo container
+                                  Container(
+                                    width: 120,
+                                    height: 120,
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      gradient: LinearGradient(colors: [deepRed, coral]),
+                                      border: Border.all(
+                                        color: _petImage != null || (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
+                                            ? coral
+                                            : coral.withOpacity(0.3),
+                                        width: 3,
+                                      ),
+                                      gradient: _petImage == null && (widget.initialPet == null || widget.initialPet!['profile_picture'] == null)
+                                          ? LinearGradient(
+                                              colors: [lightBlush.withOpacity(0.3), peach.withOpacity(0.1)],
+                                              begin: Alignment.topLeft,
+                                              end: Alignment.bottomRight,
+                                            )
+                                          : null,
                                       boxShadow: [
                                         BoxShadow(
-                                          color: deepRed.withOpacity(0.3),
-                                          blurRadius: 8,
-                                          offset: Offset(0, 2),
+                                          color: deepRed.withOpacity(0.1),
+                                          blurRadius: 10,
+                                          offset: Offset(0, 5),
                                         ),
                                       ],
                                     ),
-                                    child: Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                                    child: ClipOval(
+                                      child: _petImage != null 
+                                          ? Image.file(
+                                              _petImage!, 
+                                              fit: BoxFit.cover, 
+                                              width: 120, 
+                                              height: 120,
+                                            )
+                                          : (widget.initialPet != null && widget.initialPet!['profile_picture'] != null)
+                                              ? Image.network(
+                                                  widget.initialPet!['profile_picture'], 
+                                                  fit: BoxFit.cover, 
+                                                  width: 120, 
+                                                  height: 120,
+                                                  loadingBuilder: (context, child, loadingProgress) {
+                                                    if (loadingProgress == null) return child;
+                                                    return Container(
+                                                      width: 120,
+                                                      height: 120,
+                                                      child: Center(
+                                                        child: CircularProgressIndicator(
+                                                          valueColor: AlwaysStoppedAnimation<Color>(coral),
+                                                          strokeWidth: 2,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  errorBuilder: (context, error, stackTrace) {
+                                                    return Container(
+                                                      width: 120,
+                                                      height: 120,
+                                                      child: Icon(Icons.pets, size: 50, color: coral),
+                                                    );
+                                                  },
+                                                )
+                                              : Container(
+                                                  width: 120,
+                                                  height: 120,
+                                                  child: Column(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: [
+                                                      Icon(Icons.pets, size: 40, color: coral),
+                                                      SizedBox(height: 8),
+                                                      Text(
+                                                        'Add Photo',
+                                                        style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: coral,
+                                                          fontWeight: FontWeight.w500,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                    ),
                                   ),
+                                  // Enhanced add/edit button
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: GestureDetector(
+                                      onTap: _pickPetImage,
+                                      child: Container(
+                                        padding: EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: LinearGradient(
+                                            colors: [deepRed, coral],
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: deepRed.withOpacity(0.4),
+                                              blurRadius: 8,
+                                              offset: Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'Tap the camera icon to add a photo',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                  _buildTextField(
+            label: "Name", 
+            initialValue: name,
+            onSaved: (val) => name = val ?? '',
+          ),
+          // Breed picker with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
+            child: InkWell(
+              onTap: () => _showBreedPicker(),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  children: [
+                    Icon(Icons.category, color: deepRed),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Breed",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            breed.isNotEmpty 
+                                ? breed
+                                : 'Select breed',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: breed.isNotEmpty ? Colors.black87 : Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: deepRed,
+                      size: 24,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Date of Birth picker with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
+            child: InkWell(
+              onTap: () async {
+                final DateTime? picked = await showDatePicker(
+                  context: context,
+                  initialDate: dateOfBirth ?? DateTime.now().subtract(Duration(days: 365)),
+                  firstDate: DateTime.now().subtract(Duration(days: 25 * 365)), // 25 years ago
+                  lastDate: DateTime.now(),
+                  builder: (context, child) {
+                    return Theme(
+                      data: Theme.of(context).copyWith(
+                        colorScheme: ColorScheme.light(
+                          primary: deepRed,
+                          onPrimary: Colors.white,
+                          surface: Colors.white,
+                          onSurface: Colors.black,
+                        ),
+                      ),
+                      child: child!,
+                    );
+                  },
+                );
+                if (picked != null) {
+                  setState(() {
+                    dateOfBirth = picked;
+                    // Calculate age for backward compatibility
+                    final ageMap = _calculateAge(picked);
+                    age = ageMap['years']!;
+                  });
+                }
+              },
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  children: [
+                    Icon(Icons.calendar_today, color: deepRed),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Date of Birth",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            dateOfBirth != null 
+                                ? '${dateOfBirth!.day}/${dateOfBirth!.month}/${dateOfBirth!.year}'
+                                : 'Select date of birth',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: dateOfBirth != null ? Colors.black87 : Colors.grey.shade500,
+                            ),
+                          ),
+                          if (dateOfBirth != null) ...[
+                            SizedBox(height: 4),
+                            Text(
+                              'Age: ${_formatAge(dateOfBirth!)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: coral,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: deepRed,
+                      size: 24,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Gender picker with uniform styling
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
+            child: InkWell(
+              onTap: () => _showGenderPicker(),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  children: [
+                    Icon(Icons.person, color: deepRed),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Gender",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: deepRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            gender != null 
+                                ? gender!
+                                : 'Select gender',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: gender != null ? Colors.black87 : Colors.grey.shade500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      color: deepRed,
+                      size: 24,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Health display field (non-interactive, default to Good)
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: coral.withOpacity(0.3)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            margin: EdgeInsets.only(bottom: 16),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.health_and_safety, color: deepRed),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          'Tap the camera icon to add a photo',
+                          "Health",
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.grey[600],
+                            color: deepRed,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          "Good",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
                           ),
                         ),
                       ],
                     ),
                   ),
-
-          _buildTextField(
-            label: "Name", 
-            initialValue: name,
-            onSaved: (val) => name = val ?? '',
-          ),
-         // Breed dropdown moved to after Name
-         Padding(
-           padding: const EdgeInsets.symmetric(vertical: 8),
-           child: DropdownButtonFormField<String>(
-             value: (_species == 'Dog' ? (dogBreeds.contains(breed) ? breed : dogBreeds.first) : (catBreeds.contains(breed) ? breed : catBreeds.first)),
-             decoration: InputDecoration(
-               labelText: "Breed",
-               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-             ),
-             items: (_species == 'Dog' ? dogBreeds : catBreeds).map((b) {
-               return DropdownMenuItem(value: b, child: Text(b));
-             }).toList(),
-             onChanged: (val) => setState(() => breed = val ?? ''),
-             onSaved: (val) => breed = val ?? '',
-           ),
-         ),
-          _buildTextField(
-            label: "Age (years)",
-            initialValue: age > 0 ? age.toString() : '',
-            keyboardType: TextInputType.number,
-            onSaved: (val) => age = int.tryParse(val ?? '0') ?? 0,
-          ),
-          // Gender dropdown moved under Age
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: DropdownButtonFormField<String>(
-              value: gender.isNotEmpty ? gender : 'Male',
-              decoration: InputDecoration(
-                labelText: "Gender",
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ],
               ),
-              items: ['Male', 'Female', 'Unknown'].map((g) {
-                return DropdownMenuItem(value: g, child: Text(g));
-              }).toList(),
-              onChanged: (val) => setState(() => gender = val ?? 'Male'),
-              onSaved: (val) => gender = val ?? 'Male',
-            ),
-          ),
-          // replace free-text health field with dropdown
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: DropdownButtonFormField<String>(
-              value: (health.isNotEmpty ? health : 'Good'),
-              decoration: InputDecoration(
-                labelText: "Health",
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              items: ['Good', 'Bad'].map((h) {
-                return DropdownMenuItem(value: h, child: Text(h));
-              }).toList(),
-              onChanged: (val) => setState(() => health = val ?? 'Good'),
-              onSaved: (val) => health = val ?? 'Good',
-              validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
             ),
           ),
           _buildTextField(
@@ -3660,7 +5337,7 @@ class _AddPetFormState extends State<_AddPetForm> {
                   ? CircularProgressIndicator(color: Colors.white)
                   : Text(widget.initialPet != null ? "Update Pet" : "Save Pet"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: deepRed,
+                backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
@@ -3669,13 +5346,13 @@ class _AddPetFormState extends State<_AddPetForm> {
             ),
           ),
           SizedBox(height: 16),
-        ],
-      ),
-    )
-          ),
-        ]
-      ),
-    );
+        ], // children of inner Column
+      ), // inner Column child of SingleChildScrollView
+    ), // SingleChildScrollView child of Flexible
+  ), // Flexible
+], // children of outer Column
+), // outer Column child of Form
+); // Form
   }
 
   Widget _buildTextField({
@@ -3708,7 +5385,7 @@ class _AddPetFormState extends State<_AddPetForm> {
           contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           prefixIcon: _getFieldIcon(label),
         ),
-        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black87),
         validator: (value) =>
             (value == null || value.isEmpty) ? 'Required' : null,
         onSaved: onSaved,
@@ -3721,11 +5398,11 @@ class _AddPetFormState extends State<_AddPetForm> {
     return InkWell(
       onTap: () => setState(() {
         _species = species;
-        // ensure breed matches selected species
+        // reset breed when switching species so user must select again
         if (species == 'Dog' && !dogBreeds.contains(breed)) {
-          breed = dogBreeds.first;
+          breed = '';
         } else if (species == 'Cat' && !catBreeds.contains(breed)) {
-          breed = catBreeds.first;
+          breed = '';
         }
       }),
       borderRadius: BorderRadius.circular(12),
@@ -3746,14 +5423,14 @@ class _AddPetFormState extends State<_AddPetForm> {
           children: [
             Icon(
               icon,
-              color: isSelected ? Colors.white : deepRed,
+              color: isSelected ? Colors.black87 : deepRed,
               size: 18,
             ),
             SizedBox(width: 8),
             Text(
               species,
               style: TextStyle(
-                color: isSelected ? Colors.white : deepRed,
+                color: isSelected ? Colors.black87 : deepRed,
                 fontWeight: FontWeight.w600,
                 fontSize: 14,
               ),
@@ -3771,14 +5448,18 @@ class _AddPetFormState extends State<_AddPetForm> {
       case 'breed':
         return Icon(Icons.category, color: deepRed);
       case 'age':
-        return Icon(Icons.cake, color: deepRed);
+      case 'date of birth':
+        return Icon(Icons.calendar_today, color: deepRed);
       case 'weight':
         return Icon(Icons.monitor_weight, color: deepRed);
       case 'health':
         return Icon(Icons.health_and_safety, color: deepRed);
+      case 'gender':
+        return Icon(Icons.person, color: deepRed);
       default:
         return Icon(Icons.info, color: deepRed);
     }
   }
+
 }
 

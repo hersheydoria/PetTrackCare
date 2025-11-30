@@ -104,6 +104,25 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    
+    // Handle route arguments from missing pet alert
+    try {
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      if (args != null && args['scrollToPost'] == true) {
+        final postId = args['postId'] as String?;
+        if (postId != null && postId.isNotEmpty) {
+          print('🔔 CommunityScreen: Received route argument to scroll to post: $postId');
+          highlightedPostId = postId;
+          // Schedule scroll after a short delay to ensure posts are loaded and rendered
+          Future.delayed(Duration(milliseconds: 500), () {
+            _scrollToPost(postId);
+          });
+        }
+      }
+    } catch (e) {
+      print('⚠️ CommunityScreen: Error handling route arguments: $e');
+    }
+    
     // Completely remove automatic refresh when navigating back
     // The user can manually refresh if they want to see new posts
   }
@@ -623,6 +642,48 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         print('UI UPDATED - Comment count for post $postId set to ${commentCounts[postId]}');
       }
     });
+  }
+
+  // Scroll to a specific post by ID
+  void _scrollToPost(String postId) {
+    print('🔔 CommunityScreen: Attempting to scroll to post $postId');
+    
+    // Find the index of the post with the given ID
+    int postIndex = -1;
+    for (int i = 0; i < posts.length; i++) {
+      if (posts[i]['id'].toString() == postId) {
+        postIndex = i;
+        break;
+      }
+    }
+    
+    if (postIndex >= 0) {
+      print('🔔 CommunityScreen: Found post at index $postIndex, scrolling...');
+      // Each post takes up approximately 500 pixels (adjust if needed)
+      final offset = postIndex * 500.0;
+      
+      _scrollController.animateTo(
+        offset,
+        duration: Duration(milliseconds: 800),
+        curve: Curves.easeInOut,
+      );
+      
+      // Highlight the post temporarily
+      setState(() {
+        highlightedPostId = postId;
+      });
+      
+      // Remove highlight after 3 seconds
+      Future.delayed(Duration(seconds: 3), () {
+        if (mounted) {
+          setState(() {
+            highlightedPostId = null;
+          });
+        }
+      });
+    } else {
+      print('🔔 CommunityScreen: Post $postId not found in current list (${posts.length} posts loaded)');
+    }
   }
 
   Future<void> fetchPosts() async {
@@ -1334,7 +1395,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                               }
                             },
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: deepRed,
+                              backgroundColor: Colors.green,
                               foregroundColor: Colors.white,
                               padding: EdgeInsets.symmetric(vertical: 16),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1677,13 +1738,13 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    side: BorderSide(color: Colors.grey[300]!),
+                                    side: BorderSide(color: Colors.red.shade300),
                                   ),
                                 ),
                                 child: Text(
                                   'Cancel',
                                   style: TextStyle(
-                                    color: Colors.grey[700],
+                                    color: Colors.red,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -1774,7 +1835,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                                         }
                                       },
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   foregroundColor: Colors.white,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
@@ -1814,15 +1875,16 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     );
   }
 
-  Future<void> deletePost(BuildContext context, String postId) async {
+  // Mark missing pet as found
+  Future<void> markAsFound(BuildContext context, Map post) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('Delete Post'),
-        content: Text('Are you sure you want to delete this post?'),
+        title: Text('Mark Pet as Found'),
+        content: Text('Mark this missing pet as found? This will update the post type and add a "Found" update to the caption.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Delete')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel', style: TextStyle(color: Colors.red))),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Mark as Found'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)),
         ],
       ),
     );
@@ -1830,14 +1892,179 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     if (confirm != true) return;
 
     try {
+      final currentContent = post['content']?.toString() ?? '';
+      final foundTime = getDetailedPhilippinesTime(DateTime.now().toUtc());
+      final updatedContent = '$currentContent\n\nUPDATE: Pet has been found! - $foundTime';
+      
+      await Supabase.instance.client
+          .from('community_posts')
+          .update({
+            'type': 'found',
+            'content': updatedContent,
+          })
+          .eq('id', post['id']);
+
+      // Also update the is_missing status in the pets table for the post owner
+      try {
+        final userId = post['user_id'];
+        if (userId != null) {
+          // Get all pets owned by this user that are currently marked as missing
+          final missingPets = await Supabase.instance.client
+              .from('pets')
+              .select('id, name')
+              .eq('owner_id', userId)
+              .eq('is_missing', true);
+          
+          if (missingPets is List && missingPets.isNotEmpty) {
+            // Try to match the pet by name in the post content
+            for (var pet in missingPets) {
+              final petName = pet['name']?.toString() ?? '';
+              if (petName.isNotEmpty && currentContent.contains(petName)) {
+                // Found matching pet - update is_missing status
+                await Supabase.instance.client
+                    .from('pets')
+                    .update({'is_missing': false})
+                    .eq('id', pet['id']);
+                print('✅ Updated pet ${pet['id']} is_missing status to false');
+                break;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        print('⚠️ Warning: Could not update pet is_missing status: $e');
+        // Don't fail the entire operation if pet update fails
+      }
+
+      // Update local state
+      setState(() {
+        final postIndex = posts.indexWhere((p) => p['id'] == post['id']);
+        if (postIndex != -1) {
+          posts[postIndex]['type'] = 'found';
+          posts[postIndex]['content'] = updatedContent;
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Pet marked as found!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('Error marking pet as found: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to mark pet as found. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> deletePost(BuildContext context, String postId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Delete Post'),
+        content: Text('Are you sure you want to delete this post? This will also delete all comments and notifications related to this post.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel', style: TextStyle(color: Colors.red))),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      // Delete in the correct order to handle foreign key constraints
+      
+      // 1. First delete all notifications related to comments on this post
+      final commentIds = await Supabase.instance.client
+          .from('comments')
+          .select('id')
+          .eq('post_id', postId);
+      
+      if (commentIds.isNotEmpty) {
+        final commentIdList = commentIds.map((c) => c['id']).toList();
+        
+        // Delete notifications for these comments
+        await Supabase.instance.client
+            .from('notifications')
+            .delete()
+            .inFilter('comment_id', commentIdList);
+        
+        // Delete replies to these comments
+        await Supabase.instance.client
+            .from('replies')
+            .delete()
+            .inFilter('comment_id', commentIdList);
+        
+        // Delete comment likes
+        await Supabase.instance.client
+            .from('comment_likes')
+            .delete()
+            .inFilter('comment_id', commentIdList);
+      }
+      
+      // 2. Delete all notifications related to this post
+      await Supabase.instance.client
+          .from('notifications')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 3. Delete all comments on this post
+      await Supabase.instance.client
+          .from('comments')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 4. Delete all likes on this post
+      await Supabase.instance.client
+          .from('likes')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 5. Delete all bookmarks for this post
+      await Supabase.instance.client
+          .from('bookmarks')
+          .delete()
+          .eq('post_id', postId);
+      
+      // 6. Finally delete the post itself
       await Supabase.instance.client
           .from('community_posts')
           .delete()
           .eq('id', postId);
 
-      fetchPosts();
+      // Clean up local state
+      setState(() {
+        posts.removeWhere((post) => post['id'].toString() == postId);
+        postComments.remove(postId);
+        commentCounts.remove(postId);
+        locallyUpdatedPosts.remove(postId);
+        likedPosts.remove(postId);
+        likeCounts.remove(postId);
+        bookmarkedPosts.remove(postId);
+        showCommentInput.remove(postId);
+        commentControllers.remove(postId);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Post deleted successfully'),
+          backgroundColor: deepRed,
+        ),
+      );
     } catch (e) {
       print('Error deleting post: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete post. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -1931,6 +2158,10 @@ void showEditPostModal(Map post) {
                   print('Error updating post: $e');
                 }
               },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
               child: Text('Save Changes'),
             ),
           ],
@@ -2116,20 +2347,12 @@ void showEditPostModal(Map post) {
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(
-                                        post['type'] == 'general'
-                                            ? Icons.forum
-                                            : post['type'] == 'missing'
-                                                ? Icons.search
-                                                : post['type'] == 'found'
-                                                    ? Icons.pets
-                                                    : Icons.info,
-                                        size: 10,
-                                        color: Colors.white,
-                                      ),
+
                                       SizedBox(width: 3),
                                       Text(
-                                        post['type'].toString().toUpperCase(),
+                                        post['type'] == 'found' 
+                                            ? 'FOUND'
+                                            : post['type'].toString().toUpperCase(),
                                         style: TextStyle(
                                           fontSize: 10,
                                           color: Colors.white,
@@ -2195,12 +2418,45 @@ void showEditPostModal(Map post) {
                                   showEditPostModal(post);
                                 } else if (value == 'delete') {
                                   deletePost(context, post['id']);
+                                } else if (value == 'mark_found') {
+                                  markAsFound(context, post);
                                 }
                               },
-                              itemBuilder: (_) => [
-                                PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                PopupMenuItem(value: 'delete', child: Text('Delete')),
-                              ],
+                              itemBuilder: (_) {
+                                List<PopupMenuEntry<String>> items = [
+                                  PopupMenuItem(value: 'edit', child: Row(
+                                    children: [
+                                      Icon(Icons.edit, size: 18, color: Colors.grey[600]),
+                                      SizedBox(width: 8),
+                                      Text('Edit'),
+                                    ],
+                                  )),
+                                ];
+                                
+                                // Add "Mark as Found" option only for missing pet posts
+                                if (post['type'] == 'missing') {
+                                  items.add(PopupMenuItem(
+                                    value: 'mark_found', 
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.pets, size: 18, color: Colors.green[600]),
+                                        SizedBox(width: 8),
+                                        Text('Mark as Found', style: TextStyle(color: Colors.green[600])),
+                                      ],
+                                    ),
+                                  ));
+                                }
+                                
+                                items.add(PopupMenuItem(value: 'delete', child: Row(
+                                  children: [
+                                    Icon(Icons.delete, size: 18, color: Colors.red[600]),
+                                    SizedBox(width: 8),
+                                    Text('Delete', style: TextStyle(color: Colors.red[600])),
+                                  ],
+                                )));
+                                
+                                return items;
+                              },
                             )
                           : IconButton(
                               icon: Icon(Icons.report_outlined, color: Colors.deepOrange),
@@ -2565,7 +2821,7 @@ void showEditPostModal(Map post) {
                                                                 actions: [
                                                                   TextButton(
                                                                     onPressed: () => Navigator.pop(context),
-                                                                    child: Text('Cancel'),
+                                                                    child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                                                   ),
                                                                   ElevatedButton(
                                                                     onPressed: () async {
@@ -2595,6 +2851,9 @@ void showEditPostModal(Map post) {
                                                                         }
                                                                       }
                                                                     },
+                                                                    style: ElevatedButton.styleFrom(
+                                                                      backgroundColor: Colors.green,
+                                                                    ),
                                                                     child: Text('Save'),
                                                                   ),
                                                                 ],
@@ -2609,13 +2868,13 @@ void showEditPostModal(Map post) {
                                                                 actions: [
                                                                   TextButton(
                                                                     onPressed: () => Navigator.pop(context, false),
-                                                                    child: Text('Cancel'),
+                                                                    child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                                                   ),
                                                                   ElevatedButton(
                                                                     onPressed: () => Navigator.pop(context, true),
                                                                     child: Text('Delete'),
                                                                     style: ElevatedButton.styleFrom(
-                                                                      backgroundColor: Colors.red,
+                                                                      backgroundColor: Colors.green,
                                                                     ),
                                                                   ),
                                                                 ],
@@ -2822,7 +3081,7 @@ void showEditPostModal(Map post) {
                                                                               decoration: InputDecoration(border: OutlineInputBorder()),
                                                                             ),
                                                                             actions: [
-                                                                              TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel')),
+                                                                              TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: Colors.red))),
                                                                               ElevatedButton(
                                                                                 onPressed: () async {
                                                                                   final newText = controller.text.trim();
@@ -2831,6 +3090,9 @@ void showEditPostModal(Map post) {
                                                                                     await editReply(commentId, r['id'].toString(), newText, ri);
                                                                                   }
                                                                                 },
+                                                                                style: ElevatedButton.styleFrom(
+                                                                                  backgroundColor: Colors.green,
+                                                                                ),
                                                                                 child: Text('Save'),
                                                                               ),
                                                                             ],
@@ -2843,8 +3105,8 @@ void showEditPostModal(Map post) {
                                                                             title: Text('Delete Reply'),
                                                                             content: Text('Delete this reply?'),
                                                                             actions: [
-                                                                              TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel')),
-                                                                              ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Delete')),
+                                                                              TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel', style: TextStyle(color: Colors.red))),
+                                                                              ElevatedButton(onPressed: () => Navigator.pop(context, true), child: Text('Delete'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)),
                                                                             ],
                                                                           ),
                                                                         );

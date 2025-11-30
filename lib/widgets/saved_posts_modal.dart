@@ -134,179 +134,264 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Container(
-        color: const Color(0xFFF6DED8), // lightBlush, matches profile screen
-        height: MediaQuery.of(context).size.height * 0.8,
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white,
+            const Color(0xFFF6DED8).withOpacity(0.3), // lightBlush
+          ],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 20,
+            offset: Offset(0, -5),
+          ),
+        ],
+      ),
+      child: SafeArea(
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), // less vertical space
+            // Enhanced Header with modern design
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: deepRed.withOpacity(0.05),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: Icon(Icons.arrow_back, color: deepRed),
-                    onPressed: () => Navigator.pop(context),
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: deepRed.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.bookmark, color: deepRed, size: 20),
                   ),
+                  SizedBox(width: 12),
                   Expanded(
-                    child: Center(
-                      child: Text(
-                        'Saved Posts',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: deepRed,
-                        ),
+                    child: Text(
+                      'Saved Posts',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: deepRed,
                       ),
                     ),
                   ),
-                  SizedBox(width: 48),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: IconButton(
+                      icon: Icon(Icons.close, color: Colors.grey[600]),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ),
                 ],
               ),
             ),
             Expanded(
-              child: isLoading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: deepRed,
-                      ),
-                    )
-                  : savedPosts.isEmpty
-                      ? Container(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
-                          child: Container(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: isLoading
+                    ? Center(
+                        child: CircularProgressIndicator(
+                          color: deepRed,
+                        ),
+                      )
+                    : savedPosts.isEmpty
+                        ? Container(
                             decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey.shade300),
-                              borderRadius: BorderRadius.zero,
                               color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFFD2665A).withOpacity(0.3)), // coral
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
                             ),
-                            padding: EdgeInsets.all(16),
+                            padding: EdgeInsets.all(32),
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(
-                                  Icons.bookmark_border,
-                                  size: 64,
-                                  color: Colors.grey[400],
+                                Container(
+                                  padding: EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: deepRed.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(50),
+                                  ),
+                                  child: Icon(
+                                    Icons.bookmark_border,
+                                    size: 48,
+                                    color: deepRed,
+                                  ),
                                 ),
-                                SizedBox(height: 16),
+                                SizedBox(height: 24),
                                 Text(
                                   'No Saved Posts Yet',
                                   style: TextStyle(
-                                    fontSize: 18,
+                                    fontSize: 20,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.grey[600],
+                                    color: deepRed,
                                   ),
                                 ),
-                                SizedBox(height: 8),
+                                SizedBox(height: 12),
                                 Text(
                                   'Posts you bookmark will appear here. Tap the bookmark icon on any community post to save it for later.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 14,
                                     color: Colors.grey[600],
+                                    height: 1.5,
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: savedPosts.length,
-                          itemBuilder: (context, index) {
-                            final post = savedPosts[index];
-                            final user = post['user'] as Map<String, dynamic>?;
-                            return GestureDetector(
-                              onTap: () => _navigateToPost(context, post['id'].toString()),
-                              child: Container(
-                                margin: EdgeInsets.only(bottom: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(color: Colors.grey.shade300),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              child: Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
+                          )
+                        : ListView.builder(
+                            itemCount: savedPosts.length,
+                            itemBuilder: (context, index) {
+                              final post = savedPosts[index];
+                              final user = post['user'] as Map<String, dynamic>?;
+                              return GestureDetector(
+                                onTap: () => _navigateToPost(context, post['id'].toString()),
+                                child: Container(
+                                  margin: EdgeInsets.only(bottom: 20),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: const Color(0xFFD2665A).withOpacity(0.3)), // coral
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.05),
+                                        blurRadius: 10,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Padding(
+                                    padding: EdgeInsets.all(20),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        CircleAvatar(
-                                          radius: 20,
-                                          backgroundImage: user?['profile_picture'] != null
-                                              ? NetworkImage(user!['profile_picture'])
-                                              : AssetImage('assets/logo.png') as ImageProvider,
-                                        ),
-                                        SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                '${user?['name'] ?? 'Unknown'}',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 16,
-                                                ),
+                                        Row(
+                                          children: [
+                                            CircleAvatar(
+                                              radius: 22,
+                                              backgroundImage: user?['profile_picture'] != null
+                                                  ? NetworkImage(user!['profile_picture'])
+                                                  : AssetImage('assets/logo.png') as ImageProvider,
+                                            ),
+                                            SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    '${user?['name'] ?? 'Unknown'}',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 16,
+                                                      color: deepRed,
+                                                    ),
+                                                  ),
+                                                  SizedBox(height: 2),
+                                                  Text(
+                                                    _formatDate(post['created_at'] ?? ''),
+                                                    style: TextStyle(
+                                                      color: Colors.grey[600],
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
-                                              Text(
-                                                _formatDate(post['created_at'] ?? ''),
-                                                style: TextStyle(
-                                                  color: Colors.grey[600],
-                                                  fontSize: 12,
-                                                ),
+                                            ),
+                                            Container(
+                                              decoration: BoxDecoration(
+                                                color: deepRed.withOpacity(0.1),
+                                                borderRadius: BorderRadius.circular(8),
                                               ),
-                                            ],
-                                          ),
+                                              child: IconButton(
+                                                icon: Icon(
+                                                  Icons.bookmark,
+                                                  color: deepRed,
+                                                  size: 20,
+                                                ),
+                                                onPressed: () => _removeFromSaved(post['id']),
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        IconButton(
-                                          icon: Icon(
-                                            Icons.bookmark,
-                                            color: deepRed,
+                                        SizedBox(height: 16),
+                                        if (post['content'] != null && post['content'].isNotEmpty)
+                                          Padding(
+                                            padding: EdgeInsets.only(bottom: 12),
+                                            child: Text(
+                                              post['content'],
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                height: 1.4,
+                                                color: Colors.grey[800],
+                                              ),
+                                            ),
                                           ),
-                                          onPressed: () => _removeFromSaved(post['id']),
-                                        ),
+                                        if (post['image_url'] != null && post['image_url'].isNotEmpty)
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(12),
+                                            child: Image.network(
+                                              post['image_url'],
+                                              fit: BoxFit.cover,
+                                              width: double.infinity,
+                                              height: 200,
+                                              errorBuilder: (context, error, stackTrace) {
+                                                return Container(
+                                                  height: 200,
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.grey[100],
+                                                    borderRadius: BorderRadius.circular(12),
+                                                  ),
+                                                  child: Column(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: [
+                                                      Icon(
+                                                        Icons.broken_image,
+                                                        color: Colors.grey[400],
+                                                        size: 40,
+                                                      ),
+                                                      SizedBox(height: 8),
+                                                      Text(
+                                                        'Image failed to load',
+                                                        style: TextStyle(
+                                                          color: Colors.grey[500],
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ),
                                       ],
                                     ),
-                                    SizedBox(height: 12),
-                                    if (post['content'] != null && post['content'].isNotEmpty)
-                                      Text(
-                                        post['content'],
-                                        style: TextStyle(fontSize: 14),
-                                      ),
-                                    if (post['image_url'] != null && post['image_url'].isNotEmpty)
-                                      Padding(
-                                        padding: EdgeInsets.only(top: 12),
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(8),
-                                          child: Image.network(
-                                            post['image_url'],
-                                            fit: BoxFit.cover,
-                                            width: double.infinity,
-                                            height: 200,
-                                            errorBuilder: (context, error, stackTrace) {
-                                              return Container(
-                                                height: 200,
-                                                color: Colors.grey[300],
-                                                child: Icon(
-                                                  Icons.broken_image,
-                                                  color: Colors.grey[600],
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                      ),
-                                  ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                            );
-                          },
-                        ),
-            ),
+                              );
+                            },
+                          ),
+                ),
+              ),
           ],
         ),
       ),

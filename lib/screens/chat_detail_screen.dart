@@ -1,15 +1,16 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
-import 'package:realtime_client/src/types.dart' as rt;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/notification_service.dart';
+import '../widgets/call_dialogs.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -43,24 +44,50 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String? _recordedFilePath;
   DateTime? _recordingStartTime;
   Duration _recordingDuration = Duration.zero;
+  final FocusNode _messageFocusNode = FocusNode();
+  late final VoidCallback _messageTextListener;
 
   // NEW: player state for voice playback
   FlutterSoundPlayer? _player;
   String? _playingMessageId;
   String? _incomingPromptedCallId;
   bool _joiningCall = false;
+  bool _inActiveCall = false; // Track if user is currently in an active call
+  String? _activeCallId; // Store the active call ID for hangup broadcast
   String? _myDisplayName; // current user's display name, used for Zego
 
   String? _outgoingCallId;
   String _outgoingCallMode = 'voice';
   bool _awaitingAccept = false;
   bool _callingDialogOpen = false;
+  bool _isIncomingRingtonePlaying = false;
+  bool _incomingDialogOpen = false;
 
   // NEW: realtime signaling channels cache
   RealtimeChannel? _callRx;
   final Map<String, RealtimeChannel> _sigChans = {};
 
   final ScrollController _scrollController = ScrollController();
+  final List<_ConversationHighlight> _conversationHighlights = const [
+    _ConversationHighlight(
+      icon: Icons.pets_outlined,
+      title: 'Share pet update',
+      template: 'Quick check-in: here is how our pet is doing today...',
+      color: Color(0xFFEF6C82),
+    ),
+    _ConversationHighlight(
+      icon: Icons.location_on_outlined,
+      title: 'Send live location',
+      template: 'Sharing our live location so you can see where we are.',
+      color: Color(0xFF4C9F70),
+    ),
+    _ConversationHighlight(
+      icon: Icons.medical_services_outlined,
+      title: 'Vet reminder',
+      template: 'Reminder: our vet appointment is coming up soon.',
+      color: Color(0xFF4C7DFF),
+    ),
+  ];
   
   // Reply functionality
   Map<String, dynamic>? _replyingToMessage;
@@ -68,9 +95,55 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // Receiver profile picture
   String? _receiverProfilePicture;
 
+  void _playIncomingCallTone() {
+    if (_isIncomingRingtonePlaying) return;
+    try {
+      FlutterRingtonePlayer().play(
+        android: AndroidSounds.ringtone,
+        ios: IosSounds.electronic,
+        looping: true,
+        volume: 1.0,
+      );
+      _isIncomingRingtonePlaying = true;
+    } catch (e) {
+      print('📞 Error playing incoming ringtone: $e');
+    }
+  }
+
+  void _stopIncomingCallTone() {
+    if (!_isIncomingRingtonePlaying) return;
+    try {
+      FlutterRingtonePlayer().stop();
+    } catch (e) {
+      print('📞 Error stopping incoming ringtone: $e');
+    } finally {
+      _isIncomingRingtonePlaying = false;
+    }
+  }
+
+  void _dismissIncomingCallPrompt({BuildContext? dialogContext}) {
+    if (_incomingDialogOpen) {
+      final ctx = dialogContext ?? (mounted ? context : null);
+      if (ctx != null) {
+        try {
+          Navigator.of(ctx, rootNavigator: true).pop();
+        } catch (e) {
+          print('📞 Error dismissing incoming dialog: $e');
+        }
+      }
+    }
+    _incomingDialogOpen = false;
+    _incomingPromptedCallId = null;
+    _stopIncomingCallTone();
+  }
+
   @override
   void initState() {
     super.initState();
+    _messageTextListener = () {
+      if (mounted) setState(() {});
+    };
+    _messageController.addListener(_messageTextListener);
     _recorder = FlutterSoundRecorder();
     _initAudio(); // ask mic permission, open recorder & player
     fetchMessages().then((_) => _scrollToBottom());
@@ -271,11 +344,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   // NEW: setup realtime signaling
+  // NOTE: call_invite is now handled globally by CallInviteService
   void _initCallSignals() {
     final myKey = _sanitizeId(widget.userId);
     _callRx = supabase.channel('call_sig:$myKey');
     _callRx!
-        .onBroadcast(
+        // DISABLED: call_invite is now handled globally by CallInviteService
+        /* .onBroadcast(
           event: 'call_invite',
           callback: (payload, [ref]) async {
             final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
@@ -303,6 +378,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             );
 
             if (accept == true) {
+              // Debug: Log call details for receiver
+              print('🔵 RECEIVER accepting call:');
+              print('   From: $from');
+              print('   To: ${widget.userId}');
+              print('   CallID received: $callId');
+              print('   Mode: $mode');
+              
               // DB record for history
               try {
                 await supabase.from('messages').insert({
@@ -322,6 +404,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 'call_id': callId,
                 'mode': mode,
               });
+              
+              print('🔵 RECEIVER joining Zego with callID: $callId');
+              // Longer delay to let caller's Zego instance fully initialize the room
+              print('🔵 RECEIVER waiting 1.5 seconds for room initialization...');
+              await Future.delayed(Duration(milliseconds: 1500));
+              print('🔵 RECEIVER now joining...');
               await _joinZegoCall(callId: callId, video: mode == 'video');
             } else {
               // DB record for history
@@ -345,7 +433,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               });
             }
           },
-        )
+        ) */
         .onBroadcast(
           event: 'call_accept',
           callback: (payload, [ref]) async {
@@ -354,8 +442,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             final to = (body['to'] ?? '').toString();
             final callId = (body['call_id'] ?? '').toString();
             final mode = (body['mode'] ?? 'voice').toString();
+            
+            print('🔴 CALLER received broadcast call_accept:');
+            print('   To: $to (my ID: ${widget.userId})');
+            print('   CallID from broadcast: $callId');
+            print('   My outgoing CallID: $_outgoingCallId');
+            print('   Awaiting accept: $_awaitingAccept');
+            print('   Match: ${to == widget.userId && callId == _outgoingCallId}');
+            
             if (to != widget.userId || callId.isEmpty) return;
             if (_awaitingAccept && _outgoingCallId == callId) {
+              print('🔴 CALLER JOINING via broadcast with callID: $callId');
               _dismissCallingDialog();
               _awaitingAccept = false;
               await _joinZegoCall(callId: callId, video: mode == 'video');
@@ -389,7 +486,48 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             if (to != widget.userId || callId.isEmpty) return;
             // If the caller canceled before accept, just clear prompt (if any)
             if (_incomingPromptedCallId == callId) {
-              _incomingPromptedCallId = null;
+              _dismissIncomingCallPrompt();
+            }
+          },
+        )
+        .onBroadcast(
+          event: 'call_hangup',
+          callback: (payload, [ref]) {
+            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
+            if (body == null) return;
+            final to = (body['to'] ?? '').toString();
+            final from = (body['from'] ?? '').toString();
+            final callId = (body['call_id'] ?? '').toString();
+            
+            print('📞 Received call_hangup event:');
+            print('   From: $from');
+            print('   To: $to');
+            print('   CallID: $callId');
+            print('   My active call: $_activeCallId');
+            print('   In active call: $_inActiveCall');
+            
+            if (to != widget.userId || callId.isEmpty) return;
+            
+            // If I'm currently in this call, end it
+            if (_inActiveCall && _activeCallId == callId) {
+              print('📞 Other user ended call - forcing navigation back');
+              
+              // Reset state
+              if (mounted) {
+                setState(() {
+                  _inActiveCall = false;
+                  _activeCallId = null;
+                  _awaitingAccept = false;
+                });
+                
+                // Pop the Zego call screen if it's currently displayed
+                Navigator.of(context).popUntil((route) => route.isFirst);
+                
+                // Show notification
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Call ended by other user')),
+                );
+              }
             }
           },
         )
@@ -399,28 +537,58 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // NEW: send a broadcast signal to a user's channel
   Future<void> _sendSignal(String userId, String event, Map<String, dynamic> payload) async {
     final key = _sanitizeId(userId);
+    print('📞 _sendSignal: Sending $event to $key');
+    
     var ch = _sigChans[key];
-    ch ??= supabase.channel('call_sig:$key')..subscribe();
-    _sigChans[key] = ch;
+    if (ch == null) {
+      print('📞 _sendSignal: Creating new channel call_sig:$key');
+      ch = supabase.channel(
+        'call_sig:$key',
+        opts: const RealtimeChannelConfig(
+          self: true, // Receive broadcasts from self
+          ack: true,  // Request acknowledgments
+        ),
+      );
+      print('📞 _sendSignal: Subscribing to channel...');
+      ch.subscribe((status, [error]) {
+        print('📞 _sendSignal: 📡 Channel subscription status: $status');
+        if (error != null) {
+          print('📞 _sendSignal: ❌ Subscription error: $error');
+        }
+      });
+      
+      // Wait for subscription to be fully established
+      print('📞 _sendSignal: ⏳ Waiting for channel to be ready...');
+      await Future.delayed(Duration(milliseconds: 1500));
+      
+      _sigChans[key] = ch;
+      print('📞 _sendSignal: ✅ Channel ready for broadcasting');
+    }
+    
     try {
-      await ch.send(
-        type: rt.RealtimeListenTypes.broadcast,
+      print('📞 _sendSignal: 📤 Sending broadcast event $event with payload: $payload');
+      await ch.sendBroadcastMessage(
         event: event,
         payload: payload,
       );
-    } catch (_) {
+      print('📞 _sendSignal: ✅ Broadcast sent successfully');
+    } catch (e) {
+      print('📞 _sendSignal: ❌ Error sending broadcast: $e');
       // ignore; DB insert path still delivers signaling via onPostgresChanges
     }
   }
 
   @override
   void dispose() {
+    _messageController.removeListener(_messageTextListener);
     _messageController.dispose();
+    _messageFocusNode.dispose();
     _recorder?.closeRecorder();
     try {
       _player?.stopPlayer();
       _player?.closePlayer();
     } catch (_) {}
+    _stopIncomingCallTone();
     supabase.removeAllChannels();
     // No-op: removeAllChannels() already cleans up _callRx/_sigChans
     super.dispose();
@@ -487,64 +655,78 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
               if (!mounted) return;
               final callerId = from?.toString();
-              final accept = await showDialog<bool>(
-                context: context,
-                barrierDismissible: true,
-                builder: (_) => AlertDialog(
-                  title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
-                  content: const Text('Join this call?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Decline'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Accept'),
-                    ),
-                  ],
-                ),
-              );
+              if (callerId == null || callerId.isEmpty) {
+                _incomingPromptedCallId = null;
+                return;
+              }
+              final callerName = callerId == widget.receiverId ? widget.userName : 'Incoming caller';
+              _playIncomingCallTone();
+              _incomingDialogOpen = true;
 
-              if (accept == true && mounted) {
-                // Notify caller that callee accepted (DB + realtime)
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': widget.userId,
-                    'receiver_id': callerId,
-                    'type': 'call_accept',
-                    'call_id': callId,
-                    'call_mode': mode,
-                    'content': '[call_accept]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _sendSignal(callerId!, 'call_accept', {
-                  'from': widget.userId,
-                  'to': callerId,
-                  'call_id': callId,
-                  'mode': mode,
-                });
-                await _joinZegoCall(callId: callId, video: mode == 'video');
-              } else {
-                // Notify decline (DB + realtime)
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': widget.userId,
-                    'receiver_id': callerId,
-                    'type': 'call_decline',
-                    'call_id': callId,
-                    'call_mode': mode,
-                    'content': '[call_decline]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _sendSignal(callerId!, 'call_decline', {
-                  'from': widget.userId,
-                  'to': callerId,
-                  'call_id': callId,
-                  'mode': mode,
-                });
+              await showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                useRootNavigator: true,
+                builder: (dialogContext) => IncomingCallDialog(
+                  callerName: callerName,
+                  isVideo: mode == 'video',
+                  subtitle: 'wants to start a ${mode == 'video' ? 'video' : 'voice'} call',
+                  onAccept: (ctx) async {
+                    _dismissIncomingCallPrompt(dialogContext: ctx);
+
+                    if (!mounted) return;
+                    try {
+                      await supabase.from('messages').insert({
+                        'sender_id': widget.userId,
+                        'receiver_id': callerId,
+                        'type': 'call_accept',
+                        'call_id': callId,
+                        'call_mode': mode,
+                        'content': '[call_accept]',
+                        'is_seen': false,
+                      });
+                    } catch (_) {}
+                    await _sendSignal(callerId, 'call_accept', {
+                      'from': widget.userId,
+                      'to': callerId,
+                      'call_id': callId,
+                      'mode': mode,
+                    });
+                    await _joinZegoCall(callId: callId, video: mode == 'video');
+                  },
+                  onDecline: (ctx) async {
+                    _dismissIncomingCallPrompt(dialogContext: ctx);
+
+                    try {
+                      await supabase.from('messages').insert({
+                        'sender_id': widget.userId,
+                        'receiver_id': callerId,
+                        'type': 'call_decline',
+                        'call_id': callId,
+                        'call_mode': mode,
+                        'content': '[call_decline]',
+                        'is_seen': false,
+                      });
+                    } catch (_) {}
+                    await _sendSignal(callerId, 'call_decline', {
+                      'from': widget.userId,
+                      'to': callerId,
+                      'call_id': callId,
+                      'mode': mode,
+                    });
+                  },
+                ),
+              ).whenComplete(() {
+                _incomingDialogOpen = false;
+                _stopIncomingCallTone();
+                _incomingPromptedCallId = null;
+              });
+            }
+
+            if (to == widget.userId && from == widget.receiverId && msg['type'] == 'call_cancel') {
+              final callId = (msg['call_id'] ?? '').toString().trim();
+              if (_incomingPromptedCallId == callId) {
+                _dismissIncomingCallPrompt();
               }
             }
 
@@ -554,8 +736,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               final mode = (msg['call_mode'] ?? 'voice').toString();
               if (callId.isEmpty) return;
               if (_awaitingAccept && _outgoingCallId == callId) {
+                print('🔴 CALLER received acceptance:');
+                print('   CallID to join: $callId');
+                print('   Outgoing CallID was: $_outgoingCallId');
+                print('   Mode: $mode');
+                
                 _dismissCallingDialog();
                 _awaitingAccept = false;
+                
+                print('🔴 CALLER joining Zego with callID: $callId');
                 await _joinZegoCall(callId: callId, video: mode == 'video');
               }
             }
@@ -580,9 +769,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   void _dismissCallingDialog() {
+    print('📞 _dismissCallingDialog called: dialogOpen=$_callingDialogOpen, mounted=$mounted');
     if (_callingDialogOpen && mounted) {
-      Navigator.of(context, rootNavigator: true).maybePop();
-      _callingDialogOpen = false;
+      print('📞 Attempting to dismiss calling dialog with rootNavigator');
+      try {
+        Navigator.of(context, rootNavigator: true).pop();
+        _callingDialogOpen = false;
+        print('📞 Calling dialog dismissed successfully');
+      } catch (e) {
+        print('📞 Error dismissing dialog: $e');
+        _callingDialogOpen = false;
+      }
+    } else {
+      print('📞 Dialog not open or widget not mounted, skipping dismiss');
     }
   }
 
@@ -592,40 +791,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => WillPopScope(
-        onWillPop: () async => false,
-        child: AlertDialog(
-          title: Text('Calling ${widget.userName}...'),
-          content: const Text('Waiting for recipient to accept'),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                // Send cancel to recipient (DB + realtime)
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': widget.userId,
-                    'receiver_id': widget.receiverId,
-                    'type': 'call_cancel',
-                    'call_id': callId,
-                    'call_mode': video ? 'video' : 'voice',
-                    'content': '[call_cancel]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _sendSignal(widget.receiverId, 'call_cancel', {
-                  'from': widget.userId,
-                  'to': widget.receiverId,
-                  'call_id': callId,
-                  'mode': video ? 'video' : 'voice',
-                });
-                _awaitingAccept = false;
-                _callingDialogOpen = false;
-                if (mounted) Navigator.of(context, rootNavigator: true).pop();
-              },
-              child: const Text('Cancel'),
-            ),
-          ],
-        ),
+      useRootNavigator: true,
+      builder: (dialogContext) => OutgoingCallDialog(
+        calleeName: widget.userName,
+        isVideo: video,
+        subtitle: 'Waiting for ${widget.userName} to answer',
+        onCancel: (ctx) async {
+          try {
+            await supabase.from('messages').insert({
+              'sender_id': widget.userId,
+              'receiver_id': widget.receiverId,
+              'type': 'call_cancel',
+              'call_id': callId,
+              'call_mode': video ? 'video' : 'voice',
+              'content': '[call_cancel]',
+              'is_seen': false,
+            });
+          } catch (_) {}
+          await _sendSignal(widget.receiverId, 'call_cancel', {
+            'from': widget.userId,
+            'to': widget.receiverId,
+            'call_id': callId,
+            'mode': video ? 'video' : 'voice',
+          });
+          _awaitingAccept = false;
+          _callingDialogOpen = false;
+          Navigator.of(ctx, rootNavigator: true).pop();
+        },
       ),
     ).then((_) {
       _callingDialogOpen = false;
@@ -644,7 +836,24 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Caller flow: send invite then wait for accept (do not auto-join)
   void _startZegoCall(bool video) async {
+    // Prevent initiating a new call while already in an active call
+    if (_inActiveCall) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You are already in an active call')),
+        );
+      }
+      return;
+    }
+    
     final callId = _sharedCallId(widget.userId, widget.receiverId);
+    
+    // Debug: Log call details for sender
+    print('🔴 CALLER initiating call:');
+    print('   From: ${widget.userId}');
+    print('   To: ${widget.receiverId}');
+    print('   Generated CallID: $callId');
+    print('   Mode: ${video ? "video" : "voice"}');
 
     try {
       await supabase.from('messages').insert({
@@ -1606,14 +1815,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: () => Navigator.of(context).pop('cancel'),
-                          icon: Icon(Icons.close, color: Colors.grey.shade600),
+                          icon: Icon(Icons.close, color: Colors.red),
                           label: Text(
                             'Cancel',
-                            style: TextStyle(color: Colors.grey.shade600),
+                            style: TextStyle(color: Colors.red),
                           ),
                           style: OutlinedButton.styleFrom(
                             padding: EdgeInsets.symmetric(vertical: 12),
-                            side: BorderSide(color: Colors.grey.shade300),
+                            side: BorderSide(color: Colors.red),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
@@ -1938,16 +2147,32 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   String _sharedCallId(String userA, String userB) {
+    print('📞 _sharedCallId INPUT:');
+    print('   Original UserA: $userA');
+    print('   Original UserB: $userB');
+    
     // Sort to make it order-independent
     final sorted = [userA, userB]..sort();
+    
+    print('   After sorting[0]: ${sorted[0]}');
+    print('   After sorting[1]: ${sorted[1]}');
+    
     final left = _sanitizeId(sorted[0]);
     final right = _sanitizeId(sorted[1]);
+    
+    print('   Sorted[0] sanitized: $left');
+    print('   Sorted[1] sanitized: $right');
 
     // Keep a compact, deterministic ID: prefix + 12 chars from each side
     final leftShort = (left.length >= 12) ? left.substring(0, 12) : left.padRight(12, '0');
     final rightShort = (right.length >= 12) ? right.substring(0, 12) : right.padRight(12, '0');
 
     final id = 'ptc_${leftShort}_${rightShort}';
+    
+    print('   Left short (12 chars): $leftShort');
+    print('   Right short (12 chars): $rightShort');
+    print('   Final CallID: $id');
+    
     // Max 64 characters (we are well under)
     return id;
   }
@@ -2184,13 +2409,73 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final config = video
         ? ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
         : ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall();
+    
+    // Ensure audio and video are enabled
+    config.turnOnCameraWhenJoining = video;
+    config.turnOnMicrophoneWhenJoining = true;
+    config.useSpeakerWhenJoining = true;
+    
+    // Enable audio/video settings - ensure both local and remote streams display
+    config.audioVideoView.showCameraStateOnView = true;
+    config.audioVideoView.showMicrophoneStateOnView = true;
+    config.audioVideoView.showSoundWavesInAudioMode = true;
+    config.audioVideoView.useVideoViewAspectFill = true;
+    
+    // Ensure video mirror for selfie camera
+    config.audioVideoView.isVideoMirror = true;
+    
+    // CRITICAL: Configure layout to show both local and remote video in PIP mode
+    // This ensures your local video appears in a small floating window
+    config.layout = ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall().layout;
+    
+    // Additional debug info
+    print('🎥 Video call config:');
+    print('   - Camera on join: ${config.turnOnCameraWhenJoining}');
+    print('   - Microphone on join: ${config.turnOnMicrophoneWhenJoining}');
+    print('   - Speaker: ${config.useSpeakerWhenJoining}');
+    print('   - Video mirror: ${config.audioVideoView.isVideoMirror}');
+    
+    // Top bar configuration - REMOVED minimize button (causes issue with no return path)
+    config.topMenuBar.isVisible = true;
+    config.topMenuBar.buttons = [
+      ZegoCallMenuBarButtonName.showMemberListButton,
+    ];
+    
+    // Bottom bar configuration - includes camera switch and speaker toggle
+    config.bottomMenuBar.buttons = [
+      ZegoCallMenuBarButtonName.toggleCameraButton,        // Turn camera on/off
+      ZegoCallMenuBarButtonName.switchCameraButton,        // Switch front/back camera
+      ZegoCallMenuBarButtonName.toggleMicrophoneButton,    // Mute/unmute
+      ZegoCallMenuBarButtonName.switchAudioOutputButton,   // Speaker/earpiece toggle
+      ZegoCallMenuBarButtonName.hangUpButton,              // End call
+    ];
+    
+    // Member list configuration
+    config.memberList.showMicrophoneState = true;
+    config.memberList.showCameraState = true;
+
+    // Use .env with fallback to correct hardcoded values if .env fails
+    final appId = int.tryParse(dotenv.env['ZEGO_APP_ID'] ?? '') ?? 129707582;
+    final appSign = dotenv.env['ZEGO_APP_SIGN']?.isNotEmpty == true 
+        ? dotenv.env['ZEGO_APP_SIGN']! 
+        : 'ce6c20f99a76f7068d60f00d91a059b4ae2e660c2092048d2847acc4807cee8f';
+    
+    print('🔧 Chat Detail Zego Config: AppID=$appId');
+
+    // Mark as in active call before joining
+    if (mounted) {
+      setState(() {
+        _inActiveCall = true;
+        _activeCallId = callId;
+      });
+    }
 
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ZegoUIKitPrebuiltCall(
-          appID: int.parse(dotenv.env['ZEGO_APP_ID'] ?? '0'),
-          appSign: dotenv.env['ZEGO_APP_SIGN'] ?? '',
+          appID: appId,
+          appSign: appSign,
           userID: me,
           userName: myName,
           callID: callId,
@@ -2199,7 +2484,37 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       ),
     );
 
-    _joiningCall = false;
+    // Call ended - dismiss any calling dialog that might still be open
+    print('📞 Call ended - checking for calling dialog to dismiss');
+    print('📞 Dialog state: _callingDialogOpen=$_callingDialogOpen, _awaitingAccept=$_awaitingAccept');
+    
+    // Use a post-frame callback to ensure we're back on the correct screen
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _callingDialogOpen) {
+          print('📞 Post-frame: Dismissing calling dialog');
+          _dismissCallingDialog();
+        }
+      });
+    }
+
+    // Broadcast hangup to other user
+    await _sendSignal(widget.receiverId, 'call_hangup', {
+      'from': widget.userId,
+      'to': widget.receiverId,
+      'call_id': callId,
+    });
+
+    // Reset state when returning from call screen
+    if (mounted) {
+      setState(() {
+        _joiningCall = false;
+        _inActiveCall = false;
+        _activeCallId = null;
+        _awaitingAccept = false;
+        _outgoingCallId = null; // Also clear outgoing call ID
+      });
+    }
   }
 
   @override
@@ -2213,148 +2528,128 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       }
     }
 
+    final bool isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+
     return Scaffold(
       backgroundColor: lightBlush,
-      appBar: AppBar(
-        backgroundColor: deepRed,
-        elevation: 0,
-        leading: IconButton(
-          icon: Container(
-            padding: EdgeInsets.all(8),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(130),
+        child: AppBar(
+          automaticallyImplyLeading: false,
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          toolbarHeight: 72,
+          flexibleSpace: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              Icons.arrow_back,
-              color: Colors.white,
-              size: 20,
+              gradient: LinearGradient(
+                colors: [deepRed, deepRed.withOpacity(0.85), coral.withOpacity(0.9)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: deepRed.withOpacity(0.28),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
             ),
           ),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: _receiverProfilePicture == null
-                    ? LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
-                      )
-                    : null,
-                border: Border.all(color: Colors.white, width: 2),
+          leadingWidth: 60,
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 12.0),
+            child: IconButton(
+              icon: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.arrow_back, color: Colors.white, size: 20),
               ),
-              child: _receiverProfilePicture != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(20),
-                      child: Image.network(
-                        _getProfilePictureUrl(_receiverProfilePicture) ?? _receiverProfilePicture!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
-                              ),
-                            ),
-                            child: Center(
-                              child: Text(
-                                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          titleSpacing: 0,
+          title: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: _receiverProfilePicture == null
+                      ? LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                        )
+                      : null,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.08),
+                      blurRadius: 8,
+                      offset: Offset(0, 4),
                     )
-                  : Center(
+                  ],
+                ),
+                child: _receiverProfilePicture != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(24),
+                        child: Image.network(
+                          _getProfilePictureUrl(_receiverProfilePicture) ?? _receiverProfilePicture!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return _buildFallbackAvatar();
+                          },
+                        ),
+                      )
+                    : _buildFallbackAvatar(),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      widget.userName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    AnimatedSwitcher(
+                      duration: Duration(milliseconds: 250),
                       child: Text(
-                        widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                        otherUserTyping ? 'Typing…' : _presenceLabel(),
+                        key: ValueKey(otherUserTyping),
                         style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.85),
+                          fontStyle: otherUserTyping ? FontStyle.italic : FontStyle.normal,
                         ),
                       ),
                     ),
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.userName,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (otherUserTyping)
-                    Text(
-                      'Typing...',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white70,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
+          ),
+          actions: [
+            _buildAppBarAction(icon: Icons.call, label: 'Voice call', onTap: () => _startZegoCall(false)),
+            const SizedBox(width: 6),
+            _buildAppBarAction(icon: Icons.videocam, label: 'Video call', onTap: () => _startZegoCall(true)),
+            const SizedBox(width: 12),
           ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(48),
+            child: _buildHeaderMetaRow(),
+          ),
         ),
-        actions: [
-          Container(
-            margin: EdgeInsets.only(right: 4),
-            child: IconButton(
-              icon: Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.call,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              onPressed: () => _startZegoCall(false),
-            ),
-          ),
-          Container(
-            margin: EdgeInsets.only(right: 8),
-            child: IconButton(
-              icon: Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.videocam,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              onPressed: () => _startZegoCall(true),
-            ),
-          ),
-        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -2366,14 +2661,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
         child: Column(
           children: [
+            if (!isKeyboardOpen)
+              _buildConversationHighlights(),
             Expanded(
-              child: RefreshIndicator(
-                onRefresh: _refreshAll,
-                color: deepRed,
-                backgroundColor: Colors.white,
-                child: messages.isEmpty
-                    ? _buildEmptyState()
-                    : _buildMessagesList(lastSeenMessageId),
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 16,
+                      offset: Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: RefreshIndicator(
+                    onRefresh: _refreshAll,
+                    color: deepRed,
+                    backgroundColor: Colors.white,
+                    child: messages.isEmpty
+                        ? _buildEmptyState()
+                        : _buildMessagesList(lastSeenMessageId),
+                  ),
+                ),
               ),
             ),
             _buildMessageInput(),
@@ -2381,6 +2695,221 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildFallbackAvatar() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+        ),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Text(
+          widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAppBarAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeaderMetaRow() {
+    final presence = _presenceLabel();
+    final int count = messages.length;
+    final String messageLabel = _inActiveCall
+        ? 'On a call'
+        : (count == 0 ? 'No messages yet' : '$count messages');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Row(
+        children: [
+          _buildHeaderChip(Icons.schedule, presence),
+          const Spacer(),
+          _buildHeaderChip(
+            _inActiveCall ? Icons.wifi_calling_3 : Icons.chat_bubble_outline,
+            messageLabel,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _presenceLabel() {
+    if (otherUserTyping) return 'Typing now…';
+    if (messages.isEmpty) return 'Recently active';
+    final last = messages.last;
+    final lastTime = _parseMsgTime(last['sent_at']);
+    if (lastTime == null) return 'Recently active';
+    final diff = DateTime.now().difference(lastTime);
+    if (diff.inMinutes < 1) return 'Active now';
+    if (diff.inMinutes < 60) return 'Active ${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return 'Active ${diff.inHours}h ago';
+    return 'Active ${diff.inDays}d ago';
+  }
+
+  Widget _buildConversationHighlights() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(top: 12, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Row(
+              children: const [
+                Icon(Icons.auto_awesome, size: 16, color: Colors.black54),
+                SizedBox(width: 6),
+                Text(
+                  'Suggested actions',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black54,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 124,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemBuilder: (context, index) {
+                final highlight = _conversationHighlights[index];
+                return _buildHighlightCard(highlight);
+              },
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemCount: _conversationHighlights.length,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHighlightCard(_ConversationHighlight highlight) {
+    return GestureDetector(
+      onTap: () => _prefillMessage(highlight.template),
+      child: Container(
+        width: 180,
+        padding: const EdgeInsets.all(14),
+        constraints: const BoxConstraints(minHeight: 110),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: highlight.color.withOpacity(0.25),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
+            )
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: highlight.color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(highlight.icon, color: highlight.color),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              highlight.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Expanded(
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Text(
+                  'Tap to prefill message',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _prefillMessage(String template) {
+    _messageController.text = template;
+    _messageController.selection = TextSelection.fromPosition(
+      TextPosition(offset: _messageController.text.length),
+    );
+    FocusScope.of(context).requestFocus(_messageFocusNode);
   }
 
   // Enhanced empty state
@@ -2507,6 +3036,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Swipeable message wrapper with controlled swipe distance
   Widget _buildSwipeableMessage(Map msg, bool sentByMe, bool isLastSeen, Widget content) {
+    final msgType = (msg['type'] ?? '').toString();
+    final msgContent = (msg['content'] ?? '').toString();
+    final String backgroundKey = msgType.isNotEmpty ? msgType : msgContent;
+    final Color? callBubbleColor = _callBubbleBackground(backgroundKey);
+
     return _SwipeToReplyWidget(
       onReply: () => _setReplyMessage(msg),
       swipeDirection: sentByMe ? SwipeDirection.rightToLeft : SwipeDirection.leftToRight,
@@ -2525,14 +3059,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               padding: EdgeInsets.all(12),
               margin: EdgeInsets.symmetric(vertical: 2, horizontal: 4),
               decoration: BoxDecoration(
-                gradient: sentByMe
+                gradient: sentByMe && callBubbleColor == null
                     ? LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [deepRed, coral],
                       )
                     : null,
-                color: sentByMe ? null : Colors.white,
+                color: callBubbleColor ?? (sentByMe ? null : Colors.white),
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
@@ -2541,9 +3075,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: sentByMe 
-                      ? deepRed.withOpacity(0.2) 
-                      : Colors.grey.withOpacity(0.1),
+                    color: callBubbleColor != null
+                        ? Colors.black.withOpacity(0.05)
+                        : sentByMe 
+                            ? deepRed.withOpacity(0.2) 
+                            : Colors.grey.withOpacity(0.1),
                     blurRadius: 8,
                     offset: Offset(0, 2),
                   ),
@@ -2551,7 +3087,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               ),
               child: DefaultTextStyle(
                 style: TextStyle(
-                  color: sentByMe ? Colors.white : Colors.grey.shade800,
+                  color: callBubbleColor != null
+                      ? Colors.grey.shade900
+                      : sentByMe 
+                          ? Colors.white 
+                          : Colors.grey.shade800,
                   fontSize: 15,
                 ),
                 child: content,
@@ -2584,6 +3124,28 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
       ),
     );
+  }
+
+  Color? _callBubbleBackground(String rawType) {
+    final normalized = rawType
+        .toLowerCase()
+        .replaceAll('[', '')
+        .replaceAll(']', '');
+    if (!normalized.startsWith('call')) return null;
+
+    if (normalized.startsWith('call_accept')) {
+      return const Color(0xFFEAF6EF);
+    }
+
+    if (normalized.startsWith('call_cancel')) {
+      return const Color(0xFFFFF4EA);
+    }
+
+    if (normalized.startsWith('call_decline')) {
+      return const Color(0xFFFFEDEE);
+    }
+
+    return const Color(0xFFFFF5F2);
   }
 
   // Reply context widget
@@ -2638,6 +3200,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Enhanced message content
   Widget _buildMessageContent(Map msg) {
+    final msgType = (msg['type'] ?? '').toString();
+    final msgContent = (msg['content'] ?? '').toString();
+    if (msgType.startsWith('call') || msgContent.startsWith('[call_')) {
+      return _buildCallEventContent(msg);
+    }
+
     if (msg['type'] == 'image' && msg['media_url'] != null) {
       return FutureBuilder<String?>(
         future: _mediaUrl(msg),
@@ -2723,63 +3291,221 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
+  Widget _buildCallEventContent(Map msg) {
+    String type = (msg['type'] ?? '').toString();
+    final rawContent = (msg['content'] ?? '').toString();
+    if (type.isEmpty && rawContent.startsWith('[call_')) {
+      type = rawContent.replaceAll('[', '').replaceAll(']', '');
+    }
+    final mode = (msg['call_mode'] ?? '').toString();
+    final isVideo = mode == 'video' || (msg['content']?.toString().contains('video') ?? false);
+    final sentByMe = isSender(msg['sender_id']);
+
+    IconData icon;
+    Color color;
+    String title;
+    String subtitle;
+
+    switch (type) {
+      case 'call':
+      case 'call_attempt':
+        icon = isVideo ? Icons.videocam : Icons.phone;
+        color = deepRed;
+        title = isVideo ? 'Video call attempt' : 'Voice call attempt';
+        subtitle = sentByMe
+            ? 'You tried reaching ${widget.userName}'
+            : '${widget.userName} tried to reach you';
+        break;
+      case 'call_accept':
+      case 'call_accepted':
+        icon = Icons.call;
+        color = const Color(0xFF2E7D32);
+        title = 'Call connected';
+        subtitle = sentByMe
+            ? 'You accepted the call'
+            : '${widget.userName} accepted the call';
+        break;
+      case 'call_decline':
+      case 'call_declined':
+        icon = Icons.call_end;
+        color = const Color(0xFFB71C1C);
+        title = 'Call declined';
+        subtitle = sentByMe
+            ? 'You declined the call'
+            : '${widget.userName} declined the call';
+        break;
+      case 'call_cancel':
+      case 'call_canceled':
+      case 'call_cancelled':
+        icon = Icons.phone_missed;
+        color = const Color(0xFFF2994A);
+        title = 'Call canceled';
+        subtitle = sentByMe
+            ? 'You ended the ringing before it connected'
+            : '${widget.userName} canceled before it connected';
+        break;
+      default:
+        icon = Icons.call;
+        color = deepRed;
+        title = 'Call update';
+        subtitle = 'Call status changed';
+        break;
+    }
+
+    final bool showCallBackButton = !sentByMe && (
+      type == 'call' ||
+      type == 'call_attempt' ||
+      type.startsWith('call_cancel') ||
+      type.startsWith('call_decline')
+    );
+    final String callKindLabel = isVideo ? 'Video call' : 'Voice call';
+    final String directionLabel = sentByMe ? 'Outgoing' : 'Incoming';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            _buildCallMetaPill(callKindLabel, color),
+            _buildCallMetaPill(directionLabel, Colors.grey.shade600),
+          ],
+        ),
+        if (showCallBackButton)
+          Padding(
+            padding: const EdgeInsets.only(top: 12.0),
+            child: OutlinedButton.icon(
+              onPressed: () => _startZegoCall(isVideo),
+              icon: Icon(isVideo ? Icons.videocam : Icons.call, size: 18, color: color),
+              label: Text('Call back', style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: color.withOpacity(0.5)),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCallMetaPill(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
+  }
+
   // Enhanced message input with reply preview
   Widget _buildMessageInput() {
+    final hasTypedText = _messageController.text.trim().isNotEmpty;
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(
-          top: BorderSide(color: Colors.grey.shade200),
-        ),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 8,
-            offset: Offset(0, -2),
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 24,
+            offset: Offset(0, -4),
           ),
         ],
       ),
-      child: Column(
-        children: [
-          // Reply preview
-          if (_replyingToMessage != null)
-            _buildReplyPreview(),
-          // Input row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-            child: Row(
-              children: [
-                _buildVoiceButton(),
-                _buildInputButton(Icons.image, null, _pickImage),
-                _buildInputButton(Icons.camera_alt, null, _captureImage),
-                Expanded(
-                  child: Container(
-                    margin: EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: InputDecoration(
-                        hintText: _replyingToMessage != null 
-                          ? 'Reply to ${isSender(_replyingToMessage!['sender_id']) ? 'yourself' : widget.userName}...'
-                          : 'Type a message...',
-                        hintStyle: TextStyle(color: Colors.grey.shade500),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            if (_replyingToMessage != null)
+              _buildReplyPreview(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _buildVoiceButton(),
+                  _buildInputButton(Icons.image, null, _pickImage, tooltip: 'Send image from gallery'),
+                  _buildInputButton(Icons.camera_alt, null, _captureImage, tooltip: 'Capture photo'),
+                  Expanded(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: Colors.grey.shade200),
                       ),
-                      maxLines: null,
-                      textCapitalization: TextCapitalization.sentences,
+                      child: TextField(
+                        controller: _messageController,
+                        focusNode: _messageFocusNode,
+                        decoration: InputDecoration(
+                          hintText: _replyingToMessage != null 
+                            ? 'Reply to ${isSender(_replyingToMessage!['sender_id']) ? 'yourself' : widget.userName}...'
+                            : 'Type a message...',
+                          hintStyle: TextStyle(color: Colors.grey.shade500),
+                          border: InputBorder.none,
+                        ),
+                        maxLines: 5,
+                        minLines: 1,
+                        textCapitalization: TextCapitalization.sentences,
+                      ),
                     ),
                   ),
-                ),
-                _buildInputButton(Icons.send, deepRed, _sendMessage),
-              ],
+                  _buildSendButton(hasTypedText),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2851,55 +3577,55 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // Enhanced input button
   Widget _buildVoiceButton() {
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: 2),
+    return Tooltip(
+      message: isRecording ? 'Tap to stop recording' : 'Record voice note',
       child: GestureDetector(
         onTap: _recordOrSendVoice,
-        child: Container(
-          padding: EdgeInsets.all(8),
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: isRecording ? Colors.red : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isRecording ? Colors.red : coral.withOpacity(0.4),
+            ),
           ),
-          child: isRecording 
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.stop,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    _formatDuration(_recordingDuration),
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+          child: isRecording
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.stop, color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatDuration(_recordingDuration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
-              )
-            : Icon(
-                Icons.mic,
-                color: coral,
-                size: 20,
-              ),
+                  ],
+                )
+              : Icon(Icons.mic, color: coral, size: 20),
         ),
       ),
     );
   }
 
-  Widget _buildInputButton(IconData icon, Color? activeColor, VoidCallback onPressed) {
-    return Container(
-      margin: EdgeInsets.symmetric(horizontal: 2),
-      child: IconButton(
-        icon: Container(
-          padding: EdgeInsets.all(8),
+  Widget _buildInputButton(IconData icon, Color? activeColor, VoidCallback onPressed, {String? tooltip}) {
+    final button = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: activeColor ?? Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(14),
           ),
           child: Icon(
             icon,
@@ -2907,7 +3633,45 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             size: 20,
           ),
         ),
-        onPressed: onPressed,
+      ),
+    );
+    return tooltip != null ? Tooltip(message: tooltip, child: button) : button;
+  }
+
+  Widget _buildSendButton(bool enabled) {
+    return Tooltip(
+      message: enabled ? 'Send message' : 'Type something to send',
+      child: GestureDetector(
+        onTap: enabled ? _sendMessage : null,
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: enabled
+                ? LinearGradient(
+                    colors: [deepRed, coral],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            color: enabled ? null : Colors.grey.shade300,
+            boxShadow: enabled
+                ? [
+                    BoxShadow(
+                      color: deepRed.withOpacity(0.35),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : [],
+          ),
+          child: Icon(
+            Icons.send,
+            color: enabled ? Colors.white : Colors.grey.shade600,
+            size: 18,
+          ),
+        ),
       ),
     );
   }
@@ -2917,6 +3681,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     await fetchMessages();
     await markMessagesAsSeen();
   }
+}
+
+class _ConversationHighlight {
+  final IconData icon;
+  final String title;
+  final String template;
+  final Color color;
+
+  const _ConversationHighlight({
+    required this.icon,
+    required this.title,
+    required this.template,
+    required this.color,
+  });
 }
 
 // Enum for swipe direction

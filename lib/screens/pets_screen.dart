@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart'; // For date formatting
+import 'package:flutter/foundation.dart'; // For kDebugMode
 import 'notification_screen.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:fl_chart/fl_chart.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:qr_flutter/qr_flutter.dart' as qr_flutter;
 import 'package:flutter/services.dart'; // for Clipboard and HapticFeedback
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'dart:async'; 
+import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
+import '../services/auto_migration_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -37,13 +39,68 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   String _getUserRole() {
     final metadata = user?.userMetadata ?? {};
     final role = metadata['role']?.toString() ?? 'Pet Owner';
-    print('DEBUG: User metadata: $metadata');
-    print('DEBUG: User role: $role');
+  // debug prints removed
     return role;
+  }
+
+  // Helper method to get formatted age for pet display
+  String _getFormattedAge(Map<String, dynamic> pet) {
+    if (pet['date_of_birth'] != null) {
+      try {
+        final birthDate = DateTime.parse(pet['date_of_birth'].toString());
+        return _formatAgeFromBirthDate(birthDate);
+      } catch (e) {
+        // Fallback to old age format
+        final age = pet['age'] ?? 0;
+        return '$age ${age == 1 ? 'year' : 'years'} old';
+      }
+    } else {
+      // Fallback to old age format
+      final age = pet['age'] ?? 0;
+      return '$age ${age == 1 ? 'year' : 'years'} old';
+    }
+  }
+
+  // Helper method to format age from birth date
+  String _formatAgeFromBirthDate(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'} old';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'} old';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'} old';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'} old';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'} old';
+    }
   }
 
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
+  RealtimeChannel? _selectedPetChannel; // Realtime listener for selected pet updates
+  RealtimeChannel? _locationHistoryChannel; // Realtime listener for location history updates
+  
+  // Auto-migration service
+  final AutoMigrationService _autoMigrationService = AutoMigrationService();
   
   // Caching mechanism for pet data
   final Map<String, Map<String, dynamic>> _petDataCache = {};
@@ -57,9 +114,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   // loading flag to know when we've finished fetching pets
   bool _loadingPets = true;
+  
+  // Request tracking to prevent stale responses from overwriting current pet's analysis
+  String? _currentAnalysisRequestId;
 
-  String backendUrl = "http://192.168.100.23:5000/analyze"; // set to your deployed backend
-  List<double> _sleepTrend = []; // next 7 days predicted sleep hours
+  String backendUrl = "https://pettrackcare.onrender.com/analyze";
   Map<String, double> _moodProb = {};
   Map<String, double> _activityProb = {};
 
@@ -68,23 +127,29 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   DateTime? _selectedDate = DateTime.now();
   String? _prediction;
   String? _recommendation;
+  List<Widget> _healthInsights = []; // Health insights from latest log
 
   // 🔹 Moved from local scope to state variables
-  String? _selectedMood;
   String? _activityLevel;
-  double? _sleepHours;
-  String? _notes;
 
-  // Latest mood from behavior logs for display in health status
-  String? _latestMood;
+  // New health tracking fields
+  String? _foodIntake; // "Not Eating", "Eating Less", "Normal", "Eating More"
+  String? _waterIntake; // "Not Drinking", "Drinking Less", "Normal", "Drinking More"
+  String? _bathroomHabits; // "Normal", "Diarrhea", "Constipation", "Frequent Urination"
+  List<String> _selectedSymptoms = []; // Multiple symptoms
+  
 
   // illness risk returned by backend (high/low/null)
   String? _illnessRisk;
-  // numeric sleep forecast (7 days) returned by backend
-  List<double> _backendSleepForecast = [];
-  bool _isUnhealthy = false; // <-- add
-  List<String> _careActions = [];        // <-- add
-  List<String> _careExpectations = [];   // <-- add
+  bool _isUnhealthy = false;
+  
+  // Track health status for each pet (petId -> isUnhealthy)
+  Map<String, bool> _petHealthStatus = {};
+  
+  // Backend messaging about analysis quality and data sufficiency
+  Map<String, dynamic>? _dataNotice; // tells user about log count sufficiency
+  Map<String, dynamic>? _healthGuidance; // evidence-based health guidance based on detected symptoms
+  Map<String, dynamic>? _illnessRiskNotice; // illness risk status (low/medium/high)
 
   // New: latest GPS/device location for selected pet
   LatLng? _latestDeviceLocation;
@@ -105,14 +170,69 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   final TextEditingController _specialNotesController = TextEditingController();
   String _urgencyLevel = 'High';
   bool _hasReward = false;
-  bool _hasMicrochip = false;
-  String _microchipNumber = '';
+  String? _lastMissingPostId;
 
-  final List<String> moods = [
-    "Happy", "Anxious", "Aggressive", "Calm", "Lethargic"
+  // Food Intake & Weight-Related Behavior
+  final List<String> foodIntakeOptions = [
+    "Not eating / Loss of appetite",
+    "Eating less than usual",
+    "Normal eating",
+    "Eating more than usual",
+    "Sudden weight loss",
+    "Sudden weight gain"
   ];
 
-  final List<String> activityLevels = ["High", "Medium", "Low"];
+  // Water Intake (Reflects dehydration risks & diseases like diabetes/kidney issues)
+  final List<String> waterIntakeOptions = [
+    "Not drinking",
+    "Drinking less than usual",
+    "Normal drinking",
+    "Excessive drinking (increased thirst)"
+  ];
+
+  // Bathroom Habits (Expanded to include urgent medical indicators)
+  final List<String> bathroomOptions = [
+    "Normal urination/defecation",
+    "Diarrhea",
+    "Constipation",
+    "Frequent urination",
+    "Straining to urinate",
+    "Blood in urine",
+    "House soiling / accidents"
+  ];
+
+
+
+  // Clinical Signs (Physical Symptoms) - Expanded set directly based on health indicators
+  final List<String> commonSymptoms = [
+    "Vomiting",
+    "Persistent vomiting",
+    "Coughing",
+    "Sneezing",
+    "Wheezing / difficulty breathing",
+    "Excessive panting",
+    "Excessive scratching",
+    "Excessive grooming / licking",
+    "Hair loss / bald spots",
+    "Skin redness or irritation",
+    "Limping",
+    "Difficulty standing or moving",
+    "Bloating / bloated stomach",
+    "Excessive drooling",
+    "Bad breath",
+    "Eye or nose discharge",
+    "Trembling / shaking",
+    "None of the Above"
+  ];
+
+  // Activity Level & Energy (Incorporates fatigue and restlessness patterns tied to diseases)
+  final List<String> activityLevels = [
+    "High activity",
+    "Normal activity",
+    "Low activity / lethargy",
+    "Restlessness (especially at night)",
+    "Sudden weakness / collapse"
+  ];
 
   // Add these variables
   CalendarFormat _calendarFormat = CalendarFormat.month;
@@ -122,35 +242,18 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // map of date -> list of event markers (used by TableCalendar)
   Map<DateTime, List<String>> _events = {};
 
-  // emoji mappings for mood & activity
-  final Map<String, String> _moodEmojis = {
-    'Happy': '😄',
-    'Anxious': '😟',
-    'Aggressive': '😠',
-    'Calm': '😌',
-    'Lethargic': '😴',
-  };
+  // emoji mappings for activity
   final Map<String, String> _activityEmojis = {
+    'High activity': '🐕',
+    'Normal activity': '🐾',
+    'Low activity / lethargy': '🐶',
+    'Restlessness (especially at night)': '😰',
+    'Sudden weakness / collapse': '⚠️',
+    // Legacy mappings for backward compatibility
     'High': '🐕',
     'Medium': '🐾',
     'Low': '🐶',
   };
-
-  late TextEditingController _sleepController;
-
-  Future<Map<String, dynamic>?> _fetchLatestPet() async {
-    final ownerId = user?.id;
-    if (ownerId == null) return null;
-    final response = await Supabase.instance.client
-        .from('pets')
-        .select()
-        .eq('owner_id', ownerId)
-        .order('id', ascending: false)
-        .limit(1);
-    final data = response as List?;
-    if (data == null || data.isEmpty) return null;
-    return data.first as Map<String, dynamic>;
-  }
 
   // Helper method to check if cached data is still valid
   bool _isCacheValid(String petId) {
@@ -172,30 +275,44 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
     return null;
   }
+  
+  // Helper method to clear location cache (used after migration)
+  void _clearLocationCache() {
+    if (mounted) {
+      setState(() {
+        _latestDeviceLocation = null;
+        _latestDeviceTimestamp = null;
+        _latestDeviceId = null;
+        _locationHistory = [];
+        _currentMapLocation = null;
+        _currentMapLabel = null;
+        _currentMapSub = null;
+      });
+    }
+  }
 
   // Background data fetching with caching
   Future<void> _fetchPetDataInBackground(String petId) async {
     try {
-      // Fetch all data in parallel for better performance
-      final results = await Future.wait([
+      // OPTIMIZATION: Run ALL independent fetches in parallel instead of sequential
+      // This massively improves load times as they all run simultaneously
+      await Future.wait([
         _fetchBehaviorDates(),
-        _fetchAnalyzeFromBackend(),
-        _fetchLatestAnalysis(),
         _fetchLatestLocationForPet(),
-      ]);
+        _fetchAnalyzeFromBackend(),
+        _fetchLatestHealthInsights(), // All run in parallel now
+      ], eagerError: false); // Continue even if one fails
 
       // Cache the results
       final dataToCache = {
         'events': _events,
         'prediction': _prediction,
         'recommendation': _recommendation,
-        'sleepTrend': _sleepTrend,
         'moodProb': _moodProb,
         'activityProb': _activityProb,
         'illnessRisk': _illnessRisk,
         'isUnhealthy': _isUnhealthy,
-        'careActions': _careActions,
-        'careExpectations': _careExpectations,
+        'timestamp': DateTime.now(),
       };
       _cachePetData(petId, dataToCache);
 
@@ -208,7 +325,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         });
       }
     } catch (e) {
-      // Handle errors gracefully
+      // Handle errors gracefully - still update UI even if some fetches fail
+      print('Error in _fetchPetDataInBackground: $e');
       if (mounted) {
         setState(() {
           _loadingBehaviorData = false;
@@ -219,6 +337,26 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
+  // Helper method to save selected pet ID to persistent storage
+  Future<void> _saveSelectedPetId(String petId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_pet_id', petId);
+    } catch (e) {
+      // Silent fail - not critical if we can't save preference
+    }
+  }
+
+  // Helper method to restore previously selected pet ID from persistent storage
+  Future<String?> _getLastSelectedPetId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('selected_pet_id');
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<void> _fetchPets() async {
     final userId = user?.id;
     if (userId == null) {
@@ -226,16 +364,11 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       return;
     }
 
-    setState(() => _loadingPets = true);
-    print('DEBUG: Starting _fetchPets for userId: $userId');
-    print('DEBUG: User role: ${_getUserRole()}');
+  setState(() => _loadingPets = true);
     try {
       List<Map<String, dynamic>> list = [];
       
       if (_getUserRole() == 'Pet Sitter') {
-        // For Pet Sitters: fetch pets they are assigned to through sitting_jobs
-        print('DEBUG: Fetching pets for Pet Sitter with userId: $userId');
-        
         // First, get the sitting_jobs with status 'Active' for this sitter
         final sittingJobsResponse = await Supabase.instance.client
             .from('sitting_jobs')
@@ -243,20 +376,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             .eq('sitter_id', userId)
             .eq('status', 'Active');
             
-        print('DEBUG: Sitting jobs response: $sittingJobsResponse');
         final sittingJobsData = sittingJobsResponse as List?;
         
         if (sittingJobsData != null && sittingJobsData.isNotEmpty) {
-          print('DEBUG: Found ${sittingJobsData.length} active sitting jobs');
-          
-          // Extract pet IDs
           final petIds = sittingJobsData
               .map((job) => job['pet_id'])
               .where((id) => id != null)
               .toList();
-          
-          print('DEBUG: Pet IDs from sitting jobs: $petIds');
-          
+
           if (petIds.isNotEmpty) {
             // Now fetch the actual pets using these IDs
             final petsResponse = await Supabase.instance.client
@@ -265,20 +392,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                 .inFilter('id', petIds)
                 .order('id', ascending: false);
                 
-            print('DEBUG: Pets response: $petsResponse');
             final petsData = petsResponse as List?;
             if (petsData != null && petsData.isNotEmpty) {
               list = List<Map<String, dynamic>>.from(petsData);
-              print('DEBUG: Found ${list.length} pets for Pet Sitter');
-            } else {
-              print('DEBUG: No pets found for Pet Sitter');
-            }
-          } else {
-            print('DEBUG: No valid pet IDs found in sitting jobs');
-          }
-        } else {
-          print('DEBUG: No active sitting jobs found for Pet Sitter');
-        }
+            } 
+          } 
+        } 
       } else {
         // For Pet Owners: fetch pets they own
         final response = await Supabase.instance.client
@@ -294,20 +413,41 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       
       if (list.isNotEmpty) {
         Map<String, dynamic>? selected;
-        // prefer widget.initialPet if provided (match by id), otherwise pick first
+        
+        // Load health status for all pets from database
+        final Map<String, bool> petHealthMap = {};
+        for (final pet in list) {
+          final petHealth = pet['health']?.toString().toLowerCase() ?? 'good';
+          petHealthMap[pet['id']] = (petHealth == 'bad');
+        }
+        
+        // Try to restore previously selected pet
+        final lastSelectedPetId = await _getLastSelectedPetId();
+        
         if (widget.initialPet != null) {
+          // Prefer widget.initialPet if provided (match by id)
           final initId = widget.initialPet!['id'];
           try {
             selected = list.firstWhere((p) => p['id'] == initId, orElse: () => widget.initialPet!);
           } catch (_) {
             selected = widget.initialPet;
           }
+        } else if (lastSelectedPetId != null) {
+          // Try to restore the last selected pet
+          try {
+            selected = list.firstWhere((p) => p['id'] == lastSelectedPetId, orElse: () => list.first);
+          } catch (_) {
+            selected = list.first;
+          }
         } else {
+          // Fallback to first pet
           selected = list.first;
         }
+        
         setState(() {
           _pets = list;
           _selectedPet = selected;
+          _petHealthStatus = petHealthMap;  // Load health status for all pets
           // clear any previously shown device/map info so we don't show another pet's data
           _currentMapLocation = null;
           _currentMapLabel = null;
@@ -319,11 +459,25 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // stop showing loader as soon as we have pet data
           _loadingPets = false;
         });
+        
+        // Setup realtime listener for pet updates (e.g., is_missing status changes)
+        _setupSelectedPetListener();
+        
+        // Setup realtime listener for location history updates
+        _setupLocationHistoryListener();
+        
+        // Save the selected pet ID for future sessions
+        if (selected != null) {
+          _saveSelectedPetId(selected['id']);
+        }
+        
         // Trigger additional fetches in background so UI can render immediately.
         // We intentionally do NOT await these so they don't keep the loader visible
         _fetchBehaviorDates();
-        _fetchAnalyzeFromBackend();
-        _fetchLatestAnalysis();
+        // Fetch analysis first, then health insights (insights depend on _isUnhealthy being set)
+        _fetchAnalyzeFromBackend().then((_) {
+          _fetchLatestHealthInsights(); // <-- fetch health insights for last 7 days (after analysis)
+        });
         _fetchLatestLocationForPet(); // <-- fetch latest GPS/device location
       } else {
         // no pets found
@@ -339,81 +493,228 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
-  Future<void> _fetchLatestAnalysis() async {
+  // Removed: _fetchLatestAnalysis() function - predictions table is deprecated
+  // Analysis is now fetched directly from the /analyze endpoint via _fetchHealthAnalysis()
+  // The app now calls _fetchHealthAnalysis() which gets fresh analysis from /analyze endpoint
+
+  // Fetch health insights from backend analysis - only last 7 days to prevent confusion about timeframe
+  Future<void> _fetchLatestHealthInsights() async {
     if (_selectedPet == null) return;
     final petId = _selectedPet!['id'];
-    final response = await Supabase.instance.client
-        .from('predictions')
-        .select()
-        .eq('pet_id', petId)
-        .order('created_at', ascending: false)
-        .limit(1);
-
-    final data = response as List?;
-    if (data != null && data.isNotEmpty) {
-      final analysis = data.first as Map<String, dynamic>;
-      // Safely read DB fields; only assign if present
-      final pred = (analysis['prediction_text'] ?? analysis['prediction'] ?? analysis['trend'])?.toString();
-      final rec = (analysis['suggestions'] ?? analysis['recommendation'])?.toString();
-      final trends = analysis['trends'] as Map<String, dynamic>?; // may be absent
-
-      setState(() {
-        if (pred != null && pred.isNotEmpty) {
-          _prediction = pred;
-        }
-        if (rec != null && rec.isNotEmpty) {
-          _recommendation = rec;
-        }
-        if (trends != null) {
-          _sleepTrend = (trends['sleep_forecast'] as List<dynamic>?)
-                  ?.map((e) => (e as num).toDouble())
-                  .toList() ??
-              _sleepTrend; // keep existing if missing
-          _moodProb = (trends['mood_probabilities'] as Map?)
-                  ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
-              _moodProb;
-          _activityProb = (trends['activity_probabilities'] as Map?)
-                  ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
-              _activityProb;
-        }
-      });
-    }
-
-    // Fetch latest mood from behavior logs
-    await _fetchLatestMood();
-
-    // also refresh calendar markers
-    await _fetchBehaviorDates();
-  }
-
-  // Fetch the latest mood from behavior logs
-  Future<void> _fetchLatestMood() async {
-    if (_selectedPet == null) return;
+    
     try {
-      final petId = _selectedPet!['id'];
+      // OPTIMIZATION: Only fetch last 30 days of logs and limit to 100 records
+      final thirtyDaysAgo = DateTime.now().subtract(Duration(days: 30)).toIso8601String();
       final response = await Supabase.instance.client
           .from('behavior_logs')
-          .select('mood')
+          .select()
           .eq('pet_id', petId)
-          .not('mood', 'is', null)
+          .gte('log_date', thirtyDaysAgo)
           .order('log_date', ascending: false)
-          .limit(1);
+          .limit(100); // OPTIMIZATION: Limit to 100 records max
 
       final data = response as List?;
+      print('DEBUG: _fetchLatestHealthInsights - Got ${data?.length ?? 0} behavior logs for pet $petId');
+      
+      // Determine if backend flagged a persistent illness
+      final bool persistentFromNotice = _illnessRiskNotice?['is_persistent'] == true;
+      final bool persistentFromGuidance = _healthGuidance?['is_persistent_illness'] == true;
+      final bool hasPersistentIllness = persistentFromNotice || persistentFromGuidance;
+      final int? persistenceDays = (_illnessRiskNotice?['persistence_days'] as num?)?.toInt() ??
+          (_healthGuidance?['illness_duration_days'] as num?)?.toInt();
+
+      // Generate insights based on backend's trained model prediction (_isUnhealthy flag)
+      List<Widget> insights = [];
+      
       if (data != null && data.isNotEmpty) {
-        final latestLog = data.first as Map<String, dynamic>;
-        setState(() {
-          _latestMood = latestLog['mood']?.toString();
-        });
-      } else {
-        setState(() {
-          _latestMood = null;
-        });
+        // Filter logs to last 7 days only
+        final sevenDaysAgo = DateTime.now().subtract(Duration(days: 7));
+        final logsInLast7Days = data.where((log) {
+          try {
+            final logDate = DateTime.parse(log['log_date'].toString());
+            return logDate.isAfter(sevenDaysAgo);
+          } catch (e) {
+            print('DEBUG: Error parsing log date: ${log['log_date']} - $e');
+            return false;
+          }
+        }).toList();
+        
+        print('DEBUG: Filtered to ${logsInLast7Days.length} logs in last 7 days (total: ${data.length})');
+        if (logsInLast7Days.isEmpty && !hasPersistentIllness) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No behavior logs recorded in the last 7 days. Add new entries to keep insights current.'),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+
+        final List<dynamic> logsForAnalysis = (hasPersistentIllness && data.isNotEmpty)
+            ? data
+            : logsInLast7Days;
+        final String analysisWindowLabel = hasPersistentIllness
+            ? 'persistent window (${persistenceDays != null ? '$persistenceDays days' : 'full history'})'
+            : 'last 7 days';
+        print('DEBUG: Using ${logsForAnalysis.length} logs for health insights ($analysisWindowLabel)');
+
+        if (logsForAnalysis.isEmpty) {
+          final notice = hasPersistentIllness
+              ? 'Illness marked persistent but no logs exist in the analyzed window. Add new logs for updated insights.'
+              : 'No logs available for analysis. Log new behavior entries to generate insights.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(notice),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        } else if (_isUnhealthy) {
+          print('DEBUG: Backend detected unhealthy status (risk: $_illnessRisk), analyzing specific issues...');
+          
+          // Extract issues from the actual logs that triggered the unhealthy flag
+          List<String> problems = [];
+          
+          for (final log in logsForAnalysis) {
+            final foodIntake = log['food_intake']?.toString().toLowerCase() ?? '';
+            final waterIntake = log['water_intake']?.toString().toLowerCase() ?? '';
+            final bathroomHabits = log['bathroom_habits']?.toString().toLowerCase() ?? '';
+            
+            // Parse symptoms - handle both List and String formats
+            List<String> symptoms = [];
+            final symptomsData = log['symptoms'];
+            if (symptomsData != null) {
+              try {
+                if (symptomsData is List) {
+                  symptoms = List<String>.from(symptomsData);
+                } else if (symptomsData is String) {
+                  // Try to parse as JSON array
+                  try {
+                    final decoded = json.decode(symptomsData);
+                    if (decoded is List) {
+                      symptoms = List<String>.from(decoded);
+                    } else {
+                      symptoms = [];
+                    }
+                  } catch (_) {
+                    symptoms = [];
+                  }
+                }
+              } catch (e) {
+                print('DEBUG: Error parsing symptoms: $e');
+                symptoms = [];
+              }
+            }
+            
+            // Filter out "None of the Above" - it's not a real symptom
+            symptoms = symptoms
+                .where((s) => s.toLowerCase() != "none of the above" && s.trim().isNotEmpty)
+                .toList();
+            
+            final mood = log['mood']?.toString().toLowerCase() ?? '';
+            final activity = log['activity_level']?.toString().toLowerCase() ?? '';
+            
+            if (foodIntake.contains('not eating') || foodIntake.contains('eating less')) {
+              problems.add('Reduced Food Intake');
+            }
+            if (waterIntake.contains('not drinking') || waterIntake.contains('drinking less')) {
+              problems.add('Low Water Intake');
+            }
+            if (waterIntake.contains('drinking more')) {
+              problems.add('Excessive Thirst');
+            }
+            if (bathroomHabits.contains('diarrhea') || bathroomHabits.contains('constipation')) {
+              problems.add('Digestive Issues');
+            }
+            if (mood.contains('lethargic') || mood.contains('aggressive') || mood.contains('anxious')) {
+              problems.add('Mood Changes');
+            }
+            if (activity.contains('low')) {
+              problems.add('Low Activity');
+            }
+            if (symptoms.isNotEmpty) {
+              problems.add('Reported Clinical Signs');
+            }
+          }
+          
+          // Remove duplicates
+          final uniqueProblems = problems.toSet().toList();
+          print('DEBUG: Identified ${uniqueProblems.length} specific health issues: $uniqueProblems');
+          
+          // Generate insight cards for each problem
+          if (uniqueProblems.contains('Reduced Food Intake')) {
+            insights.add(_buildInsightItem(
+              'Reduced Appetite',
+              'Pet showing reduced food intake. Monitor feeding behavior.',
+              Icons.warning,
+              Colors.red,
+            ));
+          }
+          if (uniqueProblems.contains('Low Water Intake')) {
+            insights.add(_buildInsightItem(
+              'Low Hydration',
+              'Pet drinking less water than normal. Ensure water access.',
+              Icons.warning,
+              Colors.red,
+            ));
+          }
+          if (uniqueProblems.contains('Excessive Thirst')) {
+            insights.add(_buildInsightItem(
+              'Excessive Thirst',
+              'Pet drinking more than usual. May indicate health concerns.',
+              Icons.info,
+              Colors.red,
+            ));
+          }
+          if (uniqueProblems.contains('Digestive Issues')) {
+            insights.add(_buildInsightItem(
+              'Digestive Problems',
+              'Bathroom habit changes detected. Monitor for patterns.',
+              Icons.warning,
+              Colors.red,
+            ));
+          }
+          if (uniqueProblems.contains('Mood Changes')) {
+            insights.add(_buildInsightItem(
+              'Behavioral Changes',
+              'Mood changes detected. Provide supportive environment.',
+              Icons.sentiment_very_dissatisfied,
+              Colors.orange,
+            ));
+          }
+          if (uniqueProblems.contains('Low Activity')) {
+            insights.add(_buildInsightItem(
+              'Low Activity Level',
+              'Pet showing reduced activity. Encourage gentle movement.',
+              Icons.trending_down,
+              Colors.orange,
+            ));
+          }
+          if (uniqueProblems.contains('Reported Clinical Signs')) {
+            insights.add(_buildInsightItem(
+              'Clinical Signs Present',
+              'Pet showing reported clinical signs. Monitor and document.',
+              Icons.medical_services,
+              Colors.red,
+            ));
+          }
+        }
       }
-    } catch (e) {
-      print('Error fetching latest mood: $e');
+      else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No behavior logs found in the past 30 days. Add new logs to receive health insights.'),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      
+      print('DEBUG: Generated ${insights.length} insights based on backend analysis (unhealthy: $_isUnhealthy)');
       setState(() {
-        _latestMood = null;
+        _healthInsights = insights;
+      });
+    } catch (e) {
+      print('Error fetching latest health insights: $e');
+      setState(() {
+        _healthInsights = [];
       });
     }
   }
@@ -423,10 +724,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     if (_selectedPet == null) return;
     try {
       final petId = _selectedPet!['id'];
+      // OPTIMIZATION: Only fetch last 120 days for calendar display instead of all logs
+      final cutoffDate = DateTime.now().subtract(Duration(days: 120)).toIso8601String();
       final response = await Supabase.instance.client
           .from('behavior_logs')
           .select('log_date')
           .eq('pet_id', petId)
+          .gte('log_date', cutoffDate) // Only fetch last 120 days
           .order('log_date', ascending: true);
       final data = response as List? ?? [];
       final Map<DateTime, List<String>> map = {};
@@ -441,33 +745,60 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           // ignore parse errors
         }
       }
-      setState(() {
-        _events = map;
-      });
+      if (mounted) {
+        setState(() {
+          _events = map;
+        });
+      }
     } catch (e) {
       // ignore / optionally log
     }
   }
 
-  // Call backend /analyze to get illness risk and numeric sleep forecast (and analysis summary).
+  // Call backend /analyze to get illness risk and analysis summary.
   Future<void> _fetchAnalyzeFromBackend() async {
     if (_selectedPet == null) return;
+    
+    final petId = _selectedPet!['id'];
+    // Generate unique request ID for this pet's analysis fetch
+    final requestId = '${petId}_${DateTime.now().millisecondsSinceEpoch}';
+    _currentAnalysisRequestId = requestId;
+    
+    final requestBody = {'pet_id': petId};
+
     try {
       final resp = await http.post(
         Uri.parse(backendUrl),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pet_id': _selectedPet!['id']}),
+        body: jsonEncode(requestBody),
+      ).timeout(
+        Duration(seconds: 8), // OPTIMIZATION: Reduced timeout from 10s to 8s for faster feedback
+        onTimeout: () => throw TimeoutException('Analysis request timed out'),
       );
+      
+      // Verify this response is still relevant (pet hasn't changed or another request hasn't been sent)
+      if (_currentAnalysisRequestId != requestId) {
+        // Stale response - pet changed or new request was made
+        return;
+      }
+      
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        
+        // Double-check pet hasn't changed before updating state
+        if (_selectedPet == null || _selectedPet!['id'] != petId) {
+          return;
+        }
+        
+        // Verify response is for the correct pet
+        if (body['pet_id'] != null && body['pet_id'] != petId) {
+          print('WARNING: Backend returned analysis for wrong pet! Expected $petId, got ${body['pet_id']}');
+          return;
+        }
+        
         setState(() {
           _prediction = (body['trend'] ?? body['prediction_text'] ?? body['prediction'])?.toString();
           _recommendation = (body['recommendation'] ?? body['suggestions'])?.toString();
-          final sf = body['sleep_forecast'];
-          if (sf is List) {
-            _backendSleepForecast = sf.map((e) => (e as num).toDouble()).toList();
-            _sleepTrend = _backendSleepForecast;
-          }
           final moodProb = body['mood_prob'] ?? body['mood_probabilities'];
           final actProb = body['activity_prob'] ?? body['activity_probabilities'];
           if (moodProb is Map) {
@@ -482,27 +813,39 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _isUnhealthy = unhealthyResp is bool
               ? unhealthyResp
               : (riskRaw == 'high' || riskRaw == 'medium');
-
-          // parse care recommendations
-          _careActions = [];
-          _careExpectations = [];
-          final care = body['care_recommendations'];
-          if (care is Map) {
-            final a = care['actions'];
-            final e = care['expectations'];
-            if (a is List) {
-              _careActions = a.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
-            }
-            if (e is List) {
-              _careExpectations = e.map((x) => x.toString()).where((s) => s.isNotEmpty).toList();
-            }
+          
+          // Store health status for this pet
+          if (_selectedPet != null) {
+            _petHealthStatus[_selectedPet!['id']] = _isUnhealthy;
           }
+
+          // Parse data_notice and model_notice from backend response
+          _dataNotice = body['data_notice'] as Map<String, dynamic>?;
+          _healthGuidance = body['health_guidance'] as Map<String, dynamic>?;
+          _illnessRiskNotice = body['illness_risk_notice'] as Map<String, dynamic>?;
         });
+        
+        // Persist health status to database after UI update
+        final healthStatus = _isUnhealthy ? 'Bad' : 'Good';
+        try {
+          await Supabase.instance.client
+              .from('pets')
+              .update({'health': healthStatus})
+              .eq('id', petId);
+          print('DEBUG: Updated pet health status to: $healthStatus');
+        } catch (e) {
+          print('Error updating pet health status: $e');
+        }
       } else {
         // non-200 response: ignore for now
+        print('Analysis request returned status ${resp.statusCode}');
       }
+    } on TimeoutException catch (e) {
+      print('Analysis request timeout: $e');
+      // Silently fail - don't update UI
     } catch (e) {
       // ignore network errors silently or log
+      print('Analysis fetch error: $e');
     }
   }
 
@@ -520,6 +863,22 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
     try {
       final petId = _selectedPet!['id'];
+      // OPTIMIZATION: Skip location fetch if no device was previously mapped and still isn't
+      if (_latestDeviceId == null && _latestDeviceLocation == null) {
+        // Quick check to see if device was recently added
+        final devResp = await Supabase.instance.client
+            .from('device_pet_map')
+            .select('device_id')
+            .eq('pet_id', petId)
+            .limit(1);
+        final devList = devResp as List? ?? [];
+        final deviceId = devList.isNotEmpty ? devList.first['device_id']?.toString() : null;
+        if (deviceId == null || deviceId.isEmpty) {
+          // No device mapped for this pet
+          return;
+        }
+      }
+      
       // 1) find device_id in device_pet_map
       final devResp = await Supabase.instance.client
           .from('device_pet_map')
@@ -529,12 +888,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       final devList = devResp as List? ?? [];
       final deviceId = devList.isNotEmpty ? devList.first['device_id']?.toString() : null;
       if (deviceId == null || deviceId.isEmpty) {
-        setState(() {
-          _latestDeviceLocation = null;
-          _latestDeviceTimestamp = null;
-          _latestDeviceId = null;
-          _locationHistory = [];
-        });
+        if (mounted) {
+          setState(() {
+            _latestDeviceLocation = null;
+            _latestDeviceTimestamp = null;
+            _latestDeviceId = null;
+            _locationHistory = [];
+          });
+        }
         return;
       }
 
@@ -558,12 +919,38 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         } else if (rawTs is DateTime) {
           ts = rawTs;
         }
-        setState(() {
-          _latestDeviceId = deviceId;
-          _latestDeviceTimestamp = ts;
-          _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
-        });
-  await _fetchLocationHistoryForDevice(deviceId, petId: petId);
+        
+        // Fetch location history first to get address
+        await _fetchLocationHistoryForDevice(deviceId, petId: petId);
+        
+        if (mounted) {
+          setState(() {
+            _latestDeviceId = deviceId;
+            _latestDeviceTimestamp = ts;
+            _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
+            
+            // Automatically set the map to show the latest location
+            // Always reset to latest location when fetching (e.g., when switching pets or refreshing)
+            if (_latestDeviceLocation != null) {
+              _currentMapLocation = _latestDeviceLocation;
+              // Get address from location history if available
+              if (_locationHistory.isNotEmpty) {
+                final latestHistory = _locationHistory.first;
+                final address = latestHistory['address']?.toString();
+                if (address != null && address.isNotEmpty) {
+                  _currentMapLabel = address;
+                } else {
+                  _currentMapLabel = 'Live GPS Location';
+                }
+                _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
+              } else {
+                _currentMapLabel = 'Live GPS Location';
+                _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
+              }
+            }
+          });
+        }
+  
       } else {
         // device exists but no location rows yet
         setState(() {
@@ -586,107 +973,209 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
-   // Fetch recent location_history rows (limit 10) for device and reverse-geocode addresses.
-  Future<void> _fetchLocationHistoryForDevice(String deviceId, {required String petId, int limit = 10}) async {
+   // Fetch recent location_history rows (limit 8) for device and reverse-geocode addresses.
+  Future<void> _fetchLocationHistoryForDevice(String deviceId, {required String petId, int limit = 8}) async {
     try {
       final resp = await Supabase.instance.client
           .from('location_history')
-          .select()
+          .select('id,latitude,longitude,timestamp,device_mac,pet_id,firebase_entry_id') // Include firebase_entry_id to check if migrated from Firebase
           .eq('device_mac', deviceId)
           .eq('pet_id', petId)
           .order('timestamp', ascending: false)
           .limit(limit);
       final list = resp as List? ?? [];
       final records = <Map<String, dynamic>>[];
+      
       for (final row in list) {
         try {
           final lat = double.tryParse(row['latitude']?.toString() ?? '');
           final lng = double.tryParse(row['longitude']?.toString() ?? '');
+          final firebaseEntryId = row['firebase_entry_id'] as String?;
           DateTime? ts;
           final rawTs = row['timestamp'];
-          if (rawTs is String) ts = DateTime.tryParse(rawTs);
-          else if (rawTs is DateTime) ts = rawTs;
-          String? address;
-          if (lat != null && lng != null) {
-            // try reverse geocoding; non-blocking but awaited so UI gets addresses
-            address = await _reverseGeocode(lat, lng);
+          if (rawTs is String) {
+            ts = DateTime.tryParse(rawTs);
+            // If timestamp includes timezone info (e.g., "2025-11-18T14:30:00+08:00"), parse it correctly
+            if (ts != null && rawTs.contains('+')) {
+              // Already timezone-aware from database, use as-is
+              ts = DateTime.tryParse(rawTs);
+            }
+          } else if (rawTs is DateTime) {
+            ts = rawTs;
           }
+          
+          // Note: Supabase already stores the correct local time with timezone info
+          // No need to add any timezone offset
+          
           records.add({
             'latitude': lat,
             'longitude': lng,
             'timestamp': ts,
             'device_mac': row['device_mac'],
-            'address': address,
+            'firebase_entry_id': firebaseEntryId,
+            'address': null, // Will be resolved asynchronously
           });
-        } catch (_) {
+        } catch (e) {
           // skip malformed row
+          if (kDebugMode) print('Error parsing location record: $e');
         }
       }
-      setState(() {
-        _locationHistory = records;
-      });
-    } catch (_) {
-      setState(() {
-        _locationHistory = [];
-      });
+      
+      if (mounted) {
+        setState(() {
+          _locationHistory = records;
+        });
+      }
+      
+      // Resolve addresses in parallel for all locations after a short delay to allow UI to render first
+      if (records.isNotEmpty) {
+        Future.delayed(Duration(milliseconds: 100), () {
+          if (mounted) {
+            _resolveAddressesForLocationHistory();
+          }
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) print('Error fetching location history: $e');
+      if (mounted) {
+        setState(() {
+          _locationHistory = [];
+        });
+      }
+    }
+  }
+
+  // Resolve addresses for all location history items with rate limiting
+  Future<void> _resolveAddressesForLocationHistory() async {
+    if (_locationHistory.isEmpty) return;
+    
+    if (kDebugMode) print('🔄 Starting address resolution for ${_locationHistory.length} locations...');
+    
+    try {
+      bool hasUpdates = false;
+      int resolvedCount = 0;
+      
+      // Process addresses sequentially with a small delay between requests to avoid overwhelming the API
+      for (int i = 0; i < _locationHistory.length; i++) {
+        final record = _locationHistory[i];
+        final lat = record['latitude'] as double?;
+        final lng = record['longitude'] as double?;
+        final existingAddress = record['address'] as String?;
+        
+        // Only resolve if we don't have an address yet
+        if (lat != null && lng != null && (existingAddress == null || existingAddress.isEmpty)) {
+          try {
+            final address = await _reverseGeocode(lat, lng);
+            if (address != null && address.isNotEmpty && i < _locationHistory.length) {
+              _locationHistory[i]['address'] = address;
+              hasUpdates = true;
+              resolvedCount++;
+              if (kDebugMode) print('✅ [$resolvedCount] Resolved address for location $i: $address');
+            } else if (kDebugMode) {
+              print('⚠️  Failed to resolve address for location $i');
+            }
+            
+            // Add a small delay between requests to respect API rate limits (avoid 429 Too Many Requests)
+            if (i < _locationHistory.length - 1) {
+              await Future.delayed(Duration(milliseconds: 300));
+            }
+          } catch (e) {
+            if (kDebugMode) print('❌ Error resolving address for location $i: $e');
+          }
+        }
+      }
+      
+      if (hasUpdates && mounted) {
+        if (kDebugMode) print('🔄 Updating UI with ${resolvedCount} resolved addresses...');
+        setState(() {
+          // Trigger rebuild with resolved addresses
+          _locationHistory = [..._locationHistory];
+        });
+      } else if (kDebugMode) {
+        print('ℹ️ No updates to apply');
+      }
+    } catch (e) {
+      if (kDebugMode) print('❌ Error in address resolution loop: $e');
     }
   }
 
   // Reverse geocode using Nominatim (OpenStreetMap). Returns display_name or null.
   Future<String?> _reverseGeocode(double lat, double lng) async {
     try {
-      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=$lat&lon=$lng');
-      final resp = await http.get(url, headers: {'User-Agent': 'PetTrackCare/1.0 (+your-email@example.com)'});
+      // Use Nominatim's reverse geocoding API
+      final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=0');
+      if (kDebugMode) print('🔍 Fetching address for: $lat, $lng');
+      
+      final resp = await http
+          .get(
+            url,
+            headers: {'User-Agent': 'PetTrackCare/1.0 (pettrackcare.app)'},
+          )
+          .timeout(
+            Duration(seconds: 15),
+            onTimeout: () {
+              if (kDebugMode) print('⏱️ Reverse geocoding timeout for lat: $lat, lng: $lng');
+              throw TimeoutException('Reverse geocoding request timed out after 15 seconds');
+            },
+          );
+      
       if (resp.statusCode == 200) {
         final body = jsonDecode(resp.body) as Map<String, dynamic>;
         final display = body['display_name'];
-        if (display is String && display.isNotEmpty) return display;
+        if (display is String && display.isNotEmpty) {
+          if (kDebugMode) print('✅ Reverse geocoding succeeded: $lat, $lng -> $display');
+          return display;
+        } else {
+          if (kDebugMode) print('⚠️ No display_name in response for $lat, $lng');
+        }
+      } else {
+        if (kDebugMode) print('❌ Reverse geocoding failed with status ${resp.statusCode}');
       }
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) print('❌ Reverse geocoding error for lat: $lat, lng: $lng: $e');
+    }
     return null;
+  }
+
+  // Try to resolve address for a specific location in background
+
+  // Format address for display - truncate if too long and prioritize important parts
+  String _formatAddressForDisplay(String address) {
+    if (address.length <= 60) return address;
+    
+    // Try to keep the most important parts (first part before first comma)
+    final parts = address.split(', ');
+    if (parts.isNotEmpty) {
+      String formatted = parts[0];
+      
+      // Add city/area info if available and space permits
+      if (parts.length > 2 && formatted.length < 40) {
+        formatted += ', ${parts[parts.length - 2]}';
+      }
+      
+      // Add country if space permits
+      if (parts.length > 1 && formatted.length < 50) {
+        formatted += ', ${parts.last}';
+      }
+      
+      return formatted.length > 60 ? '${formatted.substring(0, 57)}...' : formatted;
+    }
+    
+    return address.length > 60 ? '${address.substring(0, 57)}...' : address;
   }
 
   // Refresh addresses for location history items that don't have addresses yet
   Future<void> _refreshAddressesForLocationHistory() async {
-    if (_locationHistory.isEmpty) return;
-    
-    bool hasUpdates = false;
-    final updatedHistory = <Map<String, dynamic>>[];
-    
-    for (final record in _locationHistory) {
-      final lat = record['latitude'] as double?;
-      final lng = record['longitude'] as double?;
-      final currentAddress = record['address'] as String?;
-      
-      // If no address exists and we have coordinates, try to get address
-      if ((currentAddress == null || currentAddress.isEmpty) && lat != null && lng != null) {
-        final newAddress = await _reverseGeocode(lat, lng);
-        if (newAddress != null && newAddress.isNotEmpty) {
-          final updatedRecord = Map<String, dynamic>.from(record);
-          updatedRecord['address'] = newAddress;
-          updatedHistory.add(updatedRecord);
-          hasUpdates = true;
-        } else {
-          updatedHistory.add(record);
-        }
-      } else {
-        updatedHistory.add(record);
-      }
-    }
-    
-    if (hasUpdates) {
-      setState(() {
-        _locationHistory = updatedHistory;
-      });
-    }
+    // Use the new parallel address resolution method
+    await _resolveAddressesForLocationHistory();
   }
 
   String _formatTimestamp(DateTime? dt) {
     if (dt == null) return '-';
     try {
-      return DateFormat('MMM d, yyyy • hh:mm a').format(dt.toLocal());
+      return DateFormat('MMM d, yyyy • hh:mm a').format(dt);
     } catch (_) {
-      return dt.toIso8601String();
+      return dt.toString();
     }
   }
 
@@ -700,7 +1189,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           markerLocation: _currentMapLocation ?? _latestDeviceLocation,
           markerLabel: _currentMapLabel ?? (_latestDeviceLocation != null ? 'Current Location' : null),
           markerSub: _currentMapSub ?? (_latestDeviceTimestamp != null 
-            ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!.toLocal()) 
+            ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!) 
             : null),
           locationHistory: _locationHistory,
           onLocationSelected: (location, label, subtitle) {
@@ -721,52 +1210,163 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     });
   }
 
-  // Get the actual pet owner's name from the database
-  Future<String> _getActualOwnerName() async {
-    if (_selectedPet == null) return 'Unknown Owner';
-    
-    try {
-      final ownerId = _selectedPet!['owner_id'];
-      if (ownerId == null) return 'Unknown Owner';
-      
-      // Fetch owner information from users table
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('name')
-          .eq('id', ownerId)
-          .limit(1);
-          
-      final userData = response as List?;
-      if (userData != null && userData.isNotEmpty) {
-        final user = userData.first as Map<String, dynamic>;
-        final name = user['name']?.toString();
-        
-        // Return name if available, otherwise fallback
-        return name?.isNotEmpty == true ? name! : 'Owner';
-      }
-    } catch (e) {
-      print('Error fetching owner name: $e');
-    }
-    
-    return 'Owner';
-  }
-
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _sleepController = TextEditingController();
     _fetchPets();
+    // Register callback for when location data is migrated from Firebase
+    _autoMigrationService.setOnLocationDataMigrated(() {
+      print('🔄 Location data migration callback triggered - refreshing location display');
+      // Clear location cache to force fresh fetch
+      _clearLocationCache();
+      // Refresh location display when migration completes
+      if (_selectedPet != null && mounted) {
+        _fetchLatestLocationForPet();
+      }
+    });
+    
+    // Trigger auto-migration when PetProfileScreen loads
+    _runAutoMigrationInBackground();
+  }
+  
+  /// Run auto-migration in background without blocking the UI
+  void _runAutoMigrationInBackground() {
+    // Use multiple logging methods to ensure visibility
+    print('=== AUTO-MIGRATION TRIGGER FROM PETS_SCREEN ===');
+    debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM PetProfileScreen.initState()');
+    print('Timestamp: ${DateTime.now().toIso8601String()}');
+    print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
+    print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
+    
+    Future.microtask(() async {
+      try {
+        print('=== MIGRATION STATUS CHECK ===');
+        await _autoMigrationService.checkMigrationStatus();
+        
+        print('=== CHECKING MIGRATION CONDITIONS ===');
+        debugPrint('Starting auto-migration check...');
+        
+        final shouldRun = await _autoMigrationService.shouldRunMigration();
+        print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
+        debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
+        
+        if (shouldRun) {
+          print('=== STARTING MIGRATION PROCESS ===');
+          debugPrint('INITIATING BACKGROUND MIGRATION...');
+          await _autoMigrationService.runAutoMigration();
+          print('=== MIGRATION COMPLETED ===');
+          debugPrint('Background migration process completed');
+        } else {
+          print('=== MIGRATION SKIPPED ===');
+          debugPrint('Auto-migration skipped - conditions not met');
+          print('=== CONDITIONS: User not authenticated or wrong role ===');
+        }
+      } catch (e) {
+        print('=== MIGRATION ERROR ===');
+        print('Error type: ${e.runtimeType}');
+        print('Error details: $e');
+        debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
+      }
+    });
+  }
+
+  // Setup realtime listener for selected pet changes
+  void _setupSelectedPetListener() {
+    if (_selectedPet == null) return;
+    
+    // Unsubscribe from previous pet channel if exists
+    if (_selectedPetChannel != null) {
+      _selectedPetChannel!.unsubscribe();
+    }
+    
+    final petId = _selectedPet!['id'];
+    
+    try {
+      _selectedPetChannel = Supabase.instance.client
+          .channel('selected_pet_$petId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.update,
+            schema: 'public',
+            table: 'pets',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: petId,
+            ),
+            callback: (payload) {
+              print('🔄 Real-time update for pet $petId');
+              final updated = Map<String, dynamic>.from(payload.newRecord);
+              // Update the selected pet with new data
+              if (mounted) {
+                setState(() {
+                  _selectedPet!.addAll(updated);
+                });
+              }
+            },
+          )
+          .subscribe();
+    } catch (e) {
+      print('Error setting up pet realtime listener: $e');
+    }
+  }
+
+  // Setup realtime listener for location history changes
+  void _setupLocationHistoryListener() {
+    if (_selectedPet == null) return;
+    
+    // Unsubscribe from previous location history channel if exists
+    if (_locationHistoryChannel != null) {
+      _locationHistoryChannel!.unsubscribe();
+    }
+    
+    final petId = _selectedPet!['id'];
+    
+    try {
+      _locationHistoryChannel = Supabase.instance.client
+          .channel('location_history_$petId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'location_history',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'pet_id',
+              value: petId,
+            ),
+            callback: (payload) {
+              print('📍 Real-time location update for pet $petId');
+              // Refresh location data when new location is inserted
+              if (mounted) {
+                _fetchLatestLocationForPet();
+                // Refetch location history to get the new entry
+                final deviceId = _selectedPet?['device_id']?.toString();
+                if (deviceId != null && deviceId.isNotEmpty) {
+                  _fetchLocationHistoryForDevice(deviceId, petId: petId);
+                }
+              }
+            },
+          )
+          .subscribe();
+    } catch (e) {
+      print('Error setting up location history realtime listener: $e');
+    }
   }
 
   @override
   void dispose() {
-    _sleepController.dispose();
     _emergencyContactController.dispose();
     _rewardAmountController.dispose();
     _customMessageController.dispose();
     _specialNotesController.dispose();
     _tabController.dispose();
+    // Unsubscribe from realtime listeners
+    if (_selectedPetChannel != null) {
+      _selectedPetChannel!.unsubscribe();
+    }
+    if (_locationHistoryChannel != null) {
+      _locationHistoryChannel!.unsubscribe();
+    }
     super.dispose();
   }
 
@@ -863,14 +1463,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+              child: Text('Cancel', style: TextStyle(color: Colors.red)),
             ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
                 _showConnectDeviceModal(context);
               },
-              child: Text('Change Device', style: TextStyle(color: coral)),
+              child: Text('Change Device', style: TextStyle(color: Colors.green)),
             ),
             ElevatedButton(
               onPressed: () {
@@ -878,7 +1478,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                 _disconnectDevice();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
+                backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
               ),
               child: Text('Disconnect'),
@@ -964,7 +1564,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+                  child: Text('Cancel', style: TextStyle(color: Colors.red)),
                 ),
                 ElevatedButton(
                   onPressed: () {
@@ -989,7 +1589,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
                     _connectToDeviceByMac(macAddress);
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: deepRed,
+                    backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
                   ),
                   child: Text('Connect Device'),
@@ -1026,7 +1626,7 @@ Future<void> _connectToDeviceByMac(String macAddress) async {
     // fetch latest location after associating the device
     await _fetchLatestLocationForPet();
 
-    debugPrint('Device MAC registered/updated! ID: $macAddress');
+  // debugPrint removed
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('GPS device connected successfully! MAC: $macAddress'),
@@ -1034,7 +1634,7 @@ Future<void> _connectToDeviceByMac(String macAddress) async {
       ),
     );
   } catch (e) {
-    debugPrint('Failed to register device MAC: $e');
+  // debugPrint removed
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Failed to connect device: $e'),
@@ -1106,10 +1706,10 @@ void _disconnectDevice() async {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false), 
-          child: Text('Cancel')
+          child: Text('Cancel', style: TextStyle(color: Colors.red))
         ),
         ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
           onPressed: () => Navigator.pop(ctx, true),
           child: Text('Disconnect'),
         ),
@@ -1220,9 +1820,9 @@ void _disconnectDevice() async {
     _customMessageController.clear();
     _specialNotesController.clear();
     _hasReward = false;
-    _hasMicrochip = false;
-    _microchipNumber = '';
+
     _urgencyLevel = 'High';
+
 
     // Show enhanced modal
     final confirmed = await _showEnhancedMissingModal(
@@ -1266,7 +1866,7 @@ void _disconnectDevice() async {
               'longitude': lng,
               'address': resolvedAddress,
               'image_url': profilePicture,
-              'created_at': timestamp?.toIso8601String() ?? DateTime.now().toIso8601String(),
+              'created_at': DateTime.now().toUtc().toIso8601String(),
             }).select('id');
             
          // Get the post ID from the response
@@ -1283,6 +1883,10 @@ void _disconnectDevice() async {
            postId: postId,
          );
 
+        setState(() {
+          _lastMissingPostId = postId;
+        });
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -1295,7 +1899,7 @@ void _disconnectDevice() async {
                 label: 'View',
                 textColor: Colors.white,
                 onPressed: () {
-                  // Navigate to community screen to view the post
+                  _navigateToMissingCommunityPost();
                 },
               ),
             ),
@@ -1312,6 +1916,15 @@ void _disconnectDevice() async {
         }
       }
     }
+  }
+
+  void _navigateToMissingCommunityPost() {
+    final postId = _lastMissingPostId;
+    if (postId == null) return;
+    Navigator.of(context).pushNamed(
+      '/community',
+      arguments: {'postId': postId, 'scrollToPost': true},
+    );
   }
 
   // Enhanced missing modal with detailed information and options
@@ -1395,13 +2008,13 @@ void _disconnectDevice() async {
     // Urgency header
     switch (_urgencyLevel) {
       case 'Critical':
-        content += '🚨 CRITICAL MISSING PET ALERT 🚨\n\n';
+        content += 'CRITICAL MISSING PET ALERT\n\n';
         break;
       case 'High':
-        content += '⚠️ URGENT: MISSING PET ⚠️\n\n';
+        content += 'URGENT: MISSING PET ALERT\n\n';
         break;
       case 'Medium':
-        content += '🔍 Missing Pet Alert\n\n';
+        content += 'Missing Pet Alert\n\n';
         break;
     }
     
@@ -1409,36 +2022,33 @@ void _disconnectDevice() async {
     if (isOwner) {
       content += 'My beloved pet "$petName" ($breed) is missing!\n\n';
     } else {
-      content += 'URGENT: Pet "$petName" ($breed) went missing while under my care as a pet sitter.\n\n';
+      content += 'URGENT: Pet "$petName" ($breed) went missing while under my care as a pet sitter.\n';
     }
     
     // Location and time
-    content += '📍 Last seen: $locationStr\n';
-    content += '⏰ Time: $lastSeen\n\n';
+    content += 'Last seen: $locationStr\n';
+    content += 'Time: $lastSeen\n';
     
     // Custom message if provided
     if (_customMessageController.text.isNotEmpty) {
-      content += '📝 Additional Details:\n${_customMessageController.text}\n\n';
+      content += 'Additional Details: ${_customMessageController.text}\n';
     }
     
     // Special notes if provided
     if (_specialNotesController.text.isNotEmpty) {
-      content += '⚠️ Important Notes:\n${_specialNotesController.text}\n\n';
+      content += 'Important Notes: ${_specialNotesController.text}\n';
     }
     
-    // Microchip info
-    if (_hasMicrochip && _microchipNumber.isNotEmpty) {
-      content += '🔍 Microchip ID: $_microchipNumber\n\n';
-    }
+
     
     // Reward info
     if (_hasReward && _rewardAmountController.text.isNotEmpty) {
-      content += '💰 Reward Offered: ₱ ${_rewardAmountController.text}\n\n';
+      content += 'Reward Offered: ₱ ${_rewardAmountController.text}\n';
     }
     
     // Contact info
     if (_emergencyContactController.text.isNotEmpty) {
-      content += '📞 Emergency Contact: ${_emergencyContactController.text}\n\n';
+      content += 'Emergency Contact: ${_emergencyContactController.text}\n';
     }
     
     return content;
@@ -1685,6 +2295,7 @@ void _disconnectDevice() async {
             decoration: InputDecoration(
               labelText: 'Phone Number',
               hintText: 'e.g., +1 (555) 123-4567',
+              hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.phone, color: Colors.red.shade600),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
@@ -1731,50 +2342,6 @@ void _disconnectDevice() async {
               ),
             ],
           ),
-          SizedBox(height: 16),
-          
-          // Microchip toggle
-          Row(
-            children: [
-              Checkbox(
-                value: _hasMicrochip,
-                onChanged: (value) {
-                  setModalState(() {
-                    _hasMicrochip = value ?? false;
-                    if (!_hasMicrochip) _microchipNumber = '';
-                  });
-                },
-                activeColor: Colors.blue.shade600,
-              ),
-              Expanded(
-                child: Text(
-                  'Pet has microchip',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-              ),
-            ],
-          ),
-          
-          // Microchip number field
-          if (_hasMicrochip) ...[
-            SizedBox(height: 8),
-            TextField(
-              decoration: InputDecoration(
-                labelText: 'Microchip Number',
-                hintText: 'Enter microchip ID',
-                prefixIcon: Icon(Icons.memory, color: Colors.blue.shade600),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              onChanged: (value) {
-                setModalState(() {
-                  _microchipNumber = value;
-                });
-              },
-            ),
-          ],
-          
           SizedBox(height: 16),
           
           // Reward toggle
@@ -1825,6 +2392,7 @@ void _disconnectDevice() async {
             decoration: InputDecoration(
               labelText: 'Special Notes',
               hintText: 'Medical conditions, temperament, special instructions...',
+              hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.note, color: Colors.blue.shade600),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               filled: true,
@@ -1876,6 +2444,7 @@ void _disconnectDevice() async {
             decoration: InputDecoration(
               labelText: 'Your Message',
               hintText: 'Please help us find our beloved pet. Any information would be greatly appreciated...',
+              hintStyle: TextStyle(color: Colors.grey),
               prefixIcon: Icon(Icons.edit, color: Colors.orange.shade600),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               filled: true,
@@ -1944,7 +2513,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '🚨 Critical - Immediate danger',
+                            'Critical - Immediate danger',
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1959,7 +2528,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '⚠️ High - Just went missing',
+                            'High - Just went missing',
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1974,7 +2543,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '🔍 Medium - Missing for a while',
+                            'Medium - Missing for a while',
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -2067,9 +2636,9 @@ void _disconnectDevice() async {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    isOwner 
-                      ? 'This will create a community alert and notify all nearby users.'
-                      : 'This will immediately alert the owner and all community members.',
+                    isOwner
+                    ? 'This will create a community alert and notify nearby users. It will also reflect in the pet’s QR code.'
+                    : 'This will alert the owner and the community. It will also reflect in the pet’s QR code.',
                     style: TextStyle(
                       color: Colors.amber.shade700,
                       fontSize: 12,
@@ -2095,7 +2664,7 @@ void _disconnectDevice() async {
                   ),
                   child: Text(
                     'Cancel',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.red),
                   ),
                 ),
               ),
@@ -2105,7 +2674,7 @@ void _disconnectDevice() async {
                 child: ElevatedButton(
                   onPressed: () => Navigator.pop(context, true),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isOwner ? deepRed : Colors.orange,
+                    backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
                     padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -2137,7 +2706,7 @@ void _disconnectDevice() async {
   }
 
   // Helper widget for info rows
-  Widget _buildInfoRow(IconData icon, String label, String value) {
+  Widget _buildInfoRow(IconData icon, String label, String value, {int maxLines = 2}) {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -2161,7 +2730,7 @@ void _disconnectDevice() async {
               value,
               style: TextStyle(fontSize: 12),
               overflow: TextOverflow.ellipsis,
-              maxLines: 2,
+              maxLines: maxLines,
             ),
           ),
         ],
@@ -2184,9 +2753,7 @@ void _disconnectDevice() async {
       details += 'Contact: ${_emergencyContactController.text}\n';
     }
     
-    if (_hasMicrochip && _microchipNumber.isNotEmpty) {
-      details += 'Microchip: $_microchipNumber\n';
-    }
+
     
     if (_hasReward && _rewardAmountController.text.isNotEmpty) {
       details += 'Reward: ₱${_rewardAmountController.text}\n';
@@ -2236,12 +2803,15 @@ void _disconnectDevice() async {
         title: Row(
           children: [
             SizedBox(width: 12),
-            Text(
-              'Pet Profile',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-                fontSize: 20,
+            Expanded(
+              child: Text(
+                'Pet Profile',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  fontSize: 20,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -2320,18 +2890,96 @@ void _disconnectDevice() async {
             margin: EdgeInsets.only(right: 8),
             child: PopupMenuButton<Map<String, dynamic>>(
               icon: Container(
-                padding: EdgeInsets.all(8),
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  Icons.more_vert,
-                  color: Colors.white,
-                  size: 20,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Show selected pet's avatar
+                    if (_selectedPet != null) ...[
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                        child: ClipOval(
+                          child: _selectedPet!['profile_picture'] != null && _selectedPet!['profile_picture'].isNotEmpty
+                              ? Image.network(
+                                  _selectedPet!['profile_picture'],
+                                  fit: BoxFit.cover,
+                                  width: 24,
+                                  height: 24,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: LinearGradient(
+                                          colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                                        ),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          (_selectedPet!['name'] ?? 'U')[0].toUpperCase(),
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                )
+                              : Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: LinearGradient(
+                                      colors: [coral.withOpacity(0.8), peach.withOpacity(0.8)],
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      (_selectedPet!['name'] ?? 'U')[0].toUpperCase(),
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      // Show selected pet's name
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: 100),
+                        child: Text(
+                          _selectedPet!['name'] ?? 'Unnamed',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                    ],
+                    Icon(
+                      Icons.keyboard_arrow_down,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ],
                 ),
               ),
-              tooltip: 'Select Pet',
+              tooltip: _selectedPet != null ? 'Switch Pet (${_selectedPet!['name']})' : 'Select Pet',
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -2341,9 +2989,14 @@ void _disconnectDevice() async {
                 final petId = pet['id']?.toString();
                 if (petId == null) return;
                 
+                // Save pet selection for future sessions
+                _saveSelectedPetId(petId);
+                
                 // Quick UI update first for immediate response
                 setState(() {
                   _selectedPet = pet;
+                  // Reset request ID to ensure fresh analysis for new pet
+                  _currentAnalysisRequestId = null;
                   // clear any previously pinned map/device state to avoid showing other pet's info
                   _currentMapLocation = null;
                   _currentMapLabel = null;
@@ -2366,13 +3019,10 @@ void _disconnectDevice() async {
                     _events = cachedData['events'] ?? {};
                     _prediction = cachedData['prediction'];
                     _recommendation = cachedData['recommendation'];
-                    _sleepTrend = cachedData['sleepTrend'] ?? [];
                     _moodProb = cachedData['moodProb'] ?? {};
                     _activityProb = cachedData['activityProb'] ?? {};
                     _illnessRisk = cachedData['illnessRisk'];
                     _isUnhealthy = cachedData['isUnhealthy'] ?? false;
-                    _careActions = cachedData['careActions'] ?? [];
-                    _careExpectations = cachedData['careExpectations'] ?? [];
                     _loadingBehaviorData = false;
                     _loadingAnalysisData = false;
                   });
@@ -2382,79 +3032,218 @@ void _disconnectDevice() async {
                 _fetchPetDataInBackground(petId);
               },
               itemBuilder: (context) {
-                return _pets.map((pet) {
+                List<PopupMenuEntry<Map<String, dynamic>>> items = [];
+                
+                // Add header
+                items.add(
+                  PopupMenuItem(
+                    enabled: false,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.pets, color: coral, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Choose Pet Profile',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: deepRed,
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Select which pet profile to view and manage',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Divider(height: 1, color: Colors.grey.shade300),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                
+                // Add pet items
+                items.addAll(_pets.map((pet) {
                   final isSelected = pet == _selectedPet;
                   return PopupMenuItem(
                     value: pet,
                     child: Container(
-                      padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                      margin: EdgeInsets.symmetric(vertical: 4),
+                      padding: EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: isSelected ? lightBlush : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
+                        color: isSelected ? lightBlush : Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected ? coral : Colors.grey.shade300,
+                          width: isSelected ? 2 : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
                       child: Row(
                         children: [
+                          // Enhanced pet profile picture or avatar
                           Container(
-                            width: 32,
-                            height: 32,
+                            width: 50,
+                            height: 50,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: isSelected
-                                    ? [coral.withOpacity(0.8), peach.withOpacity(0.8)]
-                                    : [Colors.grey.shade400, Colors.grey.shade500],
+                              border: Border.all(
+                                color: isSelected ? coral : Colors.grey.shade300,
+                                width: 2,
                               ),
                             ),
-                            child: Center(
-                              child: Text(
-                                (pet['name'] ?? 'U')[0].toUpperCase(),
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
+                            child: ClipOval(
+                              child: pet['profile_picture'] != null && pet['profile_picture'].isNotEmpty
+                                  ? Image.network(
+                                      pet['profile_picture'],
+                                      fit: BoxFit.cover,
+                                      width: 50,
+                                      height: 50,
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return _buildPetAvatar(pet, isSelected);
+                                      },
+                                    )
+                                  : _buildPetAvatar(pet, isSelected),
                             ),
                           ),
                           SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
+                                // Pet name
                                 Text(
                                   pet['name'] ?? 'Unnamed',
                                   style: TextStyle(
-                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                                    fontWeight: FontWeight.bold,
                                     color: isSelected ? deepRed : Colors.grey.shade800,
-                                    fontSize: 15,
+                                    fontSize: 16,
                                   ),
                                 ),
-                                if (pet['breed'] != null) ...[
-                                  SizedBox(height: 2),
-                                  Text(
-                                    pet['breed'],
-                                    style: TextStyle(
-                                      fontSize: 12,
+                                SizedBox(height: 4),
+                                // Pet details row
+                                Row(
+                                  children: [
+                                    // Breed and age
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          if (pet['breed'] != null)
+                                            Text(
+                                              pet['breed'],
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: coral,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          if (pet['age'] != null)
+                                            Text(
+                                              _getFormattedAge(pet),
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey.shade600,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                    // Health status indicator
+                                    Container(
+                                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: (_petHealthStatus[pet['id']] ?? false)
+                                            ? Colors.red.withOpacity(0.2)
+                                            : Colors.green.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        (_petHealthStatus[pet['id']] ?? false) ? 'Bad' : 'Good',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: (_petHealthStatus[pet['id']] ?? false)
+                                              ? Colors.red.shade700
+                                              : Colors.green.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                // Pet type and gender
+                                SizedBox(height: 2),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      _getPetTypeIcon(pet['type'] ?? 'Dog'),
+                                      size: 14,
                                       color: Colors.grey.shade600,
                                     ),
-                                  ),
-                                ],
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '${pet['type'] ?? 'Dog'} • ${pet['gender'] ?? 'Unknown'}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                    if (pet['weight'] != null) ...[
+                                      Text(
+                                        ' • ${pet['weight']}kg',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ],
                             ),
                           ),
+                          // Selection indicator
                           if (isSelected)
-                            Icon(
-                              Icons.check_circle,
-                              color: coral,
-                              size: 16,
+                            Container(
+                              padding: EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: coral,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 16,
+                              ),
                             ),
                         ],
                       ),
                     ),
                   );
-                }).toList();
+                }).toList());
+                
+                return items;
               },
             ),
           ),
@@ -2484,7 +3273,7 @@ void _disconnectDevice() async {
                           icon: Icon(Icons.refresh),
                           label: Text('Refresh'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             foregroundColor: Colors.white,
                           ),
                         ),
@@ -2537,7 +3326,6 @@ void _disconnectDevice() async {
                                   // Move lost post to found type in community_posts and update content
                                   final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
                                   final petName = _selectedPet!['name'] ?? 'Unnamed';
-                                  final breed = _selectedPet!['breed'] ?? 'Unknown';
                                   // Find the latest missing post for this pet and user
                                   final posts = await Supabase.instance.client
                                       .from('community_posts')
@@ -2562,13 +3350,10 @@ void _disconnectDevice() async {
 
                                   // Clear any active missing pet alerts for this pet
                                   try {
-                                    print('🧪 DEBUG: Attempting to call clearLastMissingPostData...');
                                     final alertService = MissingPetAlertService();
-                                    print('🧪 DEBUG: Alert service instance created: ${alertService.runtimeType}');
                                     alertService.clearLastMissingPostData();
-                                    print('🧪 DEBUG: clearLastMissingPostData called successfully');
                                   } catch (e) {
-                                    print('🧪 DEBUG: Error calling clearLastMissingPostData: $e');
+                                    // Error calling clearLastMissingPostData
                                   }
 
                                   if (mounted) {
@@ -2592,7 +3377,7 @@ void _disconnectDevice() async {
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
                           child: ElevatedButton.icon(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
+                              backgroundColor: Colors.green,
                               minimumSize: Size(double.infinity, 48),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                             ),
@@ -2667,29 +3452,14 @@ void _disconnectDevice() async {
     String? markerSub;
     String? locationSource;
 
-    // Use current map location if set, otherwise prefer latest device location
-    if (_currentMapLocation != null) {
-      lat = _currentMapLocation!.latitude;
-      lng = _currentMapLocation!.longitude;
-      markerLabel = _currentMapLabel;
-      markerSub = _currentMapSub;
-      locationSource = 'Historical Location';
-      markerWidget = Container(
-        padding: EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.blue.withOpacity(0.3),
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Icon(Icons.history, color: Colors.blue, size: 24),
-      );
-    } else if (_latestDeviceLocation != null) {
+    // Check if current map location is the same as latest device location (live GPS)
+    final isShowingLiveLocation = _currentMapLocation != null && 
+                                   _latestDeviceLocation != null &&
+                                   _currentMapLocation!.latitude == _latestDeviceLocation!.latitude &&
+                                   _currentMapLocation!.longitude == _latestDeviceLocation!.longitude;
+
+    // Prefer latest device location (live GPS) for display
+    if (_latestDeviceLocation != null && (isShowingLiveLocation || _currentMapLocation == null)) {
       lat = _latestDeviceLocation!.latitude;
       lng = _latestDeviceLocation!.longitude;
       locationSource = 'Live GPS';
@@ -2719,7 +3489,29 @@ void _disconnectDevice() async {
       markerLabel = locationAddress?.isNotEmpty == true 
           ? '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${locationAddress!.length > 40 ? '${locationAddress.substring(0, 40)}...' : locationAddress}'
           : '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${_latestDeviceId ?? 'Device Location'}';
-      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!.toLocal()) : 'Last seen: unknown';
+      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, yyyy • h:mm a').format(_latestDeviceTimestamp!) : 'Last seen: unknown';
+    } else if (_currentMapLocation != null) {
+      // Showing a historical location (user clicked on a location from history)
+      lat = _currentMapLocation!.latitude;
+      lng = _currentMapLocation!.longitude;
+      markerLabel = _currentMapLabel;
+      markerSub = _currentMapSub;
+      locationSource = 'Historical Location';
+      markerWidget = Container(
+        padding: EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.blue.withOpacity(0.3),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Icon(Icons.history, color: Colors.blue, size: 24),
+      );
     } else if (_selectedPet != null &&
         _selectedPet!['latitude'] != null &&
         _selectedPet!['longitude'] != null) {
@@ -2825,40 +3617,6 @@ void _disconnectDevice() async {
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  SizedBox(height: 16),
-                  
-                  // Status indicators
-                  Row(
-                    children: [
-                      _buildStatusIndicator(
-                        icon: Icons.gps_fixed,
-                        label: 'GPS Status',
-                        value: _latestDeviceLocation != null ? 'Active' : 'Inactive',
-                        color: _latestDeviceLocation != null ? Colors.green : Colors.orange,
-                        isActive: _latestDeviceLocation != null,
-                      ),
-                      SizedBox(width: 12),
-                      _buildStatusIndicator(
-                        icon: Icons.history,
-                        label: 'History',
-                        value: '${_locationHistory.length} records',
-                        color: _locationHistory.isNotEmpty ? Colors.blue : Colors.grey,
-                        isActive: _locationHistory.isNotEmpty,
-                      ),
-                    ],
-                  ),
-                  
-                  SizedBox(height: 16),
-                  
-                  // Action buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 1,
-                        child: Container(),
-                      ),
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.2),
@@ -2891,12 +3649,31 @@ void _disconnectDevice() async {
                           },
                         ),
                       ),
-                      Expanded(
-                        flex: 1,
-                        child: Container(),
+                    ],
+                  ),
+                  SizedBox(height: 16),
+                  
+                  // Status indicators
+                  Row(
+                    children: [
+                      _buildStatusIndicator(
+                        icon: Icons.gps_fixed,
+                        label: 'GPS Status',
+                        value: _latestDeviceLocation != null ? 'Active' : 'Inactive',
+                        color: _latestDeviceLocation != null ? Colors.green : Colors.orange,
+                        isActive: _latestDeviceLocation != null,
+                      ),
+                      SizedBox(width: 12),
+                      _buildStatusIndicator(
+                        icon: Icons.history,
+                        label: 'History',
+                        value: '${_locationHistory.length} records',
+                        color: _locationHistory.isNotEmpty ? Colors.blue : Colors.grey,
+                        isActive: _locationHistory.isNotEmpty,
                       ),
                     ],
                   ),
+                  
                 ],
               ),
             ),
@@ -2999,6 +3776,7 @@ void _disconnectDevice() async {
                       child: Stack(
                         children: [
                           FlutterMap(
+                            key: ValueKey('map_${lat}_${lng}_${_selectedPet?['id']}'),
                             options: MapOptions(
                               initialCenter: mapCenter,
                               initialZoom: 15,
@@ -3324,38 +4102,38 @@ void _disconnectDevice() async {
     Color iconColor;
     
     if (address != null && address.isNotEmpty) {
-      title = address;
+      // Show formatted address as title, coordinates as subtitle for precision
+      title = _formatAddressForDisplay(address);
       subtitle = lat != null && lng != null 
-          ? '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'
-          : 'Address only';
+          ? 'Coordinates: ${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}'
+          : 'Address resolved';
       leadingIcon = Icons.location_on;
       iconColor = deepRed;
     } else if (lat != null && lng != null) {
-      title = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
-      subtitle = 'Coordinates only';
+      // Show coordinates as title when no address is available yet
+      title = 'Lat: ${lat.toStringAsFixed(4)}, Lng: ${lng.toStringAsFixed(4)}';
+      subtitle = 'Resolving address...';
       leadingIcon = Icons.my_location;
       iconColor = Colors.orange;
+      // Note: Address resolution is now handled by _resolveAddressesForLocationHistory() after fetch completes
     } else {
       title = 'Unknown Location';
-      subtitle = 'No coordinates available';
+      subtitle = 'No location data available';
       leadingIcon = Icons.location_off;
       iconColor = Colors.grey;
     }
     
-    // Calculate time ago
-    String timeAgo = 'Unknown time';
+    // Format actual timestamp instead of relative time
+    String timestampDisplay = 'Unknown time';
     if (timestamp != null) {
-      final now = DateTime.now();
-      final difference = now.difference(timestamp);
-      
-      if (difference.inDays > 0) {
-        timeAgo = '${difference.inDays} day${difference.inDays == 1 ? '' : 's'} ago';
-      } else if (difference.inHours > 0) {
-        timeAgo = '${difference.inHours} hour${difference.inHours == 1 ? '' : 's'} ago';
-      } else if (difference.inMinutes > 0) {
-        timeAgo = '${difference.inMinutes} minute${difference.inMinutes == 1 ? '' : 's'} ago';
-      } else {
-        timeAgo = 'Just now';
+      try {
+        // Format as: Oct 5, 2025 • 2:30 PM
+        // The timestamp already has the correct local time, so don't convert it again
+        // Just use it directly without timezone conversion
+        timestampDisplay = DateFormat('MMM d, yyyy • h:mm a').format(timestamp);
+      } catch (e) {
+        // Fallback to ISO string if formatting fails
+        timestampDisplay = timestamp.toString().substring(0, 16);
       }
     }
     
@@ -3406,10 +4184,11 @@ void _disconnectDevice() async {
                 Icon(Icons.access_time, size: 12, color: Colors.grey.shade500),
                 SizedBox(width: 4),
                 Text(
-                  timeAgo,
+                  timestampDisplay,
                   style: TextStyle(
                     fontSize: 11,
                     color: Colors.grey.shade500,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 if (device != null) ...[
@@ -3441,14 +4220,14 @@ void _disconnectDevice() async {
                   icon: Icon(Icons.visibility, color: Colors.blue, size: 18),
                   tooltip: 'View on map',
                   onPressed: () {
-                    _updateMapView(LatLng(lat, lng), title, timeAgo);
+                    _updateMapView(LatLng(lat, lng), title, timestampDisplay);
                   },
                 ),
               )
             : null,
         onTap: lat != null && lng != null 
             ? () {
-                _updateMapView(LatLng(lat, lng), title, timeAgo);
+                _updateMapView(LatLng(lat, lng), title, timestampDisplay);
               }
             : null,
       ),
@@ -3478,10 +4257,8 @@ void _disconnectDevice() async {
       return _buildTabContent('No pet selected');
     }
 
-    // Build a public URL that opens the pet info page (works even without the app)
     final baseBackend = backendUrl.replaceAll(RegExp(r'/analyze/?\$'), '');
-    final publicUrl = '$baseBackend/pet/${_selectedPet!['id']}';
-    final payloadStr = publicUrl;
+    final payloadStr = '$baseBackend/pet/${_selectedPet!['id']}';
 
     return Container(
       decoration: BoxDecoration(
@@ -3535,7 +4312,7 @@ void _disconnectDevice() async {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Pet ID & Contact Card',
+                              'Pet ID & Missing Info',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -3586,11 +4363,12 @@ void _disconnectDevice() async {
                     ),
                   ),
                   SizedBox(height: 8),
-                  Text(
-                    'Anyone can scan to view pet information',
+                 Text(
+                    'Anyone can scan to view pet information and missing alerts.',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
-                      color: Colors.grey.shade600,
+                      color: Colors.grey,
                     ),
                   ),
                   SizedBox(height: 20),
@@ -3736,7 +4514,7 @@ void _disconnectDevice() async {
                           icon: Icon(Icons.copy, size: 18),
                           label: Text('Copy Link'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             foregroundColor: Colors.white,
                             padding: EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -3766,22 +4544,7 @@ void _disconnectDevice() async {
                           },
                         ),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: Icon(Icons.share, size: 18),
-                          label: Text('Share'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: deepRed,
-                            side: BorderSide(color: deepRed, width: 2),
-                            padding: EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () => _showShareDialog(),
-                        ),
-                      ),
+                      // Share action removed per request
                     ],
                   ),
                   
@@ -3822,22 +4585,7 @@ void _disconnectDevice() async {
                           },
                         ),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: Icon(Icons.download, size: 18),
-                          label: Text('Save'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.grey.shade700,
-                            side: BorderSide(color: Colors.grey.shade400, width: 1),
-                            padding: EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () => _showSaveQRDialog(),
-                        ),
-                      ),
+                      // Save action removed per request
                     ],
                   ),
                 ],
@@ -3908,7 +4656,7 @@ void _disconnectDevice() async {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Link: $publicUrl',
+                            'Link: $payloadStr',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.blue.shade700,
@@ -3967,140 +4715,6 @@ void _disconnectDevice() async {
   }
 
   // Show share dialog for QR code
-  void _showShareDialog() {
-    final baseBackend = backendUrl.replaceAll(RegExp(r'/analyze/?\$'), '');
-    final publicUrl = '$baseBackend/pet/${_selectedPet!['id']}';
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.share, color: deepRed),
-            SizedBox(width: 8),
-            Text('Share Pet Info'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Share your pet\'s information with others:'),
-            SizedBox(height: 16),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.link, color: Colors.grey.shade600, size: 16),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      publicUrl,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        color: Colors.grey.shade700,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: deepRed,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              // Here you could integrate with platform sharing
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Sharing feature coming soon!'),
-                  backgroundColor: Colors.blue,
-                ),
-              );
-            },
-            child: Text('Share'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Show save QR dialog
-  void _showSaveQRDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.download, color: deepRed),
-            SizedBox(width: 8),
-            Text('Save QR Code'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Save QR code as image:'),
-            SizedBox(height: 16),
-            Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.blue, size: 16),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'The QR code will be saved to your device\'s gallery.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: deepRed,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              // Here you could implement actual saving functionality
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Save feature coming soon!'),
-                  backgroundColor: Colors.blue,
-                ),
-              );
-            },
-            child: Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
   // Fetch behavior log for a specific date (returns the latest if multiple exist)
   Future<Map<String, dynamic>?> _fetchBehaviorForDate(DateTime day) async {
     if (_selectedPet == null) return null;
@@ -4124,22 +4738,44 @@ void _disconnectDevice() async {
 
   void _clearBehaviorForm() {
     setState(() {
-      _selectedMood = null;
       _activityLevel = null;
-      _sleepHours = null;
-      _notes = null;
-      _sleepController.text = '';
+      _foodIntake = null;
+      _waterIntake = null;
+      _bathroomHabits = null;
+      _selectedSymptoms = [];
     });
   }
 
   // Read-only modal showing existing behavior with Edit/Delete
   void _showExistingBehaviorModal(BuildContext context, Map<String, dynamic> log) {
-    final mood = (log['mood'] ?? '').toString();
     final activity = (log['activity_level'] ?? '').toString();
-    final sleep = (log['sleep_hours'] ?? '').toString();
     final notes = (log['notes'] ?? '').toString();
+    final foodIntake = (log['food_intake'] ?? '').toString();
+    final waterIntake = (log['water_intake'] ?? '').toString();
+    final bathroomHabits = (log['bathroom_habits'] ?? '').toString();
     final rawDate = (log['log_date'] ?? '').toString();
     final createdAt = log['created_at']?.toString();
+    
+    // Parse symptoms
+    List<String> symptoms = [];
+    final symptomsData = log['symptoms'];
+    if (symptomsData != null) {
+      if (symptomsData is List) {
+        symptoms = List<String>.from(symptomsData);
+      } else if (symptomsData is String) {
+        try {
+          final decoded = json.decode(symptomsData);
+          if (decoded is List) {
+            symptoms = List<String>.from(decoded);
+          } else {
+            symptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+          }
+        } catch (_) {
+          symptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        }
+      }
+    }
+    
     DateTime date;
     try {
       date = DateTime.parse(rawDate);
@@ -4264,14 +4900,24 @@ void _disconnectDevice() async {
                   padding: EdgeInsets.symmetric(horizontal: 20),
                   child: Column(
                     children: [
-                      // Mood Section
+                      // Food Intake Section
                       _buildDetailCard(
-                        title: 'Mood',
-                        icon: Icons.mood,
+                        title: 'Food Intake',
+                        icon: Icons.restaurant,
                         iconColor: Colors.orange,
-                        value: mood.isEmpty ? 'Not recorded' : mood,
-                        emoji: mood.isNotEmpty ? _moodEmojis[mood] : null,
-                        isEmpty: mood.isEmpty,
+                        value: foodIntake.isEmpty ? 'Not recorded' : foodIntake,
+                        isEmpty: foodIntake.isEmpty,
+                      ),
+
+                      SizedBox(height: 16),
+
+                      // Water Intake Section
+                      _buildDetailCard(
+                        title: 'Water Intake',
+                        icon: Icons.water_drop,
+                        iconColor: Colors.blue,
+                        value: waterIntake.isEmpty ? 'Not recorded' : waterIntake,
+                        isEmpty: waterIntake.isEmpty,
                       ),
 
                       SizedBox(height: 16),
@@ -4288,24 +4934,35 @@ void _disconnectDevice() async {
 
                       SizedBox(height: 16),
 
-                      // Sleep Section
+                      // Bathroom Habits Section
                       _buildDetailCard(
-                        title: 'Sleep Hours',
-                        icon: Icons.bedtime,
-                        iconColor: Colors.blue,
-                        value: sleep.isEmpty ? 'Not recorded' : '${sleep} hours',
-                        subtitle: sleep.isNotEmpty ? _getSleepFeedback(double.tryParse(sleep) ?? 0) : null,
-                        isEmpty: sleep.isEmpty,
+                        title: 'Bathroom Habits',
+                        icon: Icons.health_and_safety,
+                        iconColor: Colors.teal,
+                        value: bathroomHabits.isEmpty ? 'Not recorded' : bathroomHabits,
+                        isEmpty: bathroomHabits.isEmpty,
                       ),
 
                       SizedBox(height: 16),
+
+                      // Symptoms Section
+                      if (symptoms.isNotEmpty) ...[
+                        _buildDetailCard(
+                          title: 'Clinical Signs',
+                          icon: Icons.medical_services,
+                          iconColor: Colors.red,
+                          value: symptoms.join(', '),
+                          isEmpty: false,
+                        ),
+                        SizedBox(height: 16),
+                      ],
 
                       // Notes Section
                       if (notes.isNotEmpty) ...[
                         _buildDetailCard(
                           title: 'Notes',
                           icon: Icons.note_alt,
-                          iconColor: Colors.purple,
+                          iconColor: Colors.indigo,
                           value: notes,
                           isNote: true,
                           isEmpty: false,
@@ -4314,7 +4971,7 @@ void _disconnectDevice() async {
                       ],
 
                       // Health Insights
-                      _buildHealthInsights(mood, activity, sleep),
+                      _buildHealthInsights(activity, foodIntake, waterIntake, bathroomHabits, symptoms),
 
                       SizedBox(height: 20),
                     ],
@@ -4357,15 +5014,6 @@ void _disconnectDevice() async {
                           ),
                           onPressed: () {
                             Navigator.pop(context); // close details
-                            // preload form state then open edit modal
-                            setState(() {
-                              _selectedDate = date;
-                              _selectedMood = mood.isNotEmpty ? mood : null;
-                              _activityLevel = activity.isNotEmpty ? activity : null;
-                              _sleepHours = double.tryParse(sleep);
-                              _sleepController.text = _sleepHours?.toString() ?? '';
-                              _notes = notes.isNotEmpty ? notes : null;
-                            });
                             _showBehaviorModal(context, date, existing: log);
                           },
                         ),
@@ -4498,52 +5146,117 @@ void _disconnectDevice() async {
   }
 
   // Health insights widget
-  Widget _buildHealthInsights(String mood, String activity, String sleep) {
+  Widget _buildHealthInsights(String activity, String foodIntake, String waterIntake, String bathroomHabits, List<String> symptoms) {
     List<Widget> insights = [];
     
-    // Sleep insights
-    final sleepHours = double.tryParse(sleep);
-    if (sleepHours != null) {
-      if (sleepHours < 6) {
-        insights.add(_buildInsightItem(
-          'Low Sleep Detected',
-          'Monitor for signs of fatigue or health issues.',
-          Icons.warning,
-          Colors.red,
-        ));
-      } else if (sleepHours > 16) {
-        insights.add(_buildInsightItem(
-          'High Sleep Duration',
-          'Consider checking for illness or stress factors.',
-          Icons.info,
-          Colors.orange,
-        ));
-      }
+    // Normalize strings for case-insensitive comparison
+    final normalizedFood = foodIntake.trim().toLowerCase();
+    final normalizedWater = waterIntake.trim().toLowerCase();
+    final normalizedActivity = activity.trim().toLowerCase();
+    final normalizedBathroom = bathroomHabits.trim().toLowerCase();
+    
+    // Food intake insights
+    if (normalizedFood.contains('not eating') || normalizedFood.contains('eating less')) {
+      insights.add(_buildInsightItem(
+        'Food Intake Concern',
+        'Reduced appetite may indicate health issues. Monitor closely.',
+        Icons.warning,
+        Colors.red,
+      ));
     }
 
-    // Activity insights
-    if (activity == 'Low' && mood == 'Lethargic') {
+    // Water intake insights
+    if (normalizedWater.contains('not drinking') || normalizedWater.contains('drinking less')) {
       insights.add(_buildInsightItem(
-        'Low Energy Pattern',
-        'Consider encouraging more activity or consult a vet.',
+        'Hydration Concern',
+        'Reduced water intake needs attention. Ensure fresh water is available.',
+        Icons.warning,
+        Colors.red,
+      ));
+    } else if (normalizedWater.contains('drinking more')) {
+      insights.add(_buildInsightItem(
+        'Increased Thirst',
+        'Excessive drinking may indicate diabetes or kidney issues. Consider a vet visit.',
+        Icons.info,
+        Colors.orange,
+      ));
+    }
+
+    // Bathroom habits insights
+
+    if (normalizedBathroom.contains('diarrhea')) {
+      insights.add(_buildInsightItem(
+        'Diarrhea Observed',
+        'Loose stools can indicate sensitive digestion, infection, or dietary upset; track frequency and mucus/blood.',
+        Icons.health_and_safety,
+        Colors.red,
+      ));
+    }
+    if (normalizedBathroom.contains('constipation')) {
+      insights.add(_buildInsightItem(
+        'Constipation Warning',
+        'Hard or infrequent stools may require increased fiber, hydration, or veterinary review.',
+        Icons.health_and_safety,
+        Colors.orange,
+      ));
+    }
+    if (normalizedBathroom.contains('frequent urination') ||
+        (normalizedBathroom.contains('frequent') && normalizedBathroom.contains('urination'))) {
+      insights.add(_buildInsightItem(
+        'Frequent Urination',
+        'Frequent trips to pee can signal a urinary tract issue or diabetes; note color, volume, and wet spots.',
+        Icons.water_drop,
+        Colors.orange,
+      ));
+    }
+    if (normalizedBathroom.contains('straining')) {
+      insights.add(_buildInsightItem(
+        'Straining to Go',
+        'Straining may mean discomfort, a blockage, or inflammation; do not delay a vet check if it continues.',
+        Icons.warning,
+        Colors.red,
+      ));
+    }
+    if (normalizedBathroom.contains('blood')) {
+      insights.add(_buildInsightItem(
+        'Blood in Urine or Stool',
+        'Blood indicates a serious concern—seek veterinary care immediately to identify the source.',
+        Icons.error,
+        Colors.red,
+      ));
+    }
+    if (normalizedBathroom.contains('accident') || normalizedBathroom.contains('soiling') || normalizedBathroom.contains('house soiling')) {
+      insights.add(_buildInsightItem(
+        'House Soiling or Accidents',
+        'Inappropriate toileting can point to stress, urinary issues, or mobility changes—record where/when it happens.',
+        Icons.home,
+        Colors.orange,
+      ));
+    }
+    // Activity insights
+    if (normalizedActivity.contains('low')) {
+      insights.add(_buildInsightItem(
+        'Low Activity Level',
+        'Consider encouraging more exercise or check for health issues.',
         Icons.trending_down,
         Colors.orange,
       ));
-    } else if (activity == 'High' && mood == 'Happy') {
+    } else if (normalizedActivity.contains('high')) {
       insights.add(_buildInsightItem(
-        'Great Energy Balance',
-        'Your pet seems to be in excellent spirits!',
+        'High Energy',
+        'Great! Your pet is active and energetic.',
         Icons.trending_up,
         Colors.green,
       ));
     }
 
-    // Mood insights
-    if (mood == 'Anxious' || mood == 'Aggressive') {
+    // Symptoms insights - filter out "None of the Above"
+    final actualSymptoms = symptoms.where((s) => s.toLowerCase() != "none of the above").toList();
+    if (actualSymptoms.isNotEmpty) {
       insights.add(_buildInsightItem(
-        'Mood Concern',
-        'Monitor behavior patterns and consider environmental factors.',
-        Icons.psychology,
+        'Clinical Signs Reported',
+        '${actualSymptoms.length} clinical sign(s) detected. Please monitor and consult a vet if they persist or worsen.',
+        Icons.medical_services,
         Colors.red,
       ));
     }
@@ -4551,7 +5264,7 @@ void _disconnectDevice() async {
     if (insights.isEmpty) {
       insights.add(_buildInsightItem(
         'Normal Patterns',
-        'All logged behaviors appear within normal ranges.',
+        'All logged health data appears within normal ranges.',
         Icons.check_circle,
         Colors.green,
       ));
@@ -4588,6 +5301,7 @@ void _disconnectDevice() async {
     );
   }
 
+  // Build health insights as a list of widgets (for state-based rendering)
   Widget _buildInsightItem(String title, String description, IconData icon, Color color) {
     return Padding(
       padding: EdgeInsets.only(bottom: 8),
@@ -4699,11 +5413,11 @@ void _disconnectDevice() async {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel'),
+            child: Text('Cancel', style: TextStyle(color: Colors.red)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colors.green,
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.pop(ctx, true),
@@ -4726,7 +5440,7 @@ void _disconnectDevice() async {
         await Future.wait([
           _fetchBehaviorDates(),
           _fetchAnalyzeFromBackend(),
-          _fetchLatestAnalysis(),
+          // _fetchLatestAnalysis() removed - predictions table deprecated
         ]);
         
         if (mounted) {
@@ -4776,6 +5490,64 @@ void _disconnectDevice() async {
         padding: const EdgeInsets.symmetric(horizontal: 8.0),
         child: Column(
           children: [
+            // Daily Logging Reminder Banner
+            Container(
+              margin: EdgeInsets.all(8),
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: peach.withOpacity(0.3),
+                border: Border.all(
+                  color: coral,
+                  width: 1.5,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: coral.withOpacity(0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.calendar_today,
+                      color: deepRed,
+                      size: 20,
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Daily Logging Tip',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: deepRed,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Log data every day for best results. Daily entries help us understand your pet\'s health patterns better.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade700,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            SizedBox(height: 8),
+
             // Enhanced Calendar Section
             Container(
               margin: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -4887,92 +5659,8 @@ void _disconnectDevice() async {
             
             SizedBox(height: 16),
             
-            // Enhanced Health Status Section
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: 8),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _isUnhealthy 
-                    ? [deepRed.withOpacity(0.1), coral.withOpacity(0.1)]
-                    : [Colors.green.withOpacity(0.1), Colors.lightGreen.withOpacity(0.1)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: _isUnhealthy ? deepRed.withOpacity(0.3) : Colors.green.withOpacity(0.3),
-                  width: 2,
-                ),
-              ),
-              child: InkWell(
-                onTap: _isUnhealthy ? () => _showHealthDetailsDialog() : null,
-                borderRadius: BorderRadius.circular(16),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _isUnhealthy ? deepRed : Colors.green,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        _isUnhealthy ? Icons.warning : Icons.favorite,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _isUnhealthy ? "Health Alert" : "Healthy Status",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              color: _isUnhealthy ? deepRed : Colors.green.shade700,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            _isUnhealthy
-                                ? "Illness risk: ${_illnessRisk ?? 'Unknown'}"
-                                : "No illness predicted — pet appears healthy",
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: _isUnhealthy ? deepRed.withOpacity(0.8) : Colors.green.shade600,
-                            ),
-                          ),
-                          if (_isUnhealthy)
-                            Padding(
-                              padding: EdgeInsets.only(top: 4),
-                              child: Text(
-                                'Tap for details',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: deepRed.withOpacity(0.6),
-                                  fontStyle: FontStyle.italic,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    if (_isUnhealthy)
-                      Icon(
-                        Icons.arrow_forward_ios,
-                        color: deepRed,
-                        size: 16,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            
-            // Enhanced Latest Analysis Section
-            if (_prediction != null || _loadingAnalysisData) ...[
+            // Enhanced Latest Analysis Section - always display
+            ...[
               SizedBox(height: 16),
               Container(
                 margin: EdgeInsets.symmetric(horizontal: 8),
@@ -4993,50 +5681,6 @@ void _disconnectDevice() async {
               ),
             ],
 
-            // Enhanced Sleep Forecast and Analytics
-            if (_sleepTrend.isNotEmpty || _loadingAnalysisData) ...[
-              SizedBox(height: 16),
-              Container(
-                margin: EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    )
-                  ],
-                ),
-                child: _loadingAnalysisData
-                    ? _buildChartLoadingSkeleton()
-                    : _buildEnhancedSleepChart(),
-              ),
-            ],
-
-            // Enhanced Mood and Activity Analytics
-            if ((_moodProb.isNotEmpty || _activityProb.isNotEmpty) || _loadingAnalysisData) ...[
-              SizedBox(height: 16),
-              Container(
-                margin: EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 8,
-                      offset: Offset(0, 2),
-                    )
-                  ],
-                ),
-                child: _loadingAnalysisData
-                    ? _buildDistributionLoadingSkeleton()
-                    : _buildEnhancedMoodActivityAnalytics(),
-              ),
-            ],
-
             // Add bottom spacing
             SizedBox(height: 24),
           ],
@@ -5052,6 +5696,7 @@ void _disconnectDevice() async {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          SizedBox(height: 16),
           Row(
             children: [
               Container(
@@ -5064,7 +5709,7 @@ void _disconnectDevice() async {
               ),
               SizedBox(width: 12),
               Text(
-                "Latest Analysis",
+                "Analysis Results",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 18,
@@ -5075,211 +5720,48 @@ void _disconnectDevice() async {
           ),
           SizedBox(height: 16),
           
-          if (_prediction != null) ...[
-            _buildAnalysisCard(
-              icon: Icons.trending_up,
-              title: "Prediction",
-              content: _prediction!,
-              color: Colors.blue,
-            ),
+          // Display data sufficiency notice if present
+          if (_dataNotice != null) ...[
+            _buildDataNoticeCard(_dataNotice!),
             SizedBox(height: 12),
           ],
           
-          if (_recommendation != null) ...[
-            _buildAnalysisCard(
-              icon: Icons.lightbulb,
-              title: "Recommendation",
-              content: _recommendation!,
-              color: Colors.orange,
-            ),
+          // Display illness risk notice if present and pet is unhealthy
+          if (_illnessRiskNotice != null && _isUnhealthy) ...[
+            _buildIllnessRiskNoticeCard(_illnessRiskNotice!),
             SizedBox(height: 12),
           ],
           
-          if (_backendSleepForecast.isNotEmpty) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: peach.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: peach.withOpacity(0.3)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.bedtime, color: deepRed, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Sleep Forecast (next 7 days)",
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          "${_backendSleepForecast.map((d) => d.toStringAsFixed(1)).join(', ')} hours",
-                          style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          
-          // Care Tips (only when risk is bad: medium/high)
-          if (_isUnhealthy && (_careActions.isNotEmpty || _careExpectations.isNotEmpty)) ...[
-            SizedBox(height: 16),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: deepRed.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: deepRed.withOpacity(0.2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.medical_services, color: deepRed, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        "Care Tips",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: deepRed,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  
-                  if (_careActions.isNotEmpty) ...[
-                    Text("What to do", style: TextStyle(fontWeight: FontWeight.w600)),
-                    SizedBox(height: 6),
-                    ..._careActions.take(6).map((action) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.check_circle, size: 16, color: deepRed),
-                          SizedBox(width: 8),
-                          Expanded(child: Text(action, style: TextStyle(fontSize: 14))),
-                        ],
-                      ),
-                    )),
-                  ],
-                  
-                  if (_careExpectations.isNotEmpty) ...[
-                    if (_careActions.isNotEmpty) SizedBox(height: 12),
-                    Text("What to expect", style: TextStyle(fontWeight: FontWeight.w600)),
-                    SizedBox(height: 6),
-                    ..._careExpectations.take(6).map((expectation) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.info, size: 16, color: coral),
-                          SizedBox(width: 8),
-                          Expanded(child: Text(expectation, style: TextStyle(fontSize: 14))),
-                        ],
-                      ),
-                    )),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // Helper widget for analysis cards
-  Widget _buildAnalysisCard({
-    required IconData icon,
-    required String title,
-    required String content,
-    required Color color,
-  }) {
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 20),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: color,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  content,
-                  style: TextStyle(fontSize: 14),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Enhanced sleep chart
-  Widget _buildEnhancedSleepChart() {
-    final hasData = _sleepTrend.isNotEmpty && _backendSleepForecast.isNotEmpty;
-    
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header Section
+          // Health Status Section (moved inside Latest Analysis)
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  Colors.blue.shade50,
-                  Colors.indigo.shade50,
-                ],
+                colors: _isUnhealthy 
+                  ? [deepRed.withOpacity(0.1), coral.withOpacity(0.1)]
+                  : [Colors.green.withOpacity(0.1), Colors.lightGreen.withOpacity(0.1)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.blue.shade200),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _isUnhealthy ? deepRed.withOpacity(0.3) : Colors.green.withOpacity(0.3),
+                width: 1.5,
+              ),
             ),
             child: Row(
               children: [
                 Container(
-                  padding: EdgeInsets.all(12),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade600,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.blue.withOpacity(0.3),
-                        blurRadius: 8,
-                        offset: Offset(0, 4),
-                      ),
-                    ],
+                    color: _isUnhealthy ? deepRed : Colors.green,
+                    shape: BoxShape.circle,
                   ),
-                  child: Icon(Icons.bedtime, color: Colors.white, size: 24),
+                  child: Icon(
+                    _isUnhealthy ? Icons.warning : Icons.favorite,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                 ),
                 SizedBox(width: 16),
                 Expanded(
@@ -5287,339 +5769,313 @@ void _disconnectDevice() async {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        "Sleep Forecast",
+                        _isUnhealthy ? "Health Alert" : "Healthy Status",
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                          color: Colors.blue.shade800,
+                          fontSize: 15,
+                          color: _isUnhealthy ? deepRed : Colors.green.shade700,
                         ),
                       ),
                       SizedBox(height: 4),
                       Text(
-                        hasData 
-                          ? "Next 7 days predicted sleep pattern"
-                          : "Need more data for accurate predictions",
+                        _getHealthStatusMessage(),
                         style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.blue.shade600,
+                          fontSize: 13,
+                          color: _isUnhealthy ? deepRed.withOpacity(0.8) : Colors.green.shade600,
                         ),
                       ),
                     ],
                   ),
-                ),
-                Row(
-                  children: [
-                    // Forecast accuracy indicator
-                    if (hasData) ...[
-                      Container(
-                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _getForecastAccuracyColor().withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _getForecastAccuracyColor()),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _getForecastAccuracyIcon(),
-                              size: 14,
-                              color: _getForecastAccuracyColor(),
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              _getForecastAccuracyText(),
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: _getForecastAccuracyColor(),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                    ],
-                    IconButton(
-                      icon: Icon(Icons.info_outline, color: Colors.blue.shade600),
-                      onPressed: () => _showSleepDebugDialog(),
-                      tooltip: 'How is this predicted?',
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.white.withOpacity(0.8),
-                        shape: CircleBorder(),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
           
-          SizedBox(height: 16),
+          // Display health guidance based on detected symptoms - only if pet is unhealthy
+          if (_healthGuidance != null && _isUnhealthy) ...[
+            SizedBox(height: 12),
+            _buildHealthGuidanceCard(_healthGuidance!),
+            SizedBox(height: 12),
+          ],
+        ],
+      ),
+    );
+  }
 
-          // Chart Section
-          if (hasData) ...[
-            Container(
-              height: 280,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.shade200),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 10,
-                    offset: Offset(0, 4),
+  // Health Insights Widget (moved after Latest Analysis)
+
+  // Helper method to get health status message based on illness risk
+  String _getHealthStatusMessage() {
+    if (!_isUnhealthy) {
+      return "No illness predicted — pet appears healthy";
+    }
+    
+    final risk = _illnessRisk?.toLowerCase() ?? 'unknown';
+    
+    if (risk == 'high') {
+      return 'Veterinary consultation recommended. Pet may need immediate care.';
+    } else if (risk == 'medium') {
+      return 'Monitor closely. Pet may need care within 24-48 hours.';
+    } else {
+      return 'Illness risk: ${_illnessRisk ?? 'Unknown'}';
+    }
+  }
+  
+  // Build data sufficiency notice card
+  Widget _buildDataNoticeCard(Map<String, dynamic> notice) {
+    final status = notice['status']?.toString() ?? 'unknown';
+    final message = notice['message']?.toString() ?? '';
+    
+    // Determine color based on status
+    Color cardColor;
+    IconData iconData;
+    
+    if (status == 'insufficient_data') {
+      cardColor = Colors.orange;
+      iconData = Icons.info;
+    } else {
+      cardColor = Colors.green;
+      iconData = Icons.check_circle;
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cardColor.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconData, color: cardColor, size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: cardColor,
                   ),
-                ],
+                ),
               ),
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    // Chart legend
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _buildLegendItem(
-                          color: Colors.blue.shade600,
-                          label: "Predicted Sleep",
-                          icon: Icons.trending_up,
-                        ),
-                        SizedBox(width: 24),
-                        _buildLegendItem(
-                          color: Colors.grey.shade400,
-                          label: "Optimal Range",
-                          icon: Icons.horizontal_rule,
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 16),
-                    
-                    // Chart
-                    Expanded(
-                      child: LineChart(
-                        LineChartData(
-                          minY: 0,
-                          maxY: 24,
-                          titlesData: FlTitlesData(
-                            leftTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                reservedSize: 45,
-                                interval: 4,
-                                getTitlesWidget: (value, meta) {
-                                  return Padding(
-                                    padding: EdgeInsets.only(right: 8),
-                                    child: Text(
-                                      '${value.toInt()}h',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade600,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                            bottomTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                reservedSize: 35,
-                                getTitlesWidget: (value, meta) {
-                                  int idx = value.toInt();
-                                  if (idx >= 0 && idx < _sleepTrend.length) {
-                                    final date = _selectedDate != null
-                                        ? _selectedDate!.add(Duration(days: idx))
-                                        : DateTime.now().add(Duration(days: idx));
-                                    
-                                    return Padding(
-                                      padding: EdgeInsets.only(top: 8),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            DateFormat('EEE').format(date),
-                                            style: TextStyle(
-                                              fontSize: 10,
-                                              color: Colors.grey.shade600,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          Text(
-                                            DateFormat('M/d').format(date),
-                                            style: TextStyle(
-                                              fontSize: 9,
-                                              color: Colors.grey.shade500,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }
-                                  return SizedBox.shrink();
-                                },
-                              ),
-                            ),
-                            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          ),
-                          gridData: FlGridData(
-                            show: true,
-                            drawHorizontalLine: true,
-                            drawVerticalLine: false,
-                            horizontalInterval: 4,
-                            getDrawingHorizontalLine: (value) {
-                              // Highlight optimal sleep range (8-12 hours for most pets)
-                              if (value == 8 || value == 12) {
-                                return FlLine(
-                                  color: Colors.green.withOpacity(0.3),
-                                  strokeWidth: 2,
-                                  dashArray: [5, 5],
-                                );
-                              }
-                              return FlLine(
-                                color: Colors.grey.shade200,
-                                strokeWidth: 1,
-                              );
-                            },
-                          ),
-                          borderData: FlBorderData(
-                            show: true,
-                            border: Border.all(color: Colors.grey.shade300, width: 1),
-                          ),
-                          lineBarsData: [
-                            // Main forecast line
-                            LineChartBarData(
-                              spots: List.generate(
-                                _sleepTrend.length,
-                                (i) => FlSpot(i.toDouble(), _sleepTrend[i]),
-                              ),
-                              isCurved: true,
-                              curveSmoothness: 0.3,
-                              color: Colors.blue.shade600,
-                              barWidth: 4,
-                              dotData: FlDotData(
-                                show: true,
-                                getDotPainter: (spot, percent, barData, index) {
-                                  final value = spot.y;
-                                  Color dotColor;
-                                  
-                                  // Color code based on sleep health
-                                  if (value >= 8 && value <= 12) {
-                                    dotColor = Colors.green;
-                                  } else if (value >= 6 && value <= 14) {
-                                    dotColor = Colors.orange;
-                                  } else {
-                                    dotColor = Colors.red;
-                                  }
-                                  
-                                  return FlDotCirclePainter(
-                                    radius: 6,
-                                    color: Colors.white,
-                                    strokeWidth: 3,
-                                    strokeColor: dotColor,
-                                  );
-                                },
-                              ),
-                              belowBarData: BarAreaData(
-                                show: true,
-                                gradient: LinearGradient(
-                                  colors: [
-                                    Colors.blue.shade600.withOpacity(0.3),
-                                    Colors.blue.shade600.withOpacity(0.1),
-                                  ],
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                ),
-                              ),
-                            ),
-                          ],
-                          lineTouchData: LineTouchData(
-                            enabled: true,
-                            touchTooltipData: LineTouchTooltipData(
-                              getTooltipColor: (touchedSpot) => Colors.blue.shade700,
-                              getTooltipItems: (touchedSpots) {
-                                return touchedSpots.map((spot) {
-                                  final date = _selectedDate != null
-                                      ? _selectedDate!.add(Duration(days: spot.x.toInt()))
-                                      : DateTime.now().add(Duration(days: spot.x.toInt()));
-                                  return LineTooltipItem(
-                                    '${DateFormat('MMM d').format(date)}\n${spot.y.toStringAsFixed(1)} hours',
-                                    TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 12,
-                                    ),
-                                  );
-                                }).toList();
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildIllnessRiskNoticeCard(Map<String, dynamic> notice) {
+    final status = notice['status']?.toString() ?? 'unknown';
+    final message = notice['message']?.toString() ?? '';
+    final bool isPersistent = notice['is_persistent'] ?? false;
+    final int? persistenceDays = (notice['persistence_days'] as num?)?.toInt();
+    
+    // Determine color based on risk status
+    Color cardColor;
+    IconData iconData;
+    
+    if (status == 'high_risk') {
+      cardColor = Color(0xFFB82132); // deep red
+      iconData = Icons.error;
+    } else if (status == 'medium_risk') {
+      cardColor = Color(0xFFFF8C00); // orange
+      iconData = Icons.warning;
+    } else {
+      cardColor = Color(0xFF2ECC71); // green
+      iconData = Icons.check_circle;
+    }
+    
+    // Build persistence indicator if present
+    String persistenceText = '';
+    if (isPersistent && persistenceDays != null && persistenceDays > 0) {
+      final dayLabel = '$persistenceDays day${persistenceDays == 1 ? '' : 's'}';
+      persistenceText = ' (Persistent for $dayLabel)';
+    }
+    
+    final displayMessage = message + persistenceText;
+    
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cardColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cardColor, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconData, color: cardColor, size: 22),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  displayMessage,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: cardColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHealthGuidanceCard(Map<String, dynamic> guidance) {
+    final urgency = guidance['urgency']?.toString() ?? 'none';
+    final recommendations = (guidance['recommendations'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    final detectedHealthIssues = (guidance['detected_health_issues'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
+    final int? illnessDurationDays = (guidance['illness_duration_days'] as num?)?.toInt();
+    final bool persistentIllness = guidance['is_persistent_illness'] == true;
+    final int? analysisWindowDays = (guidance['analysis_window_days'] as num?)?.toInt();
+    String? analysisCoverage;
+    if (analysisWindowDays != null && analysisWindowDays > 0) {
+      final windowLabel = '$analysisWindowDays day${analysisWindowDays == 1 ? '' : 's'}';
+      analysisCoverage = 'Health concerns detected across the past $windowLabel of logs.';
+    } else if (illnessDurationDays != null && illnessDurationDays > 0) {
+      final durationLabel = '$illnessDurationDays day${illnessDurationDays == 1 ? '' : 's'}';
+      analysisCoverage = persistentIllness
+          ? 'Health concerns persistent for $durationLabel of unhealthy logs.'
+          : 'Health concerns based on $durationLabel of recent logs.';
+    }
+    
+    // Determine urgency color
+    Color urgencyColor;
+    IconData urgencyIcon;
+    
+    if (urgency == 'critical') {
+      urgencyColor = Color(0xFFD32F2F); // Deep red
+      urgencyIcon = Icons.emergency;
+    } else if (urgency == 'high') {
+      urgencyColor = Color(0xFFF57C00); // Orange
+      urgencyIcon = Icons.warning;
+    } else if (urgency == 'medium') {
+      urgencyColor = Color(0xFFFBC02D); // Amber
+      urgencyIcon = Icons.info;
+    } else {
+      urgencyColor = Color(0xFF388E3C); // Green
+      urgencyIcon = Icons.check_circle;
+    }
+    
+    // Get default care tips based on urgency level
+    List<String> careTips = _getDefaultCareTips(urgency);
+    
+    // Merge recommendations into care tips for non-redundant display
+    if (recommendations.isNotEmpty) {
+      careTips.insertAll(0, recommendations);
+    }
+    
+    return Container(
+      padding: EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Color(0xFFB82132).withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: Color(0xFFB82132).withOpacity(0.3),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with icon and title
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(urgencyIcon, color: Color(0xFFB82132), size: 24),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Health Guidance',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFB82132),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          if (analysisCoverage != null) ...[
+            SizedBox(height: 6),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Text(
+                analysisCoverage,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontStyle: FontStyle.italic,
+                  color: Color(0xFFB82132).withOpacity(0.85),
                 ),
               ),
             ),
-            
-            SizedBox(height: 16),
-            
-            // Sleep insights section
-            _buildSleepInsights(),
-          ] else ...[
-            // No data state
-            Container(
-              height: 200,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.shade200),
+          ],
+          
+          // Detected health issues (problems/concerns that may cause illness)
+          if (detectedHealthIssues.isNotEmpty) ...[
+            SizedBox(height: 10),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Health Concerns Detected:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFB82132),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  ...detectedHealthIssues.map((issue) => Padding(
+                    padding: EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '• $issue',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFFB82132).withOpacity(0.85),
+                        height: 1.4,
+                      ),
+                    ),
+                  )).toList(),
+                ],
               ),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.show_chart,
-                      size: 48,
-                      color: Colors.grey.shade400,
+            ),
+          ],
+          
+          // General care tips (includes merged recommendations and default tips)
+          if (careTips.isNotEmpty) ...[
+            SizedBox(height: 12),
+            Padding(
+              padding: EdgeInsets.only(left: 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Care Tips:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFB82132),
                     ),
-                    SizedBox(height: 12),
-                    Text(
-                      'No Sleep Data Yet',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Log some behavior data to see\nsleep predictions and trends',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey.shade500,
-                      ),
-                    ),
-                    SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      onPressed: () => _showBehaviorModal(context, DateTime.now()),
-                      icon: Icon(Icons.add),
-                      label: Text('Log Behavior'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: deepRed,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                  SizedBox(height: 8),
+                  ...careTips.map((tip) => Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: _buildCareTip(tip, urgencyColor),
+                  )).toList(),
+                ],
               ),
             ),
           ],
@@ -5627,1296 +6083,112 @@ void _disconnectDevice() async {
       ),
     );
   }
-
-  // Helper widget for chart legend items
-  Widget _buildLegendItem({
-    required Color color,
-    required String label,
-    required IconData icon,
-  }) {
+  
+  List<String> _getDefaultCareTips(String urgency) {
+    switch (urgency.toLowerCase()) {
+      case 'critical':
+        return [
+          '[ALERT] Seek immediate veterinary care - do not delay',
+          '[ALERT] Keep your pet calm and minimize physical activity',
+          '[INFO] Have your pet\'s medical history ready for the vet',
+          '[INFO] Monitor vital signs (breathing, temperature, hydration)',
+          '[WARNING] Avoid giving new food or treats during this period',
+          '[INFO] Keep your pet in a quiet, comfortable environment',
+          '[TIP] Document all symptoms and when they started',
+        ];
+      case 'high':
+        return [
+          '[WARNING] Schedule a veterinary appointment urgently',
+          '[INFO] Monitor your pet closely for any changes',
+          '[INFO] Maintain regular meal schedules and hydration',
+          '[TIP] Take photos or video of symptoms to show the vet',
+          '[INFO] Avoid strenuous exercise and play',
+          '[WARNING] Do not give medications without vet approval',
+          '[TIP] Keep a daily log of symptoms and behavior changes',
+        ];
+      case 'medium':
+        return [
+          '[INFO] Schedule a veterinary checkup within the next few days',
+          '[INFO] Monitor symptoms for any worsening',
+          '[TIP] Maintain consistent feeding and water schedules',
+          '[INFO] Provide a comfortable resting area',
+          '[INFO] Keep your pet clean and well-groomed',
+          '[TIP] Document symptom patterns and triggers',
+          '[INFO] Avoid sudden changes to diet or routine',
+        ];
+      default:
+        return [
+          '[OK] Continue regular health maintenance and monitoring',
+          '[TIP] Maintain consistent exercise and play routines',
+          '[INFO] Keep regular grooming and hygiene practices',
+          '[INFO] Schedule annual preventive health checkups',
+          '[TIP] Provide balanced nutrition and fresh water daily',
+          '[INFO] Monitor your pet\'s behavior regularly',
+          '[TIP] Keep your pet\'s vaccinations up to date',
+        ];
+    }
+  }
+  
+  
+  Widget _buildCareTip(String tip, Color defaultColor) {
+    // Parse tip text for icon tags
+    String text = tip;
+    IconData? iconData;
+    Color iconColor = defaultColor;
+    
+    // Check for icon tags and replace them
+    if (text.contains('[ALERT]')) {
+      iconData = Icons.warning;
+      iconColor = Color(0xFFFF8C00); // Orange
+      text = text.replaceAll('[ALERT]', '').trim();
+    } else if (text.contains('[ERROR]')) {
+      iconData = Icons.error;
+      iconColor = Color(0xFFB82132); // Red
+      text = text.replaceAll('[ERROR]', '').trim();
+    } else if (text.contains('[OK]')) {
+      iconData = Icons.check_circle;
+      iconColor = Color(0xFF2ECC71); // Green
+      text = text.replaceAll('[OK]', '').trim();
+    } else if (text.contains('[INFO]')) {
+      iconData = Icons.info;
+      iconColor = Color(0xFF1E88E5); // Blue
+      text = text.replaceAll('[INFO]', '').trim();
+    } else if (text.contains('[WARNING]')) {
+      iconData = Icons.warning_amber;
+      iconColor = Color(0xFFFBC02D); // Amber
+      text = text.replaceAll('[WARNING]', '').trim();
+    } else if (text.contains('[TIP]')) {
+      iconData = Icons.lightbulb;
+      iconColor = Color(0xFFFBC02D); // Amber
+      text = text.replaceAll('[TIP]', '').trim();
+    } else if (text.contains('[HELP]')) {
+      iconData = Icons.help;
+      iconColor = Color(0xFF1E88E5); // Blue
+      text = text.replaceAll('[HELP]', '').trim();
+    }
+    
+    // Default icon if no tag found
+    if (iconData == null) {
+      iconData = Icons.check;
+      iconColor = defaultColor.withOpacity(0.6);
+    }
+    
     return Row(
-      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, color: color, size: 16),
-        SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey.shade700,
-            fontWeight: FontWeight.w500,
+        Icon(iconData, color: iconColor, size: 16),
+        SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              color: Color(0xFFB82132).withOpacity(0.85),
+              height: 1.5,
+            ),
           ),
         ),
       ],
-    );
-  }
-
-  // Sleep insights section
-  Widget _buildSleepInsights() {
-    if (_sleepTrend.isEmpty) return SizedBox.shrink();
-    
-    final avgSleep = _sleepTrend.reduce((a, b) => a + b) / _sleepTrend.length;
-    final minSleep = _sleepTrend.reduce((a, b) => a < b ? a : b);
-    final maxSleep = _sleepTrend.reduce((a, b) => a > b ? a : b);
-    final sleepVariation = maxSleep - minSleep;
-    
-    return Container(
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.blue.shade50,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.blue.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.analytics, color: Colors.blue.shade700, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Sleep Insights',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blue.shade800,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 12),
-          
-          Row(
-            children: [
-              Expanded(
-                child: _buildInsightCard(
-                  'Average',
-                  '${avgSleep.toStringAsFixed(1)}h',
-                  Icons.timeline,
-                  _getSleepHealthColor(avgSleep),
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: _buildInsightCard(
-                  'Range',
-                  '${minSleep.toStringAsFixed(1)}-${maxSleep.toStringAsFixed(1)}h',
-                  Icons.swap_vert,
-                  _getVariationColor(sleepVariation),
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: _buildInsightCard(
-                  'Trend',
-                  _getSleepTrend(),
-                  _getSleepTrendIcon(),
-                  _getSleepTrendColor(),
-                ),
-              ),
-            ],
-          ),
-          
-          if (_getSleepRecommendation().isNotEmpty) ...[
-            SizedBox(height: 12),
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.8),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blue.shade300),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.lightbulb, color: Colors.amber.shade700, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _getSleepRecommendation(),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.blue.shade800,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // Helper widget for insight cards
-  Widget _buildInsightCard(String title, String value, IconData icon, Color color) {
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 18),
-          SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey.shade600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Helper methods for sleep analysis
-  Color _getForecastAccuracyColor() {
-    final dataPoints = _sleepTrend.length;
-    if (dataPoints >= 7) return Colors.green;
-    if (dataPoints >= 4) return Colors.orange;
-    return Colors.red;
-  }
-
-  IconData _getForecastAccuracyIcon() {
-    final dataPoints = _sleepTrend.length;
-    if (dataPoints >= 7) return Icons.check_circle;
-    if (dataPoints >= 4) return Icons.warning;
-    return Icons.error;
-  }
-
-  String _getForecastAccuracyText() {
-    final dataPoints = _sleepTrend.length;
-    if (dataPoints >= 7) return 'High';
-    if (dataPoints >= 4) return 'Medium';
-    return 'Low';
-  }
-
-  Color _getSleepHealthColor(double hours) {
-    if (hours >= 8 && hours <= 12) return Colors.green;
-    if (hours >= 6 && hours <= 14) return Colors.orange;
-    return Colors.red;
-  }
-
-  Color _getVariationColor(double variation) {
-    if (variation <= 2) return Colors.green;
-    if (variation <= 4) return Colors.orange;
-    return Colors.red;
-  }
-
-  String _getSleepTrend() {
-    if (_sleepTrend.length < 2) return 'N/A';
-    final first = _sleepTrend.first;
-    final last = _sleepTrend.last;
-    final diff = last - first;
-    
-    if (diff.abs() < 0.5) return 'Stable';
-    return diff > 0 ? 'Increasing' : 'Decreasing';
-  }
-
-  IconData _getSleepTrendIcon() {
-    if (_sleepTrend.length < 2) return Icons.help;
-    final first = _sleepTrend.first;
-    final last = _sleepTrend.last;
-    final diff = last - first;
-    
-    if (diff.abs() < 0.5) return Icons.trending_flat;
-    return diff > 0 ? Icons.trending_up : Icons.trending_down;
-  }
-
-  Color _getSleepTrendColor() {
-    if (_sleepTrend.length < 2) return Colors.grey;
-    final first = _sleepTrend.first;
-    final last = _sleepTrend.last;
-    final diff = last - first;
-    
-    if (diff.abs() < 0.5) return Colors.blue;
-    
-    // Trend towards optimal range (8-12h) is good
-    final avgCurrent = _sleepTrend.reduce((a, b) => a + b) / _sleepTrend.length;
-    if (avgCurrent < 8 && diff > 0) return Colors.green; // increasing when low
-    if (avgCurrent > 12 && diff < 0) return Colors.green; // decreasing when high
-    if (avgCurrent >= 8 && avgCurrent <= 12) return Colors.green; // stable in range
-    
-    return Colors.orange;
-  }
-
-  String _getSleepRecommendation() {
-    if (_sleepTrend.isEmpty) return '';
-    
-    final avgSleep = _sleepTrend.reduce((a, b) => a + b) / _sleepTrend.length;
-    final variation = _sleepTrend.length > 1 ? 
-      (_sleepTrend.reduce((a, b) => a > b ? a : b) - _sleepTrend.reduce((a, b) => a < b ? a : b)) : 0.0;
-    
-    if (avgSleep < 6) {
-      return 'Sleep seems quite low. Monitor for lethargy or health changes.';
-    } else if (avgSleep > 16) {
-      return 'Sleep seems high. Consider checking for illness or stress.';
-    } else if (variation > 4) {
-      return 'Sleep pattern is inconsistent. Try to maintain a regular routine.';
-    } else if (avgSleep >= 8 && avgSleep <= 12 && variation <= 2) {
-      return 'Excellent sleep pattern! Keep up the good routine.';
-    }
-    
-    return 'Sleep pattern looks normal. Continue monitoring.';
-  }
-
-  // Debug dialog to explain sleep predictions
-  Future<void> _showSleepDebugDialog() async {
-    if (_selectedPet == null) return;
-    
-    try {
-      final petId = _selectedPet!['id'];
-      final debugUrl = backendUrl.replaceAll('/analyze', '/debug_sleep');
-      
-      final response = await http.post(
-        Uri.parse(debugUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pet_id': petId}),
-      );
-      
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _showEnhancedSleepDebugInfo(data);
-      } else {
-        _showEnhancedSimpleSleepInfo();
-      }
-    } catch (e) {
-      _showEnhancedSimpleSleepInfo();
-    }
-  }
-  
-  void _showEnhancedSleepDebugInfo(Map<String, dynamic> debugData) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          height: MediaQuery.of(context).size.height * 0.8,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.blue.shade50, Colors.indigo.shade50],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Column(
-            children: [
-              // Header
-              Container(
-                padding: EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue.shade600, Colors.indigo.shade600],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(Icons.psychology, color: Colors.white, size: 24),
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Sleep Prediction Analysis',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Content
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (debugData['historical_data'] != null) ...[
-                        _buildDebugSection(
-                          title: 'Historical Sleep Data',
-                          icon: Icons.history,
-                          iconColor: Colors.green,
-                          child: Column(
-                            children: [
-                              _buildDebugMetric(
-                                'Logged Entries',
-                                '${debugData['historical_data']['count']}',
-                                _getDataQualityColor(debugData['historical_data']['count'] ?? 0),
-                                Icons.dataset,
-                              ),
-                              SizedBox(height: 8),
-                              _buildDebugMetric(
-                                'Average Sleep',
-                                '${debugData['historical_data']['statistics']['average']}h',
-                                Colors.blue,
-                                Icons.bedtime,
-                              ),
-                              SizedBox(height: 8),
-                              _buildDebugMetric(
-                                'Sleep Range',
-                                '${debugData['historical_data']['statistics']['min']}h - ${debugData['historical_data']['statistics']['max']}h',
-                                Colors.purple,
-                                Icons.swap_vert,
-                              ),
-                              SizedBox(height: 8),
-                              _buildDebugMetric(
-                                'Pattern Variation',
-                                '${debugData['historical_data']['statistics']['variation_level']}',
-                                _getVariationStatusColor(debugData['historical_data']['statistics']['variation_level']),
-                                Icons.trending_up,
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 16),
-                      ],
-
-                      if (debugData['predictions'] != null) ...[
-                        _buildDebugSection(
-                          title: 'Prediction Method',
-                          icon: Icons.model_training,
-                          iconColor: Colors.blue,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                padding: EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.blue.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.blue.shade200),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(Icons.auto_graph, color: Colors.blue.shade600, size: 16),
-                                        SizedBox(width: 8),
-                                        Text(
-                                          'Method: ${debugData['predictions']['prediction_method']}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.blue.shade800,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    SizedBox(height: 8),
-                                    Text(
-                                      debugData['predictions']['explanation'] ?? 'Predictions based on historical patterns',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.blue.shade700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 16),
-                      ],
-
-                      // Accuracy Tips Section
-                      _buildDebugSection(
-                        title: 'Improving Accuracy',
-                        icon: Icons.tips_and_updates,
-                        iconColor: Colors.orange,
-                        child: Column(
-                          children: [
-                            _buildRecommendationCard(
-                              'Log Consistently',
-                              'Record sleep data for more than 8 days to enable advanced AI predictions',
-                              Icons.event_repeat,
-                              Colors.green,
-                            ),
-                            SizedBox(height: 8),
-                            _buildRecommendationCard(
-                              'Vary Your Entries',
-                              'Record actual sleep patterns - consistent patterns may show flat forecasts',
-                              Icons.shuffle,
-                              Colors.blue,
-                            ),
-                            SizedBox(height: 8),
-                            _buildRecommendationCard(
-                              'More Data = Better Results',
-                              'Current forecasts adapt to your pet\'s unique patterns over time',
-                              Icons.timeline,
-                              Colors.purple,
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      SizedBox(height: 20),
-
-                      // Footer note
-                      Container(
-                        padding: EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.amber.shade200),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.lightbulb, color: Colors.amber.shade700),
-                            SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                'Predictions become more accurate over time. Keep logging behavior for the best results!',
-                                style: TextStyle(
-                                  color: Colors.amber.shade800,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-  
-  void _showEnhancedSimpleSleepInfo() {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.blue.shade50, Colors.indigo.shade50],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Header
-              Container(
-                padding: EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.blue.shade600, Colors.indigo.shade600],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(Icons.bedtime, color: Colors.white, size: 24),
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Sleep Forecast Info',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Content
-              Padding(
-                padding: EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildInfoCard(
-                      'What is Sleep Forecasting?',
-                      'Our AI analyzes your pet\'s behavior patterns to predict future sleep needs and identify potential health trends.',
-                      Icons.auto_graph,
-                      Colors.blue,
-                    ),
-                    SizedBox(height: 16),
-                    _buildInfoCard(
-                      'How It Works',
-                      'We find correlations between mood, activity, and sleep patterns. The more data you provide, the more accurate predictions become.',
-                      Icons.psychology,
-                      Colors.green,
-                    ),
-                    SizedBox(height: 16),
-                    _buildInfoCard(
-                      'Getting Started',
-                      'Start logging your pet\'s daily behavior. After 8+ days, you\'ll see personalized predictions and pattern analysis.',
-                      Icons.play_circle_filled,
-                      Colors.orange,
-                    ),
-                    SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _showBehaviorModal(context, DateTime.now());
-                        },
-                        icon: Icon(Icons.add),
-                        label: Text('Start Logging Behavior'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: deepRed,
-                          foregroundColor: Colors.white,
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Helper widgets for debug modal
-  Widget _buildDebugSection({
-    required String title,
-    required IconData icon,
-    required Color iconColor,
-    required Widget child,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.1),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: iconColor, size: 20),
-                SizedBox(width: 8),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: iconColor == Colors.orange ? Colors.orange.shade800 :
-                           iconColor == Colors.green ? Colors.green.shade800 :
-                           iconColor == Colors.blue ? Colors.blue.shade800 :
-                           iconColor == Colors.purple ? Colors.purple.shade800 :
-                           iconColor == Colors.red ? Colors.red.shade800 :
-                           iconColor.withOpacity(0.9),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.all(16),
-            child: child,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDebugMetric(String label, String value, Color color, IconData icon) {
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 18),
-          SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
-          ),
-          Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRecommendationCard(String title, String description, IconData icon, Color color) {
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 18),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: color == Colors.orange ? Colors.orange.shade800 :
-                           color == Colors.green ? Colors.green.shade800 :
-                           color == Colors.blue ? Colors.blue.shade800 :
-                           color == Colors.purple ? Colors.purple.shade800 :
-                           color == Colors.red ? Colors.red.shade800 :
-                           color.withOpacity(0.9),
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  description,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: color == Colors.orange ? Colors.orange.shade700 :
-                           color == Colors.green ? Colors.green.shade700 :
-                           color == Colors.blue ? Colors.blue.shade700 :
-                           color == Colors.purple ? Colors.purple.shade700 :
-                           color == Colors.red ? Colors.red.shade700 :
-                           color.withOpacity(0.8),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoCard(String title, String description, IconData icon, Color color) {
-    return Container(
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 5,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                    color: color == Colors.orange ? Colors.orange.shade800 :
-                           color == Colors.green ? Colors.green.shade800 :
-                           color == Colors.blue ? Colors.blue.shade800 :
-                           color == Colors.purple ? Colors.purple.shade800 :
-                           color == Colors.red ? Colors.red.shade800 :
-                           color.withOpacity(0.9),
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  description,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Helper methods for debug modal
-  Color _getDataQualityColor(int dataPoints) {
-    if (dataPoints >= 14) return Colors.green;
-    if (dataPoints >= 7) return Colors.orange;
-    return Colors.red;
-  }
-
-  Color _getVariationStatusColor(String variation) {
-    switch (variation.toLowerCase()) {
-      case 'low':
-        return Colors.green;
-      case 'medium':
-        return Colors.orange;
-      case 'high':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  // Show detailed health information when health alert is tapped
-  void _showHealthDetailsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.health_and_safety, color: deepRed, size: 24),
-            SizedBox(width: 8),
-            Text(
-              'Health Alert Details',
-              style: TextStyle(color: deepRed, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Risk Level
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: deepRed.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: deepRed.withOpacity(0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Risk Level: ${_illnessRisk?.toUpperCase() ?? 'UNKNOWN'}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: deepRed,
-                        fontSize: 16,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      _getRiskDescription(),
-                      style: TextStyle(fontSize: 14),
-                    ),
-                  ],
-                ),
-              ),
-              
-              SizedBox(height: 16),
-              
-              // Care Actions
-              if (_careActions.isNotEmpty) ...[
-                Text(
-                  '🩺 Immediate Actions',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: deepRed,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _careActions.map((action) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.check_circle, size: 16, color: Colors.blue),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              action,
-                              style: TextStyle(fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )).toList(),
-                  ),
-                ),
-                SizedBox(height: 16),
-              ],
-              
-              // Expectations
-              if (_careExpectations.isNotEmpty) ...[
-                Text(
-                  '📋 What to Expect',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: Colors.orange.shade700,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _careExpectations.map((expectation) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.info_outline, size: 16, color: Colors.orange.shade700),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              expectation,
-                              style: TextStyle(fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )).toList(),
-                  ),
-                ),
-                SizedBox(height: 16),
-              ],
-              
-              // General advice
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.lightbulb_outline, color: Colors.amber.shade700, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'Important Reminder',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.amber.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'This prediction is based on behavior patterns and should not replace professional veterinary advice. If symptoms persist or worsen, please consult a veterinarian immediately.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade700,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Close'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showVetContactOptions();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: deepRed,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('Find Vet'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Helper method to get risk description
-  String _getRiskDescription() {
-    switch (_illnessRisk?.toLowerCase()) {
-      case 'high':
-        return 'Your pet shows patterns that may indicate potential health issues. Immediate attention recommended.';
-      case 'medium':
-        return 'Some concerning patterns detected. Monitor closely and consider veterinary consultation.';
-      case 'low':
-        return 'Minor indicators present. Continue monitoring your pet\'s behavior.';
-      default:
-        return 'Unable to determine risk level. Continue regular health monitoring.';
-    }
-  }
-
-  // Show veterinarian contact options
-  void _showVetContactOptions() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.local_hospital, color: deepRed, size: 24),
-            SizedBox(width: 8),
-            Text('Find Veterinary Care'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(Icons.emergency, color: Colors.red),
-              title: Text('Emergency Veterinary Clinics'),
-              subtitle: Text('24/7 emergency care'),
-              onTap: () {
-                Navigator.pop(context);
-                _showEmergencyVetInfo();
-              },
-            ),
-            Divider(),
-            ListTile(
-              leading: Icon(Icons.schedule, color: Colors.blue),
-              title: Text('Regular Veterinary Clinics'),
-              subtitle: Text('Schedule an appointment'),
-              onTap: () {
-                Navigator.pop(context);
-                _showRegularVetInfo();
-              },
-            ),
-            Divider(),
-            ListTile(
-              leading: Icon(Icons.phone, color: Colors.green),
-              title: Text('Veterinary Hotline'),
-              subtitle: Text('Professional advice over phone'),
-              onTap: () {
-                Navigator.pop(context);
-                _showVetHotlineInfo();
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showEmergencyVetInfo() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Emergency vet feature coming soon! Call your local emergency vet clinic.'),
-        backgroundColor: Colors.red,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-  void _showRegularVetInfo() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Vet appointment booking feature coming soon!'),
-        backgroundColor: Colors.blue,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-  void _showVetHotlineInfo() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Vet hotline feature coming soon!'),
-        backgroundColor: Colors.green,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-  // Enhanced mood and activity analytics
-  Widget _buildEnhancedMoodActivityAnalytics() {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.purple.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.psychology, color: Colors.purple.shade700, size: 20),
-              ),
-              SizedBox(width: 12),
-              Text(
-                "Behavior Analytics",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                  color: Colors.purple.shade700,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 16),
-          
-          // Mood Distribution
-          if (_moodProb.isNotEmpty) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.mood, color: Colors.orange.shade700, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        "Mood Distribution",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.orange.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _moodProb.entries.map((entry) {
-                      // Case-insensitive emoji lookup
-                      String emoji = '😐'; // default fallback
-                      _moodEmojis.forEach((key, value) {
-                        if (key.toLowerCase() == entry.key.toLowerCase()) {
-                          emoji = value;
-                        }
-                      });
-                      
-                      final percentage = (entry.value * 100).round();
-                      return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.orange.shade200),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(emoji, style: TextStyle(fontSize: 16)),
-                            SizedBox(width: 6),
-                            Text(
-                              '${entry.key}: $percentage%',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(height: 12),
-          ],
-          
-          // Activity Distribution
-          if (_activityProb.isNotEmpty) ...[
-            Container(
-              padding: EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green.withOpacity(0.3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.directions_run, color: Colors.green.shade700, size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        "Activity Distribution",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.green.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _activityProb.entries.map((entry) {
-                      // Case-insensitive emoji lookup
-                      String emoji = '🚶'; // default fallback
-                      _activityEmojis.forEach((key, value) {
-                        if (key.toLowerCase() == entry.key.toLowerCase()) {
-                          emoji = value;
-                        }
-                      });
-                      
-                      final percentage = (entry.value * 100).round();
-                      return Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.green.shade200),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(emoji, style: TextStyle(fontSize: 16)),
-                            SizedBox(width: 6),
-                            Text(
-                              '${entry.key}: $percentage%',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
     );
   }
 
@@ -6958,73 +6230,36 @@ void _disconnectDevice() async {
     );
   }
 
-  // Loading skeleton for chart section
-  Widget _buildChartLoadingSkeleton() {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 20,
-            width: 150,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          SizedBox(height: 16),
-          Container(
-            height: 180,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Loading skeleton for distribution section
-  Widget _buildDistributionLoadingSkeleton() {
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 20,
-            width: 140,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          SizedBox(height: 12),
-          Container(
-            height: 16,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // Extend logging modal to support edit/update when 'existing' is provided
   void _showBehaviorModal(BuildContext context, DateTime selectedDate, {Map<String, dynamic>? existing}) {
     // Initialize form values from existing data if editing
     if (existing != null) {
-      _selectedMood = existing['mood']?.toString();
       _activityLevel = existing['activity_level']?.toString();
-      _sleepHours = double.tryParse(existing['sleep_hours']?.toString() ?? '');
-      _notes = existing['notes']?.toString();
-      _sleepController.text = _sleepHours?.toString() ?? '';
+      _foodIntake = existing['food_intake']?.toString();
+      _waterIntake = existing['water_intake']?.toString();
+      _bathroomHabits = existing['bathroom_habits']?.toString();
+      
+      
+      // Parse symptoms from JSON string or comma-separated string
+      final symptomsData = existing['symptoms'];
+      if (symptomsData != null) {
+        if (symptomsData is List) {
+          _selectedSymptoms = List<String>.from(symptomsData);
+        } else if (symptomsData is String) {
+          try {
+            // Try to parse as JSON array first
+            final decoded = json.decode(symptomsData);
+            if (decoded is List) {
+              _selectedSymptoms = List<String>.from(decoded);
+            } else {
+              _selectedSymptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+            }
+          } catch (_) {
+            // Fall back to comma-separated
+            _selectedSymptoms = symptomsData.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+          }
+        }
+      }
     } else {
       // Clear form for new entry
       _clearBehaviorForm();
@@ -7043,25 +6278,26 @@ void _disconnectDevice() async {
         return StatefulBuilder(
           builder: (context, setModalState) {
             bool _isFormValid() {
-              return _selectedMood != null && 
-                     _activityLevel != null && 
-                     _sleepHours != null && 
-                     _sleepHours! >= 0 && 
-                     _sleepHours! <= 24;
+              // All fields must be filled including clinical signs (symptoms)
+              return _activityLevel != null && 
+                     _foodIntake != null && 
+                     _waterIntake != null && 
+                     _bathroomHabits != null &&
+                     _selectedSymptoms.isNotEmpty; // Clinical signs required
             }
 
             return AnimatedContainer(
               duration: Duration(milliseconds: 300),
-              height: MediaQuery.of(context).size.height * 0.85,
+              height: MediaQuery.of(context).size.height * 0.90,
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 20,
-                    spreadRadius: 5,
-                    offset: Offset(0, -5),
+                    color: Colors.black.withOpacity(0.20),
+                    blurRadius: 30,
+                    spreadRadius: 8,
+                    offset: Offset(0, -8),
                   ),
                 ],
               ),
@@ -7069,69 +6305,123 @@ void _disconnectDevice() async {
                 children: [
                   // Handle bar
                   Container(
-                    margin: EdgeInsets.only(top: 12),
-                    width: 40,
-                    height: 4,
+                    margin: EdgeInsets.only(top: 14),
+                    width: 50,
+                    height: 5,
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
+                      color: Colors.grey.shade400,
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
                   
-                  // Header
+                  // Pet Health Status Header
                   Container(
-                    padding: EdgeInsets.all(20),
+                    padding: EdgeInsets.all(24),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [lightBlush, Colors.white],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0xFFB82132),
+                          Color(0xFFD2665A),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Status indicator
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.25),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                _isUnhealthy ? Icons.warning_rounded : Icons.health_and_safety,
+                                color: Colors.white,
+                                size: 24,
+                              ),
+                            ),
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _selectedPet?['name'] ?? 'Your Pet',
+                                    style: TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Health Status: ${_isUnhealthy ? "Needs Attention" : "✓ Looking Good"}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white.withOpacity(0.9),
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              icon: Icon(Icons.close, color: Colors.white),
+                              onPressed: () => Navigator.pop(context),
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.white.withOpacity(0.2),
+                                shape: CircleBorder(),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 16),
+                        // Date
+                        Row(
+                          children: [
+                            Icon(Icons.calendar_today, color: Colors.white.withOpacity(0.8), size: 16),
+                            SizedBox(width: 8),
+                            Text(
+                              DateFormat('EEEE, MMMM d, yyyy').format(selectedDate),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.white.withOpacity(0.9),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  // Form Title
+                  Container(
+                    padding: EdgeInsets.fromLTRB(24, 20, 24, 12),
+                    decoration: BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Colors.grey.shade200, width: 1)),
                     ),
                     child: Row(
                       children: [
-                        Container(
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: deepRed.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(15),
-                          ),
-                          child: Icon(
-                            isEdit ? Icons.edit : Icons.pets,
-                            color: deepRed,
-                            size: 24,
-                          ),
+                        Icon(
+                          isEdit ? Icons.edit_note_rounded : Icons.note_add_rounded,
+                          color: deepRed,
+                          size: 20,
                         ),
-                        SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                isEdit ? 'Update Behavior Log' : 'Log Pet Behavior',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: deepRed,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                DateFormat('EEEE, MMMM d, yyyy').format(selectedDate),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.close, color: Colors.grey.shade600),
-                          onPressed: () => Navigator.pop(context),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.grey.shade100,
-                            shape: CircleBorder(),
+                        SizedBox(width: 10),
+                        Text(
+                          isEdit ? 'Update Health Log' : 'Log Pet Health Data',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
                           ),
                         ),
                       ],
@@ -7141,85 +6431,143 @@ void _disconnectDevice() async {
                   // Form content
                   Expanded(
                     child: SingleChildScrollView(
-                      padding: EdgeInsets.all(20),
+                      padding: EdgeInsets.fromLTRB(20, 16, 20, 20),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Mood Section
+                          // Food Intake Section
                           _buildFormSection(
-                            title: "How is ${_selectedPet?['name'] ?? 'your pet'} feeling?",
-                            icon: Icons.mood,
+                            title: "Food Intake",
+                            icon: Icons.restaurant,
                             iconColor: Colors.orange,
+                            subtitle: "Is ${_selectedPet?['name'] ?? 'your pet'} eating well?",
                             child: Column(
                               children: [
                                 SizedBox(height: 12),
-                                GridView.builder(
-                                  shrinkWrap: true,
-                                  physics: NeverScrollableScrollPhysics(),
-                                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 3,
-                                    crossAxisSpacing: 12,
-                                    mainAxisSpacing: 12,
-                                    childAspectRatio: 0.8,
-                                  ),
-                                  itemCount: moods.length,
-                                  itemBuilder: (context, index) {
-                                    final mood = moods[index];
-                                    final emoji = _moodEmojis[mood] ?? '•';
-                                    final selected = _selectedMood == mood;
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: foodIntakeOptions.map((intake) {
+                                    final selected = _foodIntake == intake;
+                                    IconData iconData;
+                                    Color iconColor;
                                     
-                                    return GestureDetector(
-                                      onTap: () {
-                                        setModalState(() => _selectedMood = mood);
-                                        setState(() => _selectedMood = mood);
-                                        HapticFeedback.lightImpact();
-                                      },
-                                      child: AnimatedContainer(
-                                        duration: Duration(milliseconds: 200),
-                                        padding: EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: selected 
-                                            ? deepRed.withOpacity(0.15) 
-                                            : Colors.grey.shade50,
-                                          border: Border.all(
-                                            color: selected 
-                                              ? deepRed 
-                                              : Colors.grey.shade300,
-                                            width: selected ? 2 : 1,
-                                          ),
-                                          borderRadius: BorderRadius.circular(16),
-                                          boxShadow: selected ? [
-                                            BoxShadow(
-                                              color: deepRed.withOpacity(0.3),
-                                              blurRadius: 8,
-                                              offset: Offset(0, 4),
-                                            ),
-                                          ] : null,
-                                        ),
-                                        child: Column(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            Text(
-                                              emoji, 
-                                              style: TextStyle(fontSize: 32),
-                                            ),
-                                            SizedBox(height: 8),
-                                            Text(
-                                              mood,
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: selected 
-                                                  ? FontWeight.bold 
-                                                  : FontWeight.w500,
+                                    switch(intake) {
+                                      case "Not eating / Loss of appetite":
+                                        iconData = Icons.close_rounded;
+                                        iconColor = Colors.red;
+                                        break;
+                                      case "Eating less than usual":
+                                        iconData = Icons.trending_down;
+                                        iconColor = Colors.orange;
+                                        break;
+                                      case "Normal eating":
+                                        iconData = Icons.check_circle_outline;
+                                        iconColor = Colors.green;
+                                        break;
+                                      case "Eating more than usual":
+                                        iconData = Icons.trending_up;
+                                        iconColor = Colors.blue;
+                                        break;
+                                      case "Sudden weight loss":
+                                        iconData = Icons.trending_down;
+                                        iconColor = Colors.red;
+                                        break;
+                                      case "Sudden weight gain":
+                                        iconData = Icons.trending_up;
+                                        iconColor = Colors.orange;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        iconColor = Colors.grey;
+                                    }
+                                    
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setModalState(() => _foodIntake = intake);
+                                          setState(() => _foodIntake = intake);
+                                          HapticFeedback.lightImpact();
+                                        },
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: selected 
+                                                ? Colors.orange.withOpacity(0.12) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
                                                 color: selected 
-                                                  ? deepRed 
-                                                  : Colors.grey.shade700,
+                                                  ? Colors.orange.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2.5 : 1.5,
                                               ),
-                                              textAlign: TextAlign.center,
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.orange.withOpacity(0.15),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ] : null,
                                             ),
-                                          ],
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? iconColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? iconColor : Colors.grey.shade500,
+                                                    size: 22,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Text(
+                                                    intake,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.orange.shade900
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected)
+                                                  Container(
+                                                    padding: EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.orange.shade600,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.check,
+                                                      color: Colors.white,
+                                                      size: 16,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
                                         ),
                                       ),
+                                    );
+                                  }).toList(),
                                     );
                                   },
                                 ),
@@ -7227,206 +6575,591 @@ void _disconnectDevice() async {
                             ),
                           ),
 
-                          SizedBox(height: 24),
+                          SizedBox(height: 20),
 
-                          // Activity Level Section
+                          // Water Intake Section
                           _buildFormSection(
-                            title: "Activity level today?",
-                            icon: Icons.directions_run,
-                            iconColor: Colors.green,
+                            title: "Water Intake",
+                            icon: Icons.water_drop,
+                            iconColor: Colors.blue,
+                            subtitle: "Monitor drinking patterns",
                             child: Column(
                               children: [
                                 SizedBox(height: 12),
-                                Row(
-                                  children: activityLevels.map((level) {
-                                    final emoji = _activityEmojis[level] ?? '•';
-                                    final selected = _activityLevel == level;
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: waterIntakeOptions.map((intake) {
+                                    final selected = _waterIntake == intake;
+                                    IconData iconData;
+                                    Color iconColor;
                                     
-                                    return Expanded(
+                                    switch(intake) {
+                                      case "Not drinking":
+                                        iconData = Icons.close_rounded;
+                                        iconColor = Colors.red;
+                                        break;
+                                      case "Drinking less than usual":
+                                        iconData = Icons.trending_down;
+                                        iconColor = Colors.orange;
+                                        break;
+                                      case "Normal drinking":
+                                        iconData = Icons.check_circle_outline;
+                                        iconColor = Colors.blue;
+                                        break;
+                                      case "Excessive drinking (increased thirst)":
+                                        iconData = Icons.trending_up;
+                                        iconColor = Colors.purple;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        iconColor = Colors.grey;
+                                    }
+                                    
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setModalState(() => _waterIntake = intake);
+                                          setState(() => _waterIntake = intake);
+                                          HapticFeedback.lightImpact();
+                                        },
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: selected 
+                                                ? Colors.blue.withOpacity(0.12) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
+                                                color: selected 
+                                                  ? Colors.blue.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2.5 : 1.5,
+                                              ),
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.blue.withOpacity(0.15),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ] : null,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? iconColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? iconColor : Colors.grey.shade500,
+                                                    size: 22,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Text(
+                                                    intake,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.blue.shade900
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected)
+                                                  Container(
+                                                    padding: EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.blue.shade600,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.check,
+                                                      color: Colors.white,
+                                                      size: 16,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          SizedBox(height: 20),
+
+                          // Bathroom Habits Section
+                          _buildFormSection(
+                            title: "Bathroom Habits",
+                            icon: Icons.health_and_safety,
+                            iconColor: Colors.purple,
+                            subtitle: "Track bathroom changes",
+                            child: Column(
+                              children: [
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: bathroomOptions.map((habit) {
+                                    final selected = _bathroomHabits == habit;
+                                    IconData iconData;
+                                    Color habitColor;
+                                    
+                                    switch(habit) {
+                                      case "Normal urination/defecation":
+                                        iconData = Icons.check_circle_outline;
+                                        habitColor = Colors.green;
+                                        break;
+                                      case "Diarrhea":
+                                        iconData = Icons.warning_amber_rounded;
+                                        habitColor = Colors.orange;
+                                        break;
+                                      case "Constipation":
+                                        iconData = Icons.block;
+                                        habitColor = Colors.red;
+                                        break;
+                                      case "Frequent urination":
+                                        iconData = Icons.repeat_rounded;
+                                        habitColor = Colors.purple;
+                                        break;
+                                      case "Straining to urinate":
+                                        iconData = Icons.error_outline;
+                                        habitColor = Colors.red;
+                                        break;
+                                      case "Blood in urine":
+                                        iconData = Icons.priority_high;
+                                        habitColor = Colors.red;
+                                        break;
+                                      case "House soiling / accidents":
+                                        iconData = Icons.warning;
+                                        habitColor = Colors.orange;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        habitColor = Colors.grey;
+                                    }
+                                    
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setModalState(() => _bathroomHabits = habit);
+                                          setState(() => _bathroomHabits = habit);
+                                          HapticFeedback.lightImpact();
+                                        },
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: selected 
+                                                ? Colors.purple.withOpacity(0.15) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
+                                                color: selected 
+                                                  ? Colors.purple.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2 : 1.5,
+                                              ),
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.purple.withOpacity(0.2),
+                                                  blurRadius: 6,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ] : null,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(6),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? habitColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? habitColor : Colors.grey.shade500,
+                                                    size: 18,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Text(
+                                                    habit,
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.purple.shade600
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected) ...[
+                                                  SizedBox(width: 6),
+                                                  Icon(Icons.check, color: Colors.purple.shade600, size: 14),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          SizedBox(height: 20),
+
+                          // Activity Level Section
+                          _buildFormSection(
+                            title: "Activity Level",
+                            icon: Icons.pets,
+                            iconColor: Colors.green,
+                            subtitle: "How active is your pet today?",
+                            child: Column(
+                              children: [
+                                SizedBox(height: 12),
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: activityLevels.map((level) {
+                                    final selected = _activityLevel == level;
+                                    IconData iconData;
+                                    Color levelColor;
+                                    
+                                    switch(level) {
+                                      case "High activity":
+                                        iconData = Icons.flash_on;
+                                        levelColor = Colors.green;
+                                        break;
+                                      case "Normal activity":
+                                        iconData = Icons.wb_sunny_outlined;
+                                        levelColor = Colors.blue;
+                                        break;
+                                      case "Low activity / lethargy":
+                                        iconData = Icons.bedtime;
+                                        levelColor = Colors.orange;
+                                        break;
+                                      case "Restlessness (especially at night)":
+                                        iconData = Icons.pending_actions;
+                                        levelColor = Colors.purple;
+                                        break;
+                                      case "Sudden weakness / collapse":
+                                        iconData = Icons.warning_rounded;
+                                        levelColor = Colors.red;
+                                        break;
+                                      default:
+                                        iconData = Icons.circle_outlined;
+                                        levelColor = Colors.grey;
+                                    }
+                                    
+                                    return SizedBox(
+                                      width: itemWidth,
                                       child: GestureDetector(
                                         onTap: () {
                                           setModalState(() => _activityLevel = level);
                                           setState(() => _activityLevel = level);
                                           HapticFeedback.lightImpact();
                                         },
-                                        child: AnimatedContainer(
-                                          duration: Duration(milliseconds: 200),
-                                          margin: EdgeInsets.symmetric(horizontal: 4),
-                                          padding: EdgeInsets.symmetric(vertical: 16),
-                                          decoration: BoxDecoration(
-                                            color: selected 
-                                              ? Colors.green.withOpacity(0.15) 
-                                              : Colors.grey.shade50,
-                                            border: Border.all(
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
                                               color: selected 
-                                                ? Colors.green 
-                                                : Colors.grey.shade300,
-                                              width: selected ? 2 : 1,
-                                            ),
-                                            borderRadius: BorderRadius.circular(16),
-                                          ),
-                                          child: Column(
-                                            children: [
-                                              Text(emoji, style: TextStyle(fontSize: 28)),
-                                              SizedBox(height: 8),
-                                              Text(
-                                                level,
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: selected 
-                                                    ? FontWeight.bold 
-                                                    : FontWeight.w500,
-                                                  color: selected 
-                                                    ? Colors.green 
-                                                    : Colors.grey.shade700,
-                                                ),
+                                                ? Colors.green.withOpacity(0.12) 
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
+                                                color: selected 
+                                                  ? Colors.green.shade600
+                                                  : Colors.grey.shade300,
+                                                width: selected ? 2.5 : 1.5,
                                               ),
-                                            ],
+                                              borderRadius: BorderRadius.circular(12),
+                                              boxShadow: selected ? [
+                                                BoxShadow(
+                                                  color: Colors.green.withOpacity(0.15),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 2),
+                                                ),
+                                              ] : null,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(8),
+                                                  decoration: BoxDecoration(
+                                                    color: selected 
+                                                      ? levelColor.withOpacity(0.25)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: Icon(
+                                                    iconData,
+                                                    color: selected ? levelColor : Colors.grey.shade500,
+                                                    size: 22,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Text(
+                                                    level,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: selected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: selected 
+                                                        ? Colors.green.shade600
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (selected)
+                                                  Container(
+                                                    padding: EdgeInsets.all(4),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.green.shade600,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.check,
+                                                      color: Colors.white,
+                                                      size: 16,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
                                     );
                                   }).toList(),
+                                    );
+                                  },
                                 ),
                               ],
                             ),
                           ),
 
-                          SizedBox(height: 24),
+                          SizedBox(height: 20),
 
-                          // Sleep Hours Section
+                          // Clinical Signs Section
                           _buildFormSection(
-                            title: "Sleep hours",
-                            icon: Icons.bedtime,
-                            iconColor: Colors.blue,
+                            title: "Clinical Signs",
+                            icon: Icons.medical_services,
+                            iconColor: Colors.red,
+                            subtitle: "Check any physical clinical signs observed",
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 SizedBox(height: 12),
-                                Container(
-                                  padding: EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue.withOpacity(0.05),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                      color: Colors.blue.withOpacity(0.2),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextFormField(
-                                          controller: _sleepController,
-                                          keyboardType: TextInputType.numberWithOptions(decimal: true),
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                          decoration: InputDecoration(
-                                            border: OutlineInputBorder(
-                                              borderRadius: BorderRadius.circular(12),
-                                              borderSide: BorderSide.none,
-                                            ),
-                                            filled: true,
-                                            fillColor: Colors.white,
-                                            hintText: "0.0",
-                                            hintStyle: TextStyle(color: Colors.grey.shade400),
-                                            contentPadding: EdgeInsets.symmetric(
-                                              horizontal: 16, 
-                                              vertical: 16,
-                                            ),
-                                            suffixText: "hours",
-                                            suffixStyle: TextStyle(
-                                              color: Colors.grey.shade600,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                          onChanged: (value) {
-                                            final parsed = double.tryParse(value);
-                                            setModalState(() {
-                                              if (parsed == null || parsed < 0) {
-                                                _sleepHours = null;
-                                              } else if (parsed > 24) {
-                                                _sleepHours = 24;
-                                                _sleepController.text = "24";
-                                                _sleepController.selection = TextSelection.fromPosition(
-                                                  TextPosition(offset: _sleepController.text.length)
-                                                );
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    double itemWidth = (constraints.maxWidth - 12) / 2;
+                                    return Wrap(
+                                      spacing: 12,
+                                      runSpacing: 12,
+                                      children: commonSymptoms.map((clinicalSign) {
+                                    final isSelected = _selectedSymptoms.contains(clinicalSign);
+                                    final isNone = clinicalSign == "None of the Above";
+                                    
+                                    return SizedBox(
+                                      width: itemWidth,
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          onTap: () {
+                                            // Update state only once to avoid duplicates
+                                            if (isNone) {
+                                              // If "None" is selected, clear all other clinical signs
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(clinicalSign);
                                               } else {
-                                                _sleepHours = parsed;
+                                                _selectedSymptoms.clear();
+                                                _selectedSymptoms.add(clinicalSign);
                                               }
-                                            });
-                                            setState(() {
-                                              if (parsed == null || parsed < 0) {
-                                                _sleepHours = null;
-                                              } else if (parsed > 24) {
-                                                _sleepHours = 24;
+                                            } else {
+                                              // If any other clinical sign is selected, remove "None"
+                                              if (isSelected) {
+                                                _selectedSymptoms.remove(clinicalSign);
                                               } else {
-                                                _sleepHours = parsed;
+                                                _selectedSymptoms.remove("None of the Above");
+                                                _selectedSymptoms.add(clinicalSign);
                                               }
-                                            });
+                                            }
+                                            
+                                            // Update both UI states after modification
+                                            setModalState(() {});
+                                            setState(() {});
+                                            HapticFeedback.selectionClick();
                                           },
+                                          borderRadius: BorderRadius.circular(10),
+                                          child: AnimatedContainer(
+                                            duration: Duration(milliseconds: 250),
+                                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: isSelected 
+                                                ? (isNone ? Colors.green.withOpacity(0.12) : Colors.red.withOpacity(0.12))
+                                                : Colors.grey.shade50,
+                                              border: Border.all(
+                                                color: isSelected 
+                                                  ? (isNone ? Colors.green.shade600 : Colors.red.shade600)
+                                                  : Colors.grey.shade300,
+                                                width: isSelected ? 2 : 1.5,
+                                              ),
+                                              borderRadius: BorderRadius.circular(10),
+                                              boxShadow: isSelected ? [
+                                                BoxShadow(
+                                                  color: (isNone ? Colors.green : Colors.red).withOpacity(0.12),
+                                                  blurRadius: 6,
+                                                  offset: Offset(0, 1),
+                                                ),
+                                              ] : null,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: EdgeInsets.all(4),
+                                                  decoration: BoxDecoration(
+                                                    color: isSelected 
+                                                      ? (isNone ? Colors.green.shade200 : Colors.red.shade200)
+                                                      : Colors.grey.shade200,
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: Icon(
+                                                    isSelected 
+                                                      ? Icons.check_box_rounded
+                                                      : Icons.check_box_outline_blank_rounded,
+                                                    color: isSelected 
+                                                      ? (isNone ? Colors.green.shade700 : Colors.red.shade700)
+                                                      : Colors.grey.shade500,
+                                                    size: 20,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 10),
+                                                Expanded(
+                                                  child: Text(
+                                                    clinicalSign,
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      fontWeight: isSelected 
+                                                        ? FontWeight.w700 
+                                                        : FontWeight.w500,
+                                                      color: isSelected 
+                                                        ? (isNone ? Colors.green.shade800 : Colors.red.shade800)
+                                                        : Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                      SizedBox(width: 12),
-                                      Column(
-                                        children: [
-                                          _buildSleepButton(
-                                            icon: Icons.add,
-                                            onPressed: () {
-                                              final current = _sleepHours ?? 
-                                                double.tryParse(_sleepController.text) ?? 0.0;
-                                              final next = (current + 0.5).clamp(0.0, 24.0);
-                                              setModalState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              setState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              HapticFeedback.lightImpact();
-                                            },
-                                          ),
-                                          SizedBox(height: 8),
-                                          _buildSleepButton(
-                                            icon: Icons.remove,
-                                            onPressed: () {
-                                              final current = _sleepHours ?? 
-                                                double.tryParse(_sleepController.text) ?? 0.0;
-                                              final next = (current - 0.5).clamp(0.0, 24.0);
-                                              setModalState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              setState(() {
-                                                _sleepHours = double.parse(next.toStringAsFixed(1));
-                                                _sleepController.text = _sleepHours.toString();
-                                              });
-                                              HapticFeedback.lightImpact();
-                                            },
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
+                                    );
+                                  }).toList(),
+                                    );
+                                  },
                                 ),
-                                if (_sleepHours != null) ...[
+                                if (_selectedSymptoms.isNotEmpty && !_selectedSymptoms.contains("None of the Above")) ...[
                                   SizedBox(height: 12),
                                   Container(
                                     padding: EdgeInsets.all(12),
                                     decoration: BoxDecoration(
-                                      color: Colors.blue.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.orange.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: Colors.orange.withOpacity(0.4),
+                                        width: 1.5,
+                                      ),
                                     ),
                                     child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Icon(Icons.info_outline, color: Colors.blue, size: 16),
-                                        SizedBox(width: 8),
-                                        Text(
-                                          _getSleepFeedback(_sleepHours!),
-                                          style: TextStyle(
-                                            color: Colors.blue.shade700,
-                                            fontSize: 12,
+                                        Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700, size: 18),
+                                        SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            "${_selectedSymptoms.where((s) => s != "None of the Above").length} clinical sign(s) detected. Consider consulting a vet if signs persist.",
+                                            style: TextStyle(
+                                              color: Colors.orange.shade900,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ] else if (_selectedSymptoms.isEmpty) ...[
+                                  // Show requirement message if no symptoms selected
+                                  SizedBox(height: 12),
+                                  Container(
+                                    padding: EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: Colors.red.withOpacity(0.4),
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(Icons.error_outline, color: Colors.red.shade700, size: 18),
+                                        SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            "Clinical signs are required. Select at least one option.",
+                                            style: TextStyle(
+                                              color: Colors.red.shade800,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -7438,44 +7171,6 @@ void _disconnectDevice() async {
                           ),
 
                           SizedBox(height: 24),
-
-                          // Notes Section
-                          _buildFormSection(
-                            title: "Additional notes (optional)",
-                            icon: Icons.note_alt,
-                            iconColor: Colors.purple,
-                            child: Column(
-                              children: [
-                                SizedBox(height: 12),
-                                TextFormField(
-                                  initialValue: _notes,
-                                  maxLines: 4,
-                                  style: TextStyle(fontSize: 16),
-                                  decoration: InputDecoration(
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: BorderSide(color: Colors.grey.shade300),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: BorderSide(color: deepRed, width: 2),
-                                    ),
-                                    filled: true,
-                                    fillColor: Colors.grey.shade50,
-                                    hintText: "Any observations, behaviors, or concerns...",
-                                    hintStyle: TextStyle(color: Colors.grey.shade400),
-                                    contentPadding: EdgeInsets.all(16),
-                                  ),
-                                  onChanged: (value) {
-                                    setModalState(() => _notes = value);
-                                    setState(() => _notes = value);
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          SizedBox(height: 32),
                         ],
                       ),
                     ),
@@ -7499,7 +7194,7 @@ void _disconnectDevice() async {
                         width: double.infinity,
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _isFormValid() ? deepRed : Colors.grey.shade300,
+                            backgroundColor: _isFormValid() ? Colors.green : Colors.grey.shade300,
                             foregroundColor: Colors.white,
                             padding: EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
@@ -7512,7 +7207,7 @@ void _disconnectDevice() async {
                             size: 20,
                           ),
                           label: Text(
-                            isEdit ? "Update Behavior Log" : "Save Behavior Log",
+                            isEdit ? "Update Health Log" : "Save Health Log",
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -7520,6 +7215,7 @@ void _disconnectDevice() async {
                           ),
                           onPressed: !_isFormValid() ? null : () async {
                             try {
+                              debugPrint('[SAVE_HEALTH_LOG] Button pressed - starting save process');
                               // Show loading state
                               setModalState(() {});
                               
@@ -7527,10 +7223,13 @@ void _disconnectDevice() async {
                                 'pet_id': _selectedPet!['id'],
                                 'user_id': user?.id ?? '',
                                 'log_date': DateFormat('yyyy-MM-dd').format(selectedDate),
-                                'notes': _notes,
-                                'mood': _selectedMood,
-                                'sleep_hours': _sleepHours,
                                 'activity_level': _activityLevel,
+                                // Health tracking fields - ONLY include columns that exist in the database schema
+                                'food_intake': _foodIntake,
+                                'water_intake': _waterIntake,
+                                'bathroom_habits': _bathroomHabits,
+                                'symptoms': json.encode(_selectedSymptoms), // Store as JSON string
+                                // NOTE: 'notes', 'mood', 'body_temperature', 'appetite_behavior' columns do not exist in Supabase
                               };
                               
                               if (isEdit) {
@@ -7550,7 +7249,7 @@ void _disconnectDevice() async {
                               // Refresh data
                               await _fetchBehaviorDates();
                               await _fetchAnalyzeFromBackend();
-                              await _fetchLatestMood(); // Refresh latest mood for health status
+                              await _fetchLatestHealthInsights(); // <-- refresh health insights with new data
 
                               // Show success feedback
                               if (mounted) {
@@ -7561,8 +7260,8 @@ void _disconnectDevice() async {
                                         Icon(Icons.check_circle, color: Colors.white),
                                         SizedBox(width: 8),
                                         Text(isEdit 
-                                          ? 'Behavior log updated successfully!' 
-                                          : 'Behavior logged and analyzed!'),
+                                          ? 'Health log updated successfully!' 
+                                          : 'Health data logged and analyzed!'),
                                       ],
                                     ),
                                     backgroundColor: Colors.green,
@@ -7615,46 +7314,67 @@ void _disconnectDevice() async {
     required IconData icon,
     required Color iconColor,
     required Widget child,
+    String? subtitle,
   }) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: Colors.grey.shade200, width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
+            blurRadius: 8,
             offset: Offset(0, 2),
           ),
         ],
       ),
       child: Padding(
-        padding: EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(18, 16, 18, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: iconColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+                    color: iconColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(icon, color: iconColor, size: 20),
                 ),
                 SizedBox(width: 12),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade800,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.grey.shade800,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        SizedBox(height: 3),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
             ),
+            SizedBox(height: 12),
             child,
           ],
         ),
@@ -7663,38 +7383,6 @@ void _disconnectDevice() async {
   }
 
   // Helper widget for sleep adjustment buttons
-  Widget _buildSleepButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.blue.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.blue.withOpacity(0.3)),
-      ),
-      child: IconButton(
-        icon: Icon(icon, color: Colors.blue, size: 20),
-        onPressed: onPressed,
-        padding: EdgeInsets.all(8),
-        constraints: BoxConstraints(minWidth: 40, minHeight: 40),
-      ),
-    );
-  }
-
-  // Helper method to provide sleep feedback
-  String _getSleepFeedback(double hours) {
-    if (hours < 6) {
-      return "This seems low for most pets. Consider monitoring.";
-    } else if (hours >= 6 && hours <= 14) {
-      return "Normal sleep range for most pets.";
-    } else if (hours > 14 && hours <= 18) {
-      return "A bit high but normal for some pets.";
-    } else {
-      return "This seems quite high. Monitor for any changes.";
-    }
-  }
-
   // Enhanced Pet Profile Header
   Widget _buildPetProfileHeader() {
     return Container(
@@ -7757,7 +7445,7 @@ void _disconnectDevice() async {
                     child: _buildPetInfoCard(
                       icon: Icons.calendar_today,
                       title: 'Age',
-                      value: '${_selectedPet!['age']} years',
+                      value: _getFormattedAge(_selectedPet!),
                       color: Colors.white,
                     ),
                   ),
@@ -7828,22 +7516,6 @@ void _disconnectDevice() async {
                       color: _selectedPet!['is_missing'] == true ? deepRed : Colors.green,
                     ),
                   ),
-                  SizedBox(width: 6),
-                  Expanded(
-                    child: _buildCompactStatCard(
-                      icon: Icons.mood,
-                      title: 'Mood',
-                      value: _latestMood != null ? 
-                        '${_moodEmojis[_latestMood!] ?? ''} $_latestMood' : 'Unknown',
-                      color: _latestMood != null ? 
-                        (_latestMood == 'Happy' ? Colors.green :
-                         _latestMood == 'Anxious' ? Colors.orange :
-                         _latestMood == 'Aggressive' ? Colors.red :
-                         _latestMood == 'Calm' ? Colors.blue :
-                         _latestMood == 'Lethargic' ? Colors.grey :
-                         Colors.orange) : Colors.grey,
-                    ),
-                  ),
                 ],
               ),
             ],
@@ -7899,46 +7571,48 @@ void _disconnectDevice() async {
     );
   }
 
-  // Helper method for stat cards
-  Widget _buildPetStatCard({
-    required IconData icon,
-    required String title,
-    required String value,
-    required Color color,
-    required Color bgColor,
-  }) {
+  // Helper method to build pet avatar
+  Widget _buildPetAvatar(Map<String, dynamic> pet, bool isSelected) {
     return Container(
-      padding: EdgeInsets.all(14),
+      width: 50,
+      height: 50,
       decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3), width: 1),
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isSelected
+              ? [coral.withOpacity(0.8), peach.withOpacity(0.8)]
+              : [Colors.grey.shade300, Colors.grey.shade400],
+        ),
       ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 24),
-          SizedBox(height: 8),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 12,
-              color: color.withOpacity(0.7),
-              fontWeight: FontWeight.w500,
-            ),
+      child: Center(
+        child: Text(
+          (pet['name'] ?? 'U')[0].toUpperCase(),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
           ),
-          SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              color: color,
-              fontWeight: FontWeight.bold,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
+        ),
       ),
     );
+  }
+
+  // Helper method to get pet type icon
+  IconData _getPetTypeIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'dog':
+        return Icons.pets;
+      case 'cat':
+        return Icons.pets;
+      case 'bird':
+        return Icons.flutter_dash;
+      case 'rabbit':
+        return Icons.cruelty_free;
+      default:
+        return Icons.pets;
+    }
   }
 
   // Helper method for compact stat cards (minimized version)
@@ -8188,7 +7862,7 @@ class _FullScreenMapViewState extends State<_FullScreenMapView> {
                                 }
                                 
                                 final timestamp = ts != null 
-                                    ? DateFormat('MMM d, yyyy • hh:mm a').format(ts.toLocal())
+                                    ? DateFormat('MMM d, yyyy • hh:mm a').format(ts)
                                     : '-';
                                 
                                 return ListTile(

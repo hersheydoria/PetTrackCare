@@ -10,6 +10,10 @@ final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotifica
 // Global realtime channel for notifications
 RealtimeChannel? _globalNotificationChannel;
 
+// Track recently shown notifications to prevent duplicates
+final Set<String> _recentNotifications = {};
+final Map<String, DateTime> _notificationTimestamps = {};
+
 /// Initialize system notifications (Android only)
 Future<void> initializeSystemNotifications() async {
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -32,9 +36,6 @@ Future<void> initializeSystemNotifications() async {
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
     print('Notification permission granted: $permissionGranted');
-    
-    // Test notification to verify setup
-    await _showTestNotification();
     
     // Setup global realtime subscription for system notifications
     await _setupGlobalNotificationSubscription();
@@ -319,13 +320,12 @@ Future<void> _setupGlobalNotificationSubscription() async {
   );
   
   print('🔗 Subscribing to global notification channel...');
-  final subscribeResult = await _globalNotificationChannel!.subscribe();
-  print('📡 Global notification subscription result: $subscribeResult');
   
-  if (subscribeResult == RealtimeSubscribeStatus.subscribed) {
+  try {
+    await _globalNotificationChannel!.subscribe();
     print('✅ Successfully subscribed to global notifications for user: $userId');
-  } else {
-    print('❌ Failed to subscribe to global notifications. Status: $subscribeResult');
+  } catch (e) {
+    print('❌ Failed to subscribe to global notifications. Error: $e');
   }
 }
 
@@ -335,73 +335,6 @@ Future<void> reinitializeNotificationSubscription() async {
   await _setupGlobalNotificationSubscription();
 }
 
-/// Show a test notification to verify setup
-Future<void> _showTestNotification() async {
-  try {
-    const androidDetails = AndroidNotificationDetails(
-      'test_channel',
-      'Test Notifications',
-      channelDescription: 'Test notification channel',
-      importance: Importance.high,
-      priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
-      enableVibration: true,
-      playSound: true,
-    );
-
-    const notificationDetails = NotificationDetails(android: androidDetails);
-    
-    await _localNotifications.show(
-      999,
-      'PetTrackCare Test',
-      'System notifications are working! 🎉',
-      notificationDetails,
-    );
-    print('Test notification sent successfully');
-  } catch (e) {
-    print('Failed to send test notification: $e');
-  }
-}
-
-/// PUBLIC: Show a test notification to verify setup
-Future<void> showTestNotification() async {
-  await _showTestNotification();
-}
-
-/// PUBLIC: Test if realtime subscription is working at all
-Future<void> testRealtimeSubscription() async {
-  final user = Supabase.instance.client.auth.currentUser;
-  if (user == null) {
-    print('❌ No user logged in for realtime test');
-    return;
-  }
-  
-  print('🧪 Testing realtime subscription with manual insert...');
-  
-  try {
-    // Insert a test notification directly to database
-    final testData = {
-      'user_id': user.id,
-      'actor_id': user.id,
-      'message': 'Realtime subscription test notification',
-      'type': 'test',
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    };
-    
-    print('🧪 Inserting test notification: $testData');
-    
-    final result = await Supabase.instance.client
-        .from('notifications')
-        .insert(testData);
-    
-    print('✅ Test notification inserted: $result');
-    print('⏳ Check console for realtime subscription callback...');
-    
-  } catch (e) {
-    print('❌ Failed to insert test notification: $e');
-  }
-}
 Future<void> testCommunityNotification() async {
   final user = Supabase.instance.client.auth.currentUser;
   if (user == null) {
@@ -483,27 +416,55 @@ Future<void> showSystemNotification({
   String? type,
   String? recipientId, // Added recipient ID to check if current user should receive notification
 }) async {
-  print('🔔 showSystemNotification called:');
+  print('\n🔔 ========== showSystemNotification CALLED ==========');
   print('   Title: $title');
+  print('   Body: $body');
   print('   Type: $type');
-  print('   RecipientId: $recipientId');
+  print('   Recipient ID: $recipientId');
   
   // Only show notification if the current user is the intended recipient
   final currentUser = Supabase.instance.client.auth.currentUser;
   if (currentUser == null) {
-    print('❌ No current user - skipping system notification');
-    return;
-  }
-  
-  print('   Current User ID: ${currentUser.id}');
-  
-  // If recipientId is specified, only show notification to that user
-  if (recipientId != null && currentUser.id != recipientId) {
-    print('❌ System notification not for current user (${currentUser.id}) - intended for $recipientId');
+    print('⚠️ No user logged in - cannot show notification');
     return;
   }
 
-  print('✅ User is intended recipient, checking preferences...');
+  // If recipientId is specified, only show notification to that user
+  if (recipientId != null && currentUser.id != recipientId) {
+    // Skip silently - notification not for this user (this is normal behavior)
+    print('⏭️  Skipping notification - intended for $recipientId, current user is ${currentUser.id}');
+    return;
+  }
+  
+  print('✅ Recipient match confirmed - will show notification to ${currentUser.id}');
+
+  // Deduplication: Create a unique key for this notification
+  final notificationKey = '${recipientId ?? currentUser.id}:$type:$title:$body';
+  final now = DateTime.now();
+  
+  // Check if we've shown this notification recently (within last 5 seconds)
+  if (_recentNotifications.contains(notificationKey)) {
+    final lastShown = _notificationTimestamps[notificationKey];
+    if (lastShown != null && now.difference(lastShown).inSeconds < 5) {
+      print('⏭️  DUPLICATE NOTIFICATION BLOCKED - shown ${now.difference(lastShown).inSeconds}s ago');
+      return;
+    }
+  }
+  
+  // Add to recent notifications
+  _recentNotifications.add(notificationKey);
+  _notificationTimestamps[notificationKey] = now;
+  
+  // Clean up old entries (older than 10 seconds)
+  _notificationTimestamps.removeWhere((key, timestamp) {
+    final shouldRemove = now.difference(timestamp).inSeconds > 10;
+    if (shouldRemove) {
+      _recentNotifications.remove(key);
+    }
+    return shouldRemove;
+  });
+  
+  print('✅ New notification - will show (key: $notificationKey)');
 
   // Check if user has enabled notifications
   final metadata = currentUser.userMetadata ?? {};
@@ -511,13 +472,11 @@ Future<void> showSystemNotification({
   final notificationsEnabled = notificationPrefs['enabled'] ?? true;
   
   if (!notificationsEnabled) {
-    print('❌ System notifications disabled by user');
+    print('⚠️ Notifications disabled by user in preferences');
     return;
   }
-
-  print('✅ Notifications enabled, configuring notification...');
-
-  // Configure notification based on type
+  
+  print('✓ User check passed, preparing notification...');  // Configure notification based on type
   String channelId = 'general_notifications';
   String channelName = 'General Notifications';
   String channelDescription = 'General app notifications';
@@ -576,7 +535,9 @@ Future<void> showSystemNotification({
   final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
   
   try {
-    print('🚀 Attempting to show notification with ID: $id');
+    // Debug: Show notification attempt (only for important info, not spam)
+    print('📱 Showing notification: $title');
+    
     await _localNotifications.show(
       id,
       title,
@@ -584,9 +545,11 @@ Future<void> showSystemNotification({
       notificationDetails,
       payload: payload,
     );
-    print('✅ Android system notification shown successfully: $title');
+    
+    print('✅ Notification displayed successfully');
   } catch (e) {
-    print('❌ Failed to show system notification: $e');
+    // Important: Log errors to help debug notification issues
+    print('❌ Failed to display notification: $e');
   }
 }
 
@@ -698,7 +661,7 @@ Future<void> sendJobNotification({
       'actor_id': actorId,
       'message': message,
       'type': type,
-      'job_id': jobId, // link to the specific job
+      'job_id': jobId.isNotEmpty ? jobId : null, // Only set if jobId is not empty
       'is_read': false,
       'created_at': DateTime.now().toIso8601String(),
     });
@@ -723,6 +686,8 @@ Future<void> sendJobNotification({
         break;
     }
     
+    print('📤 Attempting to send system notification: $notificationTitle to user $recipientId');
+    
     await showSystemNotification(
       title: notificationTitle,
       body: message,
@@ -736,9 +701,9 @@ Future<void> sendJobNotification({
       }),
     );
     
-    print('Job notification sent: $message to user $recipientId');
+    print('✅ Job notification sent successfully');
   } catch (e) {
-    print('Failed to send job notification: $e');
+    print('❌ Error sending job notification: $e');
   }
 }
 

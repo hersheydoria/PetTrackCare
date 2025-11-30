@@ -289,13 +289,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               width: double.infinity,
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   elevation: 3,
-                                  shadowColor: deepRed.withOpacity(0.3),
+                                  shadowColor: Colors.green.withOpacity(0.3),
                                 ),
                                 onPressed: isLoading ? null : () async {
                                   if (newName.trim().isEmpty) {
@@ -415,11 +415,11 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                       actions: [
                                         TextButton(
                                           onPressed: () => Navigator.pop(context, false),
-                                          child: Text('Cancel'),
+                                          child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                         ),
                                         TextButton(
                                           onPressed: () => Navigator.pop(context, true),
-                                          child: Text('Delete', style: TextStyle(color: Colors.red)),
+                                          child: Text('Delete', style: TextStyle(color: Colors.green)),
                                         ),
                                       ],
                                     ),
@@ -630,13 +630,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               width: double.infinity,
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   elevation: 3,
-                                  shadowColor: deepRed.withOpacity(0.3),
+                                  shadowColor: Colors.green.withOpacity(0.3),
                                 ),
                                 onPressed: isLoading ? null : () async {
                                   setSt(() => isLoading = true);
@@ -891,13 +891,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               width: double.infinity,
                               child: ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: deepRed,
+                                  backgroundColor: Colors.green,
                                   padding: EdgeInsets.symmetric(vertical: 16),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   elevation: 3,
-                                  shadowColor: deepRed.withOpacity(0.3),
+                                  shadowColor: Colors.green.withOpacity(0.3),
                                 ),
                                 onPressed: _isLoading ? null : () async {
                                   if (_newPasswordController.text.isEmpty ||
@@ -1265,14 +1265,14 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                       padding: EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: Colors.grey.shade300),
+                        side: BorderSide(color: Colors.red.shade300),
                       ),
                     ),
                     onPressed: () => Navigator.pop(context),
                     child: Text(
                       'Close',
                       style: TextStyle(
-                        color: Colors.grey[600],
+                        color: Colors.red,
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1502,14 +1502,14 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(color: Colors.grey.shade300),
+                              side: BorderSide(color: Colors.red.shade300),
                             ),
                           ),
                           onPressed: () => Navigator.pop(context),
                           child: Text(
                             'Cancel',
                             style: TextStyle(
-                              color: Colors.grey[600],
+                              color: Colors.red,
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
                             ),
@@ -1521,7 +1521,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                         flex: 2,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: deepRed,
+                            backgroundColor: Colors.green,
                             padding: EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -2215,7 +2215,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                               ),
                               SizedBox(height: 12),
                               Text(
-                                '© 2024 PetTrackCare. All rights reserved.',
+                                '© 2025 PetTrackCare. All rights reserved.',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: Colors.grey[600],
@@ -2271,132 +2271,92 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white,
-                lightBlush.withOpacity(0.2),
-              ],
-            ),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 20,
-                offset: Offset(0, -5),
-              ),
-            ],
-          ),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Enhanced Header
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: deepRed.withOpacity(0.05),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: deepRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(Icons.bookmark, color: deepRed, size: 20),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Saved Posts',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: deepRed,
-                          ),
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: IconButton(
-                          icon: Icon(Icons.close, color: Colors.grey[600]),
-                          onPressed: () => Navigator.pop(ctx),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Enhanced SavedPostsModal with modern container
-                Expanded(
-                  child: Container(
-                    margin: EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: coral.withOpacity(0.3)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 10,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: SavedPostsModal(userId: user?.id ?? ''),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (context) => SavedPostsModal(userId: user?.id ?? ''),
     );
   }
 
   Future<void> _pickProfileImage() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile == null) return;
+    // Show image source selection dialog
+    final ImageSource? source = await _showImageSourceDialog();
+    if (source == null) return;
 
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Confirm Profile Picture'),
-          content: Image.file(File(pickedFile.path)),
-          actions: [
-            TextButton(
-              child: Text('Cancel', style: TextStyle(color: Colors.grey)),
-              onPressed: () => Navigator.of(context).pop(false),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: deepRed),
-              child: Text('Confirm'),
-              onPressed: () => Navigator.of(context).pop(true),
-            ),
-          ],
-        );
-      },
-    );
+    XFile? pickedFile;
+    try {
+      pickedFile = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+    } catch (e) {
+      // Handle permission or camera access errors
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.warning, color: Colors.white),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  source == ImageSource.camera 
+                    ? 'Camera access denied. Please enable camera permission in settings.'
+                    : 'Photo access denied. Please enable photo permission in settings.',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+    
+    if (pickedFile == null) {
+      // User cancelled the picker
+      return;
+    }
 
+    // Show enhanced confirmation dialog
+    final confirm = await _showImageConfirmationDialog(pickedFile.path);
     if (confirm != true) return;
 
     final file = File(pickedFile.path);
     final fileBytes = await file.readAsBytes();
     final fileName =
         'profile_images/${user!.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: deepRed),
+              SizedBox(height: 16),
+              Text(
+                'Uploading profile picture...',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.grey[700],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
 
     try {
       final supabase = Supabase.instance.client;
@@ -2422,10 +2382,384 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
         metadata['profile_picture'] = publicUrl;
       });
 
+      // Close loading dialog
+      Navigator.of(context).pop();
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: 8),
+              Text('Profile picture updated successfully!'),
+            ],
+          ),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+
       print('✅ Profile picture updated!');
     } catch (e) {
+      // Close loading dialog
+      Navigator.of(context).pop();
+      
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.white),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Failed to update profile picture. Please try again.'),
+              ),
+            ],
+          ),
+          backgroundColor: deepRed,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      
       print('❌ Error uploading profile image: $e');
     }
+  }
+
+  // Enhanced image source selection dialog
+  Future<ImageSource?> _showImageSourceDialog() async {
+    return await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 20,
+              offset: Offset(0, -5),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle bar
+              Container(
+                width: 40,
+                height: 4,
+                margin: EdgeInsets.only(top: 12, bottom: 20),
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: coral.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(Icons.camera_alt, color: coral, size: 20),
+                    ),
+                    SizedBox(width: 12),
+                    Text(
+                      'Choose Photo Source',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[800],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 24),
+              // Options
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _buildImageSourceOption(
+                        icon: Icons.camera_alt,
+                        title: 'Camera',
+                        subtitle: 'Take a new photo',
+                        color: deepRed,
+                        onTap: () => Navigator.pop(context, ImageSource.camera),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: _buildImageSourceOption(
+                        icon: Icons.photo_library,
+                        title: 'Gallery',
+                        subtitle: 'Choose from photos',
+                        color: coral,
+                        onTap: () => Navigator.pop(context, ImageSource.gallery),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 24),
+              // Cancel button
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Enhanced image confirmation dialog
+  Future<bool?> _showImageConfirmationDialog(String imagePath) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [deepRed.withOpacity(0.1), coral.withOpacity(0.1)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: deepRed.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(Icons.photo, color: deepRed, size: 20),
+                    ),
+                    SizedBox(width: 12),
+                    Text(
+                      'Confirm Profile Picture',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: deepRed,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Image preview
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 200,
+                      height: 200,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: coral.withOpacity(0.3), width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 10,
+                            offset: Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Image.file(
+                          File(imagePath),
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      'Use this photo as your profile picture?',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.grey[700],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+              // Action buttons
+              Padding(
+                padding: EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: Colors.grey.shade300),
+                          ),
+                        ),
+                        onPressed: () => Navigator.pop(context, false),
+                        child: Text(
+                          'Cancel',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: deepRed,
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 2,
+                        ),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: Text(
+                          'Use Photo',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper widget for image source options
+  Widget _buildImageSourceOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            border: Border.all(color: color.withOpacity(0.2)),
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              colors: [
+                color.withOpacity(0.05),
+                color.withOpacity(0.02),
+              ],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  icon,
+                  color: color,
+                  size: 24,
+                ),
+              ),
+              SizedBox(height: 12),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[800],
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -2474,10 +2808,10 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: Text('Cancel'),
+                      child: Text('Cancel', style: TextStyle(color: Colors.red)),
                     ),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: deepRed),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                       onPressed: () => Navigator.pop(context, true),
                       child: Text('Logout'),
                     ),
@@ -2525,44 +2859,118 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                   padding: EdgeInsets.all(20),
                   child: Column(
                     children: [
-                      // Profile picture with camera overlay
+                      // Enhanced Profile picture with camera overlay
                       Stack(
                         alignment: Alignment.bottomRight,
                         children: [
-                          CircleAvatar(
-                            radius: 60,
-                            backgroundColor: Colors.white,
-                            backgroundImage: _profileImage != null
-                                ? FileImage(_profileImage!)
-                                : (userData['profile_picture'] != null && userData['profile_picture'].toString().isNotEmpty
-                                    ? NetworkImage(userData['profile_picture'])
-                                    : null),
-                            child: (_profileImage == null && (userData['profile_picture'] == null || userData['profile_picture'].toString().isEmpty))
-                                ? Icon(Icons.person, size: 60, color: deepRed)
-                                : null,
+                          Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: [Colors.white, lightBlush.withOpacity(0.3)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.15),
+                                  blurRadius: 20,
+                                  offset: Offset(0, 8),
+                                ),
+                                BoxShadow(
+                                  color: Colors.white.withOpacity(0.8),
+                                  blurRadius: 10,
+                                  offset: Offset(0, -2),
+                                ),
+                              ],
+                            ),
+                            child: CircleAvatar(
+                              radius: 62,
+                              backgroundColor: Colors.transparent,
+                              child: CircleAvatar(
+                                radius: 58,
+                                backgroundColor: lightBlush.withOpacity(0.3),
+                                backgroundImage: _profileImage != null
+                                    ? FileImage(_profileImage!)
+                                    : (userData['profile_picture'] != null && userData['profile_picture'].toString().isNotEmpty
+                                        ? NetworkImage(userData['profile_picture'])
+                                        : null),
+                                child: (_profileImage == null && (userData['profile_picture'] == null || userData['profile_picture'].toString().isEmpty))
+                                    ? Container(
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: LinearGradient(
+                                            colors: [coral.withOpacity(0.1), deepRed.withOpacity(0.1)],
+                                            begin: Alignment.topCenter,
+                                            end: Alignment.bottomCenter,
+                                          ),
+                                        ),
+                                        child: Icon(
+                                          Icons.person,
+                                          size: 64,
+                                          color: deepRed.withOpacity(0.7),
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            ),
                           ),
                           Positioned(
-                            bottom: 4,
-                            right: 4,
-                            child: GestureDetector(
-                              onTap: _pickProfileImage,
-                              child: Container(
-                                padding: EdgeInsets.all(8),
+                            bottom: 8,
+                            right: 8,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _pickProfileImage,
+                                borderRadius: BorderRadius.circular(20),
+                                child: AnimatedContainer(
+                                  duration: Duration(milliseconds: 200),
+                                  padding: EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: LinearGradient(
+                                      colors: [deepRed, coral],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: deepRed.withOpacity(0.4),
+                                        blurRadius: 12,
+                                        offset: Offset(0, 4),
+                                      ),
+                                      BoxShadow(
+                                        color: Colors.white.withOpacity(0.8),
+                                        blurRadius: 6,
+                                        offset: Offset(0, -2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    Icons.camera_alt_rounded,
+                                    size: 20,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          // Add a subtle pulse animation hint
+                          Positioned(
+                            bottom: 8,
+                            right: 8,
+                            child: IgnorePointer(
+                              child: AnimatedContainer(
+                                duration: Duration(seconds: 2),
+                                curve: Curves.easeInOut,
+                                width: 44,
+                                height: 44,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: Colors.white,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 8,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: Icon(
-                                  Icons.camera_alt,
-                                  size: 18,
-                                  color: deepRed,
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.3),
+                                    width: 2,
+                                  ),
                                 ),
                               ),
                             ),
@@ -2772,17 +3180,96 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
   final supabase = Supabase.instance.client;
   List<Map<String, dynamic>> assignedPets = [];
   bool isLoading = true;
+  RealtimeChannel? _jobsChannel;
 
   @override
   void initState() {
     super.initState();
     fetchAssignedPets();
+    _setupRealtimeListener();
+  }
+
+  @override
+  void dispose() {
+    _jobsChannel?.unsubscribe();
+    super.dispose();
+  }
+
+  void _setupRealtimeListener() {
+    final sitterId = supabase.auth.currentUser?.id;
+    if (sitterId == null) return;
+
+    _jobsChannel = supabase
+        .channel('assigned_pets_${sitterId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'sitting_jobs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'sitter_id',
+            value: sitterId,
+          ),
+          callback: (payload) {
+            print('🔄 Real-time update for assigned pets');
+            fetchAssignedPets();
+          },
+        )
+        .subscribe();
+  }
+
+  // Helper method to get formatted age for pet display
+  String _getFormattedAge(Map<String, dynamic> pet) {
+    if (pet['date_of_birth'] != null) {
+      try {
+        final birthDate = DateTime.parse(pet['date_of_birth'].toString());
+        return _formatAgeFromBirthDate(birthDate);
+      } catch (e) {
+        return 'Age unknown';
+      }
+    } else {
+      return 'Age unknown';
+    }
+  }
+
+  // Helper method to format age from birth date
+  String _formatAgeFromBirthDate(DateTime birthDate) {
+    final now = DateTime.now();
+    int years = now.year - birthDate.year;
+    int months = now.month - birthDate.month;
+    int days = now.day - birthDate.day;
+
+    if (days < 0) {
+      months--;
+      days += DateTime(now.year, now.month, 0).day;
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    if (years > 0) {
+      if (months > 0) {
+        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'} old';
+      } else {
+        return '$years ${years == 1 ? 'year' : 'years'} old';
+      }
+    } else if (months > 0) {
+      if (days > 0) {
+        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'} old';
+      } else {
+        return '$months ${months == 1 ? 'month' : 'months'} old';
+      }
+    } else {
+      return '$days ${days == 1 ? 'day' : 'days'} old';
+    }
   }
 
   Future<void> fetchAssignedPets() async {
     final sitterId = supabase.auth.currentUser?.id;
 
     if (sitterId == null) {
+      print('❌ No sitter ID found');
       setState(() {
         isLoading = false;
       });
@@ -2790,25 +3277,129 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
     }
 
     try {
-      final response = await supabase
-      .from('sitting_jobs')
-      .select('''
-        pets (
-          id, name, breed, age, owner_id, profile_picture,
-          users!owner_id (
-            name
-          )
-        )
-      ''')
-      .eq('sitter_id', sitterId)
-      .or('status.eq.Accepted,status.eq.Active');
+      print('🔍 Fetching assigned pets for sitter: $sitterId');
+      
+      // Step 1: Get all active sitting jobs for this sitter
+      final jobsResponse = await supabase
+          .from('sitting_jobs')
+          .select('id, pet_id, status, start_date, end_date, created_at')
+          .eq('sitter_id', sitterId)
+          .eq('status', 'Active');
+
+      print('✅ Found ${jobsResponse.length} active sitting jobs');
+      if (jobsResponse.isNotEmpty) {
+        print('📍 First job data: ${jobsResponse[0]}');
+      }
+
+      if (jobsResponse.isEmpty) {
+        setState(() {
+          assignedPets = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      // Step 2: Extract pet IDs and fetch pet details
+      final petIds = (jobsResponse as List)
+          .map((job) => job['pet_id']?.toString())
+          .where((id) => id != null && id.isNotEmpty)
+          .cast<String>()
+          .toList();
+
+      print('🐕 Extracted ${petIds.length} pet IDs');
+      for (var id in petIds) {
+        print('   - $id');
+      }
+
+      if (petIds.isEmpty) {
+        setState(() {
+          assignedPets = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      // Fetch all pets in one query
+      List<dynamic> petsResponse = [];
+      try {
+        petsResponse = await supabase
+            .from('pets')
+            .select('id, name, breed, date_of_birth, owner_id, profile_picture')
+            .inFilter('id', petIds);
+        print('✅ Fetched ${petsResponse.length} pet details');
+      } catch (petError) {
+        print('❌ Error fetching pets: $petError');
+        rethrow;
+      }
+
+      // Step 3: Fetch owner information for each unique owner_id
+      final ownerIds = petsResponse
+          .map((pet) => pet['owner_id']?.toString())
+          .where((id) => id != null && id.isNotEmpty)
+          .toSet()
+          .toList();
+
+      print('👤 Fetching ${ownerIds.length} owner details');
+
+      Map<String, dynamic> ownerMap = {};
+      if (ownerIds.isNotEmpty) {
+        try {
+          final ownersResponse = await supabase
+              .from('users')
+              .select('id, name, profile_picture')
+              .inFilter('id', ownerIds);
+
+          print('✅ Fetched ${ownersResponse.length} owner records');
+          for (var owner in ownersResponse) {
+            ownerMap[owner['id']?.toString() ?? ''] = owner;
+          }
+        } catch (ownerError) {
+          print('⚠️ Error fetching owners: $ownerError');
+          // Continue without owner data
+        }
+      }
+
+      // Step 4: Combine data
+      List<Map<String, dynamic>> enrichedPets = [];
+      for (var job in jobsResponse) {
+        final petId = job['pet_id']?.toString();
+        if (petId == null) continue;
+        
+        Map<String, dynamic>? pet;
+        try {
+          pet = petsResponse.firstWhere(
+            (p) => p['id']?.toString() == petId,
+          ) as Map<String, dynamic>?;
+        } catch (e) {
+          print('⚠️ Pet not found for ID: $petId');
+          continue;
+        }
+
+        if (pet != null) {
+          final ownerId = pet['owner_id']?.toString() ?? '';
+          final owner = ownerMap[ownerId];
+
+          enrichedPets.add({
+            'job_id': job['id'],
+            'status': job['status'],
+            'start_date': job['start_date'],
+            'end_date': job['end_date'],
+            'pet': pet,
+            'owner': owner,
+          });
+          print('✅ Enriched pet: ${pet['name']}');
+        }
+      }
+
+      print('📋 Successfully enriched ${enrichedPets.length} pets with owner data');
 
       setState(() {
-        assignedPets = List<Map<String, dynamic>>.from(response);
+        assignedPets = enrichedPets;
         isLoading = false;
       });
     } catch (e) {
-      print('Error fetching assigned pets: $e');
+      print('❌ Error fetching assigned pets: $e');
+      print('   Stack: ${StackTrace.current}');
       setState(() => isLoading = false);
     }
   }
@@ -2855,8 +3446,15 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: assignedPets.length,
               itemBuilder: (context, index) {
-                final pet = assignedPets[index]['pets'];
-                final owner = pet['users'];
+                final record = assignedPets[index];
+                final pet = record['pet'] as Map<String, dynamic>?;
+                final owner = record['owner'] as Map<String, dynamic>?;
+                
+                if (pet == null) {
+                  print('⚠️ Null pet at index $index');
+                  return SizedBox.shrink();
+                }
+                
                 return _assignedPetListTile(pet, owner);
               },
             ),
@@ -2927,7 +3525,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        '${pet['breed'] ?? 'Unknown'} • ${pet['age'] ?? 0} ${(pet['age'] ?? 0) == 1 ? 'year' : 'years'} old',
+                        '${pet['breed'] ?? 'Unknown'} • ${_getFormattedAge(pet)}',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[600],

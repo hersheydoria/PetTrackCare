@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'main_navigation.dart';
+import 'onboarding_screen.dart';
 import '../services/notification_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -95,15 +97,34 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => MainNavigation(userId: user.id),
-          ),
-        );
+        _navigateAfterLogin(user.id);
       });
     } else {
       if (mounted) setState(() => isCheckingSession = false);
+    }
+  }
+
+  // Helper method to check if onboarding is needed and navigate accordingly
+  void _navigateAfterLogin(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final onboardingCompleted = prefs.getBool('onboarding_completed') ?? false;
+    
+    if (!onboardingCompleted) {
+      // First time login - show onboarding
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OnboardingScreen(userId: userId),
+        ),
+      );
+    } else {
+      // Returning user - go directly to main app
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MainNavigation(userId: userId),
+        ),
+      );
     }
   }
 
@@ -151,12 +172,7 @@ class _LoginScreenState extends State<LoginScreen>
         // Reinitialize notification subscription for the logged-in user
         await reinitializeNotificationSubscription();
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => MainNavigation(userId: user.id), // ✅ userId passed
-          ),
-        );
+        _navigateAfterLogin(user.id);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Login failed: No user found.')),
@@ -294,33 +310,51 @@ class _LoginScreenState extends State<LoginScreen>
                             children: [
                               // Enhanced Logo
                               Container(
-                                padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF6DED8).withOpacity(0.3),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Image.asset('assets/logo.png', height: 100),
+                                padding: const EdgeInsets.only(top: 20, left: 20, right: 20, bottom: 8),
+                                child: Image.asset('assets/logo.png', height: 140),
                               ),
-                              const SizedBox(height: 24),
+                              const SizedBox(height: 12),
                               
                               // Enhanced Title
-                              ShaderMask(
-                                shaderCallback: (bounds) => const LinearGradient(
-                                  colors: [Color(0xFFB82132), Color(0xFFE91E63)],
-                                ).createShader(bounds),
-                                child: const Text(
-                                  "Welcome Back!",
-                                  style: TextStyle(
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
+                              Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 10),
+                                child: Column(
+                                  children: [
+                                    const Text(
+                                      "Welcome to",
+                                      style: TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'SF Pro Display',
+                                        color: Color(0xFFB82132),
+                                        letterSpacing: 0.5,
+                                        height: 1.2,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    const Text(
+                                      "PetTrackCare",
+                                      style: TextStyle(
+                                        fontSize: 36,
+                                        fontWeight: FontWeight.w900,
+                                        fontFamily: 'SF Pro Display',
+                                        color: Color(0xFFB82132),
+                                        letterSpacing: -0.5,
+                                        height: 0.95,
+                                        fontFeatures: [
+                                          FontFeature.enable('kern'),
+                                        ],
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ],
                                 ),
                               ),
                               
                               const SizedBox(height: 8),
                               Text(
-                                "Sign in to continue to PetTrackCare",
+                                "Sign in to continue",
                                 style: TextStyle(
                                   fontSize: 16,
                                   color: Colors.grey[600],

@@ -449,7 +449,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                                                         actions: [
                                                                           TextButton(
                                                                             onPressed: () => Navigator.pop(context),
-                                                                            child: Text('Cancel'),
+                                                                            child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                                                           ),
                                                                           ElevatedButton(
                                                                             onPressed: () async {
@@ -473,13 +473,13 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                                                         actions: [
                                                                           TextButton(
                                                                             onPressed: () => Navigator.pop(context, false),
-                                                                            child: Text('Cancel'),
+                                                                            child: Text('Cancel', style: TextStyle(color: Colors.red)),
                                                                           ),
                                                                           ElevatedButton(
                                                                             onPressed: () => Navigator.pop(context, true),
                                                                             child: Text('Delete'),
                                                                             style: ElevatedButton.styleFrom(
-                                                                              backgroundColor: Colors.red,
+                                                                              backgroundColor: Colors.green,
                                                                             ),
                                                                           ),
                                                                         ],

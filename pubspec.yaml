@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_bluetooth_serial: ^0.4.0
   supabase_flutter: any
   intl: any
   http: any
@@ -40,6 +39,8 @@ dependencies:
   android_intent_plus: any
   url_launcher: any
   universal_platform: any
+  firebase_database: ^10.5.7
+  flutter_ringtone_player: ^4.0.0
 
 dev_dependencies:
   flutter_test:
