@@ -4,6 +4,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import '../widgets/saved_posts_modal.dart';
+import '../services/fastapi_service.dart';
+import 'package:intl/intl.dart';
 import 'pets_screen.dart';
 
 // Reuse owner's color palette
@@ -3061,7 +3063,10 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  AssignedPetsTab(),
+                  AssignedPetsTab(
+                    fastApi: FastApiService.instance,
+                    sitterId: user?.id ?? '',
+                  ),
                   ListView(
                     padding: EdgeInsets.all(16),
                     children: [
@@ -3172,297 +3177,105 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
 }
 
 class AssignedPetsTab extends StatefulWidget {
+  final FastApiService fastApi;
+  final String sitterId;
+
+  const AssignedPetsTab({
+    super.key,
+    required this.fastApi,
+    required this.sitterId,
+  });
+
   @override
-  _AssignedPetsTabState createState() => _AssignedPetsTabState();
+  State<AssignedPetsTab> createState() => _AssignedPetsTabState();
 }
 
 class _AssignedPetsTabState extends State<AssignedPetsTab> {
-  final supabase = Supabase.instance.client;
-  List<Map<String, dynamic>> assignedPets = [];
-  bool isLoading = true;
-  RealtimeChannel? _jobsChannel;
+  List<Map<String, dynamic>> _assignedJobs = [];
+  bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    fetchAssignedPets();
-    _setupRealtimeListener();
+    _loadJobs();
   }
 
-  @override
-  void dispose() {
-    _jobsChannel?.unsubscribe();
-    super.dispose();
-  }
-
-  void _setupRealtimeListener() {
-    final sitterId = supabase.auth.currentUser?.id;
-    if (sitterId == null) return;
-
-    _jobsChannel = supabase
-        .channel('assigned_pets_${sitterId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'sitting_jobs',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'sitter_id',
-            value: sitterId,
-          ),
-          callback: (payload) {
-            print('🔄 Real-time update for assigned pets');
-            fetchAssignedPets();
-          },
-        )
-        .subscribe();
-  }
-
-  // Helper method to get formatted age for pet display
-  String _getFormattedAge(Map<String, dynamic> pet) {
-    if (pet['date_of_birth'] != null) {
-      try {
-        final birthDate = DateTime.parse(pet['date_of_birth'].toString());
-        return _formatAgeFromBirthDate(birthDate);
-      } catch (e) {
-        return 'Age unknown';
-      }
-    } else {
-      return 'Age unknown';
-    }
-  }
-
-  // Helper method to format age from birth date
-  String _formatAgeFromBirthDate(DateTime birthDate) {
-    final now = DateTime.now();
-    int years = now.year - birthDate.year;
-    int months = now.month - birthDate.month;
-    int days = now.day - birthDate.day;
-
-    if (days < 0) {
-      months--;
-      days += DateTime(now.year, now.month, 0).day;
-    }
-    if (months < 0) {
-      years--;
-      months += 12;
-    }
-
-    if (years > 0) {
-      if (months > 0) {
-        return '$years ${years == 1 ? 'year' : 'years'}, $months ${months == 1 ? 'month' : 'months'} old';
-      } else {
-        return '$years ${years == 1 ? 'year' : 'years'} old';
-      }
-    } else if (months > 0) {
-      if (days > 0) {
-        return '$months ${months == 1 ? 'month' : 'months'}, $days ${days == 1 ? 'day' : 'days'} old';
-      } else {
-        return '$months ${months == 1 ? 'month' : 'months'} old';
-      }
-    } else {
-      return '$days ${days == 1 ? 'day' : 'days'} old';
-    }
-  }
-
-  Future<void> fetchAssignedPets() async {
-    final sitterId = supabase.auth.currentUser?.id;
-
-    if (sitterId == null) {
-      print('❌ No sitter ID found');
+  Future<void> _loadJobs() async {
+    if (widget.sitterId.isEmpty) {
       setState(() {
-        isLoading = false;
+        _assignedJobs = [];
+        _isLoading = false;
+        _errorMessage = 'Sitter ID unavailable.';
       });
       return;
     }
 
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
     try {
-      print('🔍 Fetching assigned pets for sitter: $sitterId');
-      
-      // Step 1: Get all active sitting jobs for this sitter
-      final jobsResponse = await supabase
-          .from('sitting_jobs')
-          .select('id, pet_id, status, start_date, end_date, created_at')
-          .eq('sitter_id', sitterId)
-          .eq('status', 'Active');
-
-      print('✅ Found ${jobsResponse.length} active sitting jobs');
-      if (jobsResponse.isNotEmpty) {
-        print('📍 First job data: ${jobsResponse[0]}');
-      }
-
-      if (jobsResponse.isEmpty) {
-        setState(() {
-          assignedPets = [];
-          isLoading = false;
-        });
-        return;
-      }
-
-      // Step 2: Extract pet IDs and fetch pet details
-      final petIds = (jobsResponse as List)
-          .map((job) => job['pet_id']?.toString())
-          .where((id) => id != null && id.isNotEmpty)
-          .cast<String>()
-          .toList();
-
-      print('🐕 Extracted ${petIds.length} pet IDs');
-      for (var id in petIds) {
-        print('   - $id');
-      }
-
-      if (petIds.isEmpty) {
-        setState(() {
-          assignedPets = [];
-          isLoading = false;
-        });
-        return;
-      }
-
-      // Fetch all pets in one query
-      List<dynamic> petsResponse = [];
-      try {
-        petsResponse = await supabase
-            .from('pets')
-            .select('id, name, breed, date_of_birth, owner_id, profile_picture')
-            .inFilter('id', petIds);
-        print('✅ Fetched ${petsResponse.length} pet details');
-      } catch (petError) {
-        print('❌ Error fetching pets: $petError');
-        rethrow;
-      }
-
-      // Step 3: Fetch owner information for each unique owner_id
-      final ownerIds = petsResponse
-          .map((pet) => pet['owner_id']?.toString())
-          .where((id) => id != null && id.isNotEmpty)
-          .toSet()
-          .toList();
-
-      print('👤 Fetching ${ownerIds.length} owner details');
-
-      Map<String, dynamic> ownerMap = {};
-      if (ownerIds.isNotEmpty) {
-        try {
-          final ownersResponse = await supabase
-              .from('users')
-              .select('id, name, profile_picture')
-              .inFilter('id', ownerIds);
-
-          print('✅ Fetched ${ownersResponse.length} owner records');
-          for (var owner in ownersResponse) {
-            ownerMap[owner['id']?.toString() ?? ''] = owner;
-          }
-        } catch (ownerError) {
-          print('⚠️ Error fetching owners: $ownerError');
-          // Continue without owner data
-        }
-      }
-
-      // Step 4: Combine data
-      List<Map<String, dynamic>> enrichedPets = [];
-      for (var job in jobsResponse) {
-        final petId = job['pet_id']?.toString();
-        if (petId == null) continue;
-        
-        Map<String, dynamic>? pet;
-        try {
-          pet = petsResponse.firstWhere(
-            (p) => p['id']?.toString() == petId,
-          ) as Map<String, dynamic>?;
-        } catch (e) {
-          print('⚠️ Pet not found for ID: $petId');
-          continue;
-        }
-
-        if (pet != null) {
-          final ownerId = pet['owner_id']?.toString() ?? '';
-          final owner = ownerMap[ownerId];
-
-          enrichedPets.add({
-            'job_id': job['id'],
-            'status': job['status'],
-            'start_date': job['start_date'],
-            'end_date': job['end_date'],
-            'pet': pet,
-            'owner': owner,
-          });
-          print('✅ Enriched pet: ${pet['name']}');
-        }
-      }
-
-      print('📋 Successfully enriched ${enrichedPets.length} pets with owner data');
-
+      final jobs = await widget.fastApi.fetchAssignedPetsForSitter(widget.sitterId);
       setState(() {
-        assignedPets = enrichedPets;
-        isLoading = false;
+        _assignedJobs = jobs;
+        _isLoading = false;
       });
-    } catch (e) {
-      print('❌ Error fetching assigned pets: $e');
-      print('   Stack: ${StackTrace.current}');
-      setState(() => isLoading = false);
+    } catch (error, stack) {
+      print('⚠️ Failed to load assigned pets: $error\n$stack');
+      setState(() {
+        _assignedJobs = [];
+        _isLoading = false;
+        _errorMessage = 'Unable to load assigned pets right now.';
+      });
     }
   }
 
-  // New: pull-to-refresh handler
-  Future<void> _refreshAll() async {
-    await fetchAssignedPets();
+  Future<void> _refresh() async {
+    await _loadJobs();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (isLoading) {
-      return Center(child: CircularProgressIndicator(color: deepRed));
+  String _formatDate(String? iso) {
+    if (iso == null || iso.isEmpty) return 'Unknown';
+    try {
+      final parsed = DateTime.parse(iso);
+      return DateFormat('MMM d, y').format(parsed);
+    } catch (_) {
+      return iso;
     }
-
-    return RefreshIndicator(
-      onRefresh: _refreshAll,
-      child: assignedPets.isEmpty
-          ? ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: [
-                SizedBox(height: 120),
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.pets, size: 64, color: Colors.grey[400]),
-                      SizedBox(height: 16),
-                      Text(
-                        'No assigned pets yet.',
-                        style: TextStyle(fontSize: 18, color: Colors.grey[600]),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Pet sitting requests will appear here!',
-                        style: TextStyle(color: Colors.grey[500]),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            )
-          : ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: assignedPets.length,
-              itemBuilder: (context, index) {
-                final record = assignedPets[index];
-                final pet = record['pet'] as Map<String, dynamic>?;
-                final owner = record['owner'] as Map<String, dynamic>?;
-                
-                if (pet == null) {
-                  print('⚠️ Null pet at index $index');
-                  return SizedBox.shrink();
-                }
-                
-                return _assignedPetListTile(pet, owner);
-              },
-            ),
-    );
   }
 
-  // Enhanced pet tile with modern styling adapted for assigned pets
-  Widget _assignedPetListTile(Map<String, dynamic> pet, Map<String, dynamic>? owner) {
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'active':
+        return Colors.green;
+      case 'pending':
+        return Colors.orange;
+      case 'completed':
+        return Colors.blueGrey;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Widget _buildJobTile(Map<String, dynamic> job) {
+    final petName = job['pet_name'] ?? 'Unnamed';
+    final petType = job['pet_type'] ?? 'Unknown';
+    final ownerName = job['owner_name'] ?? 'Unknown';
+    final status = (job['status'] ?? 'Pending').toString();
+    final startDate = _formatDate(job['start_date']?.toString());
+    final endDate = _formatDate(job['end_date']?.toString());
+    final profilePicture = job['pet_profile_picture'] ?? '';
+    final pictureUrl = widget.fastApi.resolveMediaUrl(profilePicture);
+
+    final petData = {
+      'id': job['pet_id'],
+      'name': job['pet_name'],
+      'breed': job['pet_type'],
+      'profile_picture': job['pet_profile_picture'],
+    };
+
     return Container(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
@@ -3470,9 +3283,9 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 15,
-            offset: Offset(0, 3),
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 14,
+            offset: Offset(0, 6),
           ),
         ],
       ),
@@ -3484,7 +3297,7 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => PetProfileScreen(initialPet: pet),
+                builder: (_) => PetProfileScreen(initialPet: petData),
               ),
             );
           },
@@ -3492,23 +3305,11 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
             padding: EdgeInsets.all(16),
             child: Row(
               children: [
-                Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: coral.withOpacity(0.3), width: 2),
-                  ),
-                  child: CircleAvatar(
-                    radius: 30,
-                    backgroundColor: lightBlush,
-                    backgroundImage: (pet['profile_picture'] != null &&
-                            pet['profile_picture'].toString().isNotEmpty)
-                        ? NetworkImage(pet['profile_picture'])
-                        : null,
-                    child: (pet['profile_picture'] == null ||
-                            pet['profile_picture'].toString().isEmpty)
-                        ? Icon(Icons.pets, color: coral, size: 30)
-                        : null,
-                  ),
+                CircleAvatar(
+                  radius: 32,
+                  backgroundColor: Colors.grey.shade100,
+                  backgroundImage: pictureUrl.isNotEmpty ? NetworkImage(pictureUrl) : null,
+                  child: pictureUrl.isEmpty ? Icon(Icons.pets, color: coral, size: 32) : null,
                 ),
                 SizedBox(width: 16),
                 Expanded(
@@ -3516,57 +3317,39 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        pet['name'] ?? 'Unnamed',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: deepRed,
-                        ),
+                        petName,
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: deepRed),
                       ),
                       SizedBox(height: 4),
                       Text(
-                        '${pet['breed'] ?? 'Unknown'} • ${_getFormattedAge(pet)}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
+                        '$petType • Owner: $ownerName',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                       ),
-                      SizedBox(height: 6),
-                      Container(
-                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: peach.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.person, size: 12, color: deepRed),
-                            SizedBox(width: 4),
-                            Text(
-                              'Owner: ${owner?['name'] ?? 'Unknown'}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: deepRed,
-                                fontWeight: FontWeight.w500,
-                              ),
+                      SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(Icons.calendar_today, size: 14, color: Colors.grey[500]),
+                          SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              'From $startDate to $endDate',
+                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
                 Container(
-                  padding: EdgeInsets.all(8),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: coral.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+                    color: _getStatusColor(status),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    Icons.arrow_forward_ios,
-                    color: coral,
-                    size: 16,
+                  child: Text(
+                    status,
+                    style: TextStyle(fontSize: 12, color: Colors.white),
                   ),
                 ),
               ],
@@ -3574,6 +3357,61 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
           ),
         ),
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Center(child: CircularProgressIndicator(color: deepRed));
+    }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+          child: Text(
+            _errorMessage!,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+          ),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: _assignedJobs.isEmpty
+          ? ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(height: 120),
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.pets, size: 64, color: Colors.grey[400]),
+                      SizedBox(height: 16),
+                      Text(
+                        'No assigned pets yet.',
+                        style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Pet sitting jobs will appear here once you accept them.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[500]),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: _assignedJobs.length,
+              itemBuilder: (context, index) => _buildJobTile(_assignedJobs[index]),
+            ),
     );
   }
 }

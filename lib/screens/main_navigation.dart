@@ -7,6 +7,7 @@ import 'pets_screen.dart';
 import 'profile_owner_screen.dart';
 import 'profile_sitter_screen.dart';
 import 'notification_screen.dart';
+import '../services/fastapi_service.dart';
 import '../widgets/missing_pet_alert_wrapper.dart';
 
 // Color constants for consistent theming
@@ -31,6 +32,8 @@ class _MainNavigationState extends State<MainNavigation> {
   String userName = '';
   String userRole = '';
 
+  final FastApiService _fastApi = FastApiService.instance;
+
   @override
   void initState() {
     super.initState();
@@ -38,20 +41,38 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   Future<void> _loadUserInfo() async {
-    final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return;
+    try {
+      final user = await _fastApi.fetchUserById(widget.userId);
+      setState(() {
+        userName = (user['name'] as String?) ?? user['email'] ?? 'User';
+        userRole = (user['role'] as String?) ?? 'Pet Owner';
+        _isLoading = false;
+      });
+      return;
+    } catch (fastApiError) {
+      print('⚠️ FastAPI user fetch failed: $fastApiError');
+    }
 
-    final response = await Supabase.instance.client
-        .from('users')
-        .select('name, role')
-        .eq('id', userId)
-        .single();
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('name, role')
+          .eq('id', widget.userId)
+          .single();
 
-    setState(() {
-      userName = response['name'] ?? 'User';
-      userRole = response['role'] ?? 'Pet Owner';
-      _isLoading = false;
-    });
+      setState(() {
+        userName = response['name'] ?? 'User';
+        userRole = response['role'] ?? 'Pet Owner';
+        _isLoading = false;
+      });
+    } catch (supabaseError) {
+      print('⚠️ Supabase fallback user fetch failed: $supabaseError');
+      setState(() {
+        userName = 'User';
+        userRole = 'Pet Owner';
+        _isLoading = false;
+      });
+    }
   }
 
   void _onItemTapped(int index) {
@@ -63,7 +84,7 @@ class _MainNavigationState extends State<MainNavigation> {
   List<Widget> getScreens() {
     print('🚀 MainNavigation: getScreens called, creating PetProfileScreen');
     return [
-      HomeScreen(userId: Supabase.instance.client.auth.currentUser!.id),
+      HomeScreen(userId: widget.userId),
       PetProfileScreen(), 
       CommunityScreen(userId: widget.userId),
       ChatListScreen(),

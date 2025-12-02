@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart'; // kDebugMode
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../services/fastapi_service.dart';
 
 class RegistrationScreen extends StatefulWidget {
   @override
@@ -55,13 +55,12 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   void _register() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // Validate address dropdowns
     if (selectedProvince == null ||
         selectedMunicipality == null ||
         selectedBarangay == null ||
         selectedDistrict == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please select your complete address.')),
+        const SnackBar(content: Text('Please select your complete address.')),
       );
       return;
     }
@@ -72,181 +71,28 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       final safeAddress =
           '${selectedDistrict!}, ${selectedBarangay!}, ${selectedMunicipality!}, ${selectedProvince!}';
 
-      final response = await Supabase.instance.client.auth.signUp(
+      await FastApiService.instance.signUp(
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
-        data: {
-          // Store basic info and address components in auth.users metadata
-          'name': nameController.text.trim(),
-          'full_name': nameController.text.trim(),
-          'role': selectedRole,
-          'province': selectedProvince,
-          'municipality': selectedMunicipality,
-          'barangay': selectedBarangay,
-          'district': selectedDistrict,
-        },
+        name: nameController.text.trim(),
+        role: selectedRole,
+        address: safeAddress,
       );
 
-      if (response.user != null) {
-        // Insert user data regardless of session status
-        // This ensures data is saved even with email verification required
-        try {
-          if (kDebugMode) {
-            print('Inserting user data for user ${response.user!.id}');
-            print('Address: $safeAddress');
-            print('Status: Active');
-          }
-
-          final userPayload = {
-            'id': response.user!.id,
-            'name': nameController.text.trim(),
-            'role': selectedRole,
-            'address': safeAddress,
-            'status': 'Active',
-            'created_at': DateTime.now().toUtc().toIso8601String(),
-          };
-
-          if (kDebugMode) {
-            print('User payload: $userPayload');
-          }
-
-          // Try direct insert first
-          try {
-            final insertResult = await Supabase.instance.client
-                .from('users')
-                .insert(userPayload)
-                .select();
-            if (kDebugMode) {
-              print('Insert result: $insertResult');
-            }
-          } catch (insertError) {
-            if (kDebugMode) {
-              print('Insert failed, trying upsert: $insertError');
-            }
-            // If insert fails (maybe user already exists), try upsert
-            final upsertResult = await Supabase.instance.client
-                .from('users')
-                .upsert(userPayload, onConflict: 'id')
-                .select();
-            if (kDebugMode) {
-              print('Upsert result: $upsertResult');
-            }
-          }
-
-          // If user registered as Pet Sitter, create sitter profile
-          if (selectedRole == 'Pet Sitter') {
-            try {
-              final sitterPayload = {
-                'user_id': response.user!.id,
-                'bio': null, // User can fill this later
-                'experience': 0, // Default to 0, user can update later
-                'is_available': true,
-                'hourly_rate': null, // User can set this later
-              };
-
-              final sitterResult = await Supabase.instance.client
-                  .from('sitters')
-                  .insert(sitterPayload)
-                  .select();
-              
-              if (kDebugMode) {
-                print('Sitter profile created: $sitterResult');
-              }
-            } catch (sitterError) {
-              if (kDebugMode) {
-                print('Failed to create sitter profile: $sitterError');
-              }
-              // Don't fail the entire registration if sitter profile creation fails
-              // User can complete their sitter profile later
-            }
-          }
-
-          // Verify the data was actually stored
-          final verifyResult = await Supabase.instance.client
-              .from('users')
-              .select('id, name, role, address, status')
-              .eq('id', response.user!.id)
-              .maybeSingle();
-
-          if (kDebugMode) {
-            print('Verification query result: $verifyResult');
-          }
-
-          if (verifyResult == null) {
-            if (kDebugMode) {
-              print('❌ User data was not found after insert/upsert!');
-            }
-          } else {
-            if (kDebugMode) {
-              print('✅ User data verified: $verifyResult');
-            }
-          }
-        } on PostgrestException catch (e) {
-          if (kDebugMode) {
-            print('Database insert PostgrestException ${e.code}: ${e.message} ${e.details}');
-          }
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not save user data: ${e.message}')),
-            );
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print('Database insert error: $e');
-          }
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not save user data. Please try again.')),
-            );
-          }
-        }
-
-        // Handle different registration scenarios
-        if (response.session == null) {
-          // Email verification required
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Verification email sent. Please confirm to finish registration.')),
-          );
-        } else {
-          // Immediate login (if email verification is disabled)
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Registration successful!')),
-          );
-        }
-
-        // Always redirect to login after registration
-        if (mounted) {
-          Navigator.pushReplacementNamed(context, '/login');
-        }
-      } else {
-        // No user returned and no exception thrown: treat as unknown error
-        throw Exception('Signup failed. Please try again later.');
-      }
-    } on AuthException catch (e) {
-      if (kDebugMode) {
-        print('AuthException on signUp: ${e.message}');
-      }
-      final msg = e.message.toLowerCase();
-      String friendly = e.message;
-      if (msg.contains('already registered') || msg.contains('duplicate key')) {
-        friendly = 'Email already registered. Try logging in instead.';
-      } else if (msg.contains('database error saving new user') ||
-          msg.contains('unexpected_failure') ||
-          msg.contains('constraint') ||
-          msg.contains('violates')) {
-        friendly = 'Signup failed due to a server constraint. Please try again later or contact support.';
-      }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendly)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Registration submitted! Please log in once your account is active.')),
+        );
+        Navigator.pushReplacementNamed(context, '/login');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('Unhandled signup error: $e');
+        print('FastAPI signup error: $e');
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
       }
     } finally {
       if (mounted) setState(() => isLoading = false);

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // + add
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/main_navigation.dart';
@@ -17,14 +17,17 @@ import 'widgets/call_invite_wrapper.dart';
 import 'services/notification_service.dart';
 import 'services/permission_service.dart';
 import 'services/auto_migration_service.dart';
+import 'services/fastapi_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // Load environment variables
   await dotenv.load(fileName: ".env");
-  
-  // Initialize Supabase
+
+  await FastApiService.instance.initialize();
+
+  // Initialize Supabase for the features that still rely on the client SDK
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL'] ?? '',
     anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',

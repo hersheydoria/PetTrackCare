@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'pets_screen.dart';
 import '../widgets/saved_posts_modal.dart';
+import '../services/fastapi_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -22,44 +23,59 @@ class OwnerProfileScreen extends StatefulWidget {
 }
 
 class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTickerProviderStateMixin {
-  User? user = Supabase.instance.client.auth.currentUser;
-  Map<String, dynamic> metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
+  final FastApiService _fastApi = FastApiService.instance;
+  Map<String, dynamic>? _currentUser;
+  Map<String, dynamic> metadata = {};
   Map<String, dynamic> userData = {}; // Store user data from public.users table
+  List<Map<String, dynamic>> _pets = [];
+  bool _profileLoading = true;
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
   
   // Helper to refresh user and metadata after update
   Future<void> _refreshUserMetadata() async {
-    final updatedUser = Supabase.instance.client.auth.currentUser;
-    
-    // Load user data from public.users table (name, profile_picture, and address)
+    setState(() {
+      _profileLoading = true;
+    });
     try {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('name, profile_picture, address')
-          .eq('id', updatedUser?.id ?? '')
-          .single();
-      
+      final user = await _fastApi.fetchCurrentUser();
+      final ownerId = user['id']?.toString();
+      final pets = ownerId != null ? await _fastApi.fetchPets(ownerId: ownerId) : <Map<String, dynamic>>[];
+
       setState(() {
-        user = updatedUser;
-        metadata = updatedUser?.userMetadata ?? {};
-        userData = response;
+        _currentUser = user;
+        metadata = Map<String, dynamic>.from(user['metadata'] ?? {});
+        userData = {
+          'name': user['name'],
+          'profile_picture': user['profile_picture'],
+          'address': user['address'],
+        };
+        _pets = pets;
       });
     } catch (e) {
       print('Error loading user data: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load profile data'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
       setState(() {
-        user = updatedUser;
-        metadata = updatedUser?.userMetadata ?? {};
+        _profileLoading = false;
       });
     }
   }
 
   late TabController _tabController;
 
-  String get name => userData['name'] ?? metadata['name'] ?? 'Pet Owner';
-  String get email => user?.email ?? 'No email';
-  String get address =>
-      userData['address'] ?? metadata['address'] ?? metadata['location'] ?? 'No address provided';
+  String get name => (userData['name'] ?? metadata['name'])?.toString() ?? 'Pet Owner';
+  String get email => _currentUser?['email']?.toString() ?? 'No email';
+  String get address => (userData['address'] ?? metadata['address'] ?? metadata['location'])?.toString() ?? 'No address provided';
+  String? get profilePicture => (userData['profile_picture'] ?? metadata['profile_picture'])?.toString();
 
   // Helper method to get formatted age for pet display
   String _getFormattedAge(Map<String, dynamic> pet) {
@@ -132,7 +148,7 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
   }
 
   void _logout(BuildContext context) async {
-    await Supabase.instance.client.auth.signOut();
+    await _fastApi.logout();
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
@@ -172,7 +188,10 @@ class _OwnerProfileScreenState extends State<OwnerProfileScreen> with SingleTick
               left: 24,
               right: 24,
             ),
-            child: _AddPetForm(onPetAdded: () => setState(() {})),
+            child: _AddPetForm(
+              onPetAdded: () => setState(() {}),
+              ownerId: _currentUser?['id']?.toString(),
+            ),
           ),
         ),
       );
@@ -230,8 +249,8 @@ Future<void> _pickProfileImage() async {
 
   final file = File(pickedFile.path);
   final fileBytes = await file.readAsBytes();
-  final fileName =
-      'profile_images/${user!.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+  final ownerId = _currentUser?['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+  final fileName = 'profile_images/${ownerId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
   // Show loading dialog
   showDialog(
@@ -275,17 +294,15 @@ Future<void> _pickProfileImage() async {
 
     final publicUrl = bucket.getPublicUrl(fileName);
 
-    // Store profile_picture in public.users table, not auth.users
-    await supabase
-      .from('users')
-      .update({'profile_picture': publicUrl})
-      .eq('id', user!.id);
+    // Update FastAPI backend record as well
+    await _fastApi.updateCurrentUser({'profile_picture': publicUrl});
 
     setState(() {
       _profileImage = file;
       metadata['profile_picture'] = publicUrl;
       userData['profile_picture'] = publicUrl;
     });
+    await _refreshUserMetadata();
 
     // Close loading dialog
     Navigator.of(context).pop();
@@ -667,46 +684,10 @@ Widget _buildImageSourceOption({
   );
 }
 
-Future<void> pickAndUploadImage() async {
-  final ImagePicker picker = ImagePicker();
-  final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
-
-  if (pickedFile == null) {
-    print('No image selected.');
-    return;
-  }
-
-  final file = File(pickedFile.path);
-  final fileBytes = await file.readAsBytes();
-
-  final fileName = 'user_uploads/${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-  try {
-    final supabase = Supabase.instance.client;
-
-    await supabase.storage
-        .from('your-bucket-name') // Replace with your actual bucket name
-        .uploadBinary(fileName, fileBytes,
-            fileOptions: const FileOptions(contentType: 'image/jpeg'));
-
-    final publicUrl = supabase.storage
-        .from('your-bucket-name')
-        .getPublicUrl(fileName);
-
-    print('✅ Uploaded! Image URL: $publicUrl');
-  } catch (e) {
-    print('❌ Upload failed: $e');
-  }
-}
-
   Future<List<Map<String, dynamic>>> _fetchPets() async {
-    final ownerId = user?.id;
+    final ownerId = _currentUser?['id']?.toString();
     if (ownerId == null) return [];
-    final response = await Supabase.instance.client
-        .from('pets')
-        .select()
-        .eq('owner_id', ownerId);
-    return List<Map<String, dynamic>>.from(response);
+    return await _fastApi.fetchPets(ownerId: ownerId);
   }
 
   // Enhanced pet tile with modern styling
@@ -849,6 +830,7 @@ Future<void> pickAndUploadImage() async {
                                     child: _AddPetForm(
                                       onPetAdded: () => setState(() {}),
                                       initialPet: pet,
+                                      ownerId: _currentUser?['id']?.toString(),
                                     ),
                                   ),
                                 ),
@@ -897,8 +879,7 @@ Future<void> pickAndUploadImage() async {
     );
     if (confirmed != true) return;
     try {
-      await Supabase.instance.client.from('pets').delete().eq('id', petId);
-      // Supabase client returns list for select/delete depending on setup; we ignore details
+      await FastApiService.instance.deletePet(petId);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pet deleted")));
       setState(() {}); // triggers rebuild -> FutureBuilder will refetch
     } catch (e) {
@@ -1529,23 +1510,10 @@ Future<void> pickAndUploadImage() async {
                               onPressed: () async {
                                 setSt(() => isLoading = true);
                                 try {
-                                  final supabase = Supabase.instance.client;
-                                  
-                                  // Update public.users table (name and address)
-                                  await supabase
-                                      .from('users')
-                                      .update({
-                                        'name': newName,
-                                        'address': newAddress,
-                                      })
-                                      .eq('id', user!.id);
-                                  
-                                  // Update auth metadata (name and address for backward compatibility)
-                                  await supabase.auth.updateUser(UserAttributes(data: {
+                                  await _fastApi.updateCurrentUser({
                                     'name': newName,
                                     'address': newAddress,
-                                  }));
-                                  
+                                  });
                                   await _refreshUserMetadata();
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
@@ -1647,8 +1615,8 @@ Future<void> pickAndUploadImage() async {
                                 
                                 if (confirm == true) {
                                   try {
-                                    await Supabase.instance.client.auth.signOut();
-                                    await Supabase.instance.client.from('users').delete().eq('id', user!.id);
+                                    await _fastApi.deleteCurrentUser();
+                                    await _fastApi.logout();
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                         content: Text('Account deleted successfully'),
@@ -1911,14 +1879,11 @@ Future<void> pickAndUploadImage() async {
                               ),
                               onPressed: () async {
                                 setSt(() => isLoading = true);
-                                try {
-                                  await Supabase.instance.client.auth.updateUser(
-                                    UserAttributes(data: {
+                                  try {
+                                    await _fastApi.updateCurrentUser({
                                       'notification_preferences': {'enabled': enabled}
-                                    })
-                                  );
-                                  // Refresh user metadata to ensure changes take effect
-                                  await _refreshUserMetadata();
+                                    });
+                                    await _refreshUserMetadata();
                                   Navigator.pop(ctx);
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
@@ -2352,9 +2317,9 @@ Future<void> pickAndUploadImage() async {
 
                                   setSt(() => _isLoading = true);
                                   try {
-                                    await Supabase.instance.client.auth.updateUser(
-                                      UserAttributes(password: _newPasswordController.text.trim()),
-                                    );
+                                    await _fastApi.updateCurrentUser({
+                                      'password': _newPasswordController.text.trim(),
+                                    });
                                     Navigator.pop(ctx);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -2903,13 +2868,7 @@ Future<void> pickAndUploadImage() async {
                             }
                             setState(() => isLoading = true);
                             try {
-                              await Supabase.instance.client
-                                  .from('feedback')
-                                  .insert({
-                                'user_id': user?.id,
-                                'message': text,
-                                'created_at': DateTime.now().toIso8601String(),
-                              });
+                              await _fastApi.submitFeedback(text);
                               Navigator.pop(context);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -3619,7 +3578,7 @@ Future<void> pickAndUploadImage() async {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => SavedPostsModal(userId: user?.id ?? ''),
+      builder: (context) => SavedPostsModal(userId: _currentUser?['id']?.toString() ?? ''),
     );
   }
 
@@ -3673,8 +3632,9 @@ Future<void> pickAndUploadImage() async {
 class _AddPetForm extends StatefulWidget {
   final VoidCallback onPetAdded;
   final Map<String, dynamic>? initialPet; // when provided, form is in "edit" mode
+  final String? ownerId;
 
-  _AddPetForm({required this.onPetAdded, this.initialPet});
+  _AddPetForm({required this.onPetAdded, this.initialPet, this.ownerId});
 
   @override
   State<_AddPetForm> createState() => _AddPetFormState();
@@ -4710,20 +4670,32 @@ class _AddPetFormState extends State<_AddPetForm> {
     return;
   }
 
-  final userId = Supabase.instance.client.auth.currentUser?.id;
-  if (userId == null) return;
-
-  // enforce 3-pet limit server-side check
-  final existing = await Supabase.instance.client
-      .from('pets')
-      .select('id')
-      .eq('owner_id', userId);
-  final currentCount = (existing as List?)?.length ?? 0;
-  // if creating and already 3, block (if editing allow)
-  final isEditing = widget.initialPet != null;
-  if (!isEditing && currentCount >= 3) {
+  final ownerId = widget.ownerId;
+  if (ownerId == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Pet limit reached (3). Cannot add more.')),
+      SnackBar(
+        content: Text('Profile not loaded. Please try again.'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    return;
+  }
+
+  final isEditing = widget.initialPet != null;
+
+  try {
+    final existingPets = await FastApiService.instance.fetchPets(ownerId: ownerId);
+    if (!isEditing && existingPets.length >= 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Pet limit reached (3). Cannot add more.')),
+      );
+      return;
+    }
+  } catch (e) {
+    print('❌ Error checking pet limit: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Unable to verify pet limit. Please try again.')),
     );
     return;
   }
@@ -4731,36 +4703,27 @@ class _AddPetFormState extends State<_AddPetForm> {
   setState(() => _isLoading = true);
 
   try {
-    final imageUrl = await _uploadPetImage(userId);
+    final imageUrl = await _uploadPetImage(ownerId);
+    final petPayload = {
+      'name': name,
+      'breed': breed,
+      'date_of_birth': dateOfBirth?.toIso8601String(),
+      'health': health,
+      'gender': gender!,
+      'weight': weight,
+      'type': _species,
+      if (imageUrl != null) 'profile_picture': imageUrl,
+    };
 
     if (isEditing) {
-      // update existing pet
-      final petId = widget.initialPet!['id'];
-      await Supabase.instance.client.from('pets').update({
-        'name': name,
-        'breed': breed,
-        'date_of_birth': dateOfBirth?.toIso8601String(),
-        'health': health,
-        'gender': gender!,
-        'weight': weight,
-        'type': _species,
-        if (imageUrl != null) 'profile_picture': imageUrl,
-      }).eq('id', petId);
-    } else {
-      final response = await Supabase.instance.client.from('pets').insert({
-        'name': name,
-        'breed': breed,
-        'date_of_birth': dateOfBirth?.toIso8601String(),
-        'health': health,
-        'gender': gender!,
-        'weight': weight,
-        'owner_id': userId,
-        'type': _species, // store species/type
-        'profile_picture': imageUrl, // ✅ Must match your DB column name
-      }).select();
-      if (response.isEmpty) {
-        throw Exception("No data returned. Check your RLS policy or table columns.");
+      final petId = widget.initialPet!['id']?.toString();
+      if (petId == null || petId.isEmpty) {
+        throw Exception('Pet ID missing for update');
       }
+      await FastApiService.instance.updatePet(petId, petPayload);
+    } else {
+      petPayload['owner_id'] = ownerId;
+      await FastApiService.instance.createPet(petPayload);
     }
 
     widget.onPetAdded();

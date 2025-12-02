@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'chat_detail_screen.dart';
 import 'notification_screen.dart';
+import '../services/fastapi_service.dart';
 import '../services/notification_service.dart';
 
 // Color palette
@@ -16,12 +19,14 @@ class ChatListScreen extends StatefulWidget {
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
-  final supabase = Supabase.instance.client;
+  final FastApiService _fastApi = FastApiService.instance;
   List<Map<String, dynamic>> messages = [];
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
   String _activeFilter = 'all';
+  Timer? _refreshTimer;
+  String? _currentUserId;
 
   // REMOVED: Call handling is now done by CallInviteService
   // final Set<String> _promptedCallIds = {};
@@ -31,8 +36,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   void initState() {
     super.initState();
-    fetchMessages();
-    setupRealtimeSubscription();
+    _loadCurrentUserId();
+    _startConversationPolling();
     _searchController.addListener(() {
       if (mounted) {
         setState(() {
@@ -44,6 +49,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
@@ -51,194 +57,55 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   // New: pull-to-refresh handler
   Future<void> _refreshAll() async {
-    await fetchMessages();
+    await _fetchConversations();
   }
 
-  void setupRealtimeSubscription() {
-    final channel = supabase.channel('public:messages');
-
-    channel
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'messages',
-          callback: (payload, [ref]) async {
-            print('🔄 Realtime message received in chat_list_screen');
-            fetchMessages(); // Refresh list on new message
-
-            // Handle new message notification
-            final newRow = payload.newRecord;
-            final currentUserId = supabase.auth.currentUser?.id;
-            final receiverId = newRow['receiver_id']?.toString();
-            final senderId = newRow['sender_id']?.toString();
-            final messageType = newRow['type']?.toString() ?? 'text';
-            final content = newRow['content']?.toString() ?? '';
-
-            print('📩 Realtime message details:');
-            print('   Current User: $currentUserId');
-            print('   Receiver: $receiverId');
-            print('   Sender: $senderId');
-            print('   Type: $messageType');
-            print('   Content: $content');
-
-            // Show notification if this user is the receiver and it's not a system message
-            if (receiverId == currentUserId && senderId != currentUserId && senderId != null && receiverId != null && messageType != 'call_accept' && messageType != 'call_decline') {
-              print('✅ This user should receive notification - processing...');
-              // Get sender name for notification
-              try {
-                final senderResponse = await supabase
-                    .from('users')
-                    .select('name')
-                    .eq('id', senderId)
-                    .single();
-                
-                final senderName = senderResponse['name'] as String? ?? 'Someone';
-                
-                // Format message preview
-                String messagePreview = content;
-                if (content.startsWith('[call_')) {
-                  if (content.contains('accept')) messagePreview = '📞 Call accepted';
-                  else if (content.contains('decline')) messagePreview = '📞 Call declined';
-                  else messagePreview = '📞 Incoming call';
-                } else if (content.length > 50) {
-                  messagePreview = '${content.substring(0, 47)}...';
-                }
-                
-                await sendMessageNotification(
-                  recipientId: receiverId,
-                  senderId: senderId,
-                  senderName: senderName,
-                  messagePreview: messagePreview,
-                );
-                print('✅ sendMessageNotification called successfully');
-              } catch (e) {
-                print('⚠️ Error getting sender name, using fallback notification');
-                // Fallback notification without sender name
-                await sendMessageNotification(
-                  recipientId: receiverId,
-                  senderId: senderId,
-                  senderName: 'New Message',
-                  messagePreview: content,
-                );
-              }
-            } else {
-              print('❌ Notification conditions not met:');
-              print('   receiverId == currentUserId: ${receiverId == currentUserId}');
-              print('   senderId != currentUserId: ${senderId != currentUserId}');
-              print('   messageType: $messageType (excluded: call_accept, call_decline)');
-            }
-
-            // DISABLED: Call invite handling is now done globally by CallInviteService
-            // This prevents duplicate dialogs and notifications
-            /*
-            final me = supabase.auth.currentUser?.id;
-            if (me == null) return;
-
-            final String type = (newRow['type'] ?? '').toString();
-            final String to = (newRow['receiver_id'] ?? '').toString();
-            final String from = (newRow['sender_id'] ?? '').toString();
-            final String callId = (newRow['call_id'] ?? '').toString();
-            final String mode = (newRow['call_mode'] ?? 'voice').toString();
-
-            // Only prompt when this user is the callee and it's a new call invite
-            if (type == 'call' && to == me && callId.isNotEmpty) {
-              if (_promptedCallIds.contains(callId)) return;
-              _promptedCallIds.add(callId);
-
-              if (!mounted) return;
-              final accept = await showDialog<bool>(
-                context: context,
-                barrierDismissible: true,
-                builder: (_) => AlertDialog(
-                  title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
-                  content: const Text('Join this call?'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Decline')),
-                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Accept')),
-                  ],
-                ),
-              );
-
-              if (accept == true && mounted) {
-                // Notify caller
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': me,
-                    'receiver_id': from,
-                    'type': 'call_accept',
-                    'call_id': callId,
-                    'call_mode': mode,
-                    'content': '[call_accept]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-                await _joinZegoCall(callId: callId, video: mode == 'video');
-              } else {
-                // Notify decline
-                try {
-                  await supabase.from('messages').insert({
-                    'sender_id': me,
-                    'receiver_id': from,
-                    'type': 'call_decline',
-                    'call_id': callId,
-                    'call_mode': mode,
-                    'content': '[call_decline]',
-                    'is_seen': false,
-                  });
-                } catch (_) {}
-              }
-            }
-            */
-          },
-        )
-        .subscribe();
-  }
-
-  Future<void> fetchMessages() async {
-    final userId = supabase.auth.currentUser?.id;
-    if (userId == null) return;
-
-    // Fetch message list with sender/receiver profile_picture from users table
-    final response = await supabase
-        .from('messages')
-        .select('''
-          sender_id,
-          receiver_id,
-          content,
-          sent_at,
-          is_seen,
-          sender:sender_id(id, name, profile_picture),
-          receiver:receiver_id(id, name, profile_picture)
-        ''')
-        .or('sender_id.eq.$userId,receiver_id.eq.$userId')
-        .order('sent_at', ascending: false);
-
-    final grouped = <String, Map<String, dynamic>>{};
-    for (var msg in response) {
-      final isSender = msg['sender_id'] == userId;
-      final senderUser = msg['sender'] as Map<String, dynamic>? ?? {};
-      final receiverUser = msg['receiver'] as Map<String, dynamic>? ?? {};
-
-      final contactId = isSender ? msg['receiver_id'].toString() : msg['sender_id'].toString();
-      final contactUser = isSender ? receiverUser : senderUser;
-      final contactName = contactUser['name'] ?? 'Unknown';
-      final contactProfilePictureUrl = contactUser['profile_picture'] as String?;
-
-      if (!grouped.containsKey(contactId)) {
-        grouped[contactId] = {
-          'contactId': contactId,
-          'contactName': contactName,
-          'lastMessage': msg['content'],
-          'isSeen': msg['is_seen'],
-          'isSender': isSender,
-          'contactProfilePictureUrl': contactProfilePictureUrl,
-        };
-      }
-    }
-
-    setState(() {
-      messages = grouped.values.toList();
+  void _startConversationPolling() {
+    _refreshTimer?.cancel();
+    _fetchConversations();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 7), (_) {
+      _fetchConversations();
     });
+  }
+
+  Future<void> _loadCurrentUserId() async {
+    try {
+      final profile = await _fastApi.fetchCurrentUser();
+      if (!mounted) return;
+      setState(() {
+        _currentUserId = profile['id'] as String?;
+      });
+    } catch (e) {
+      print('⚠️ FastAPI fetch current user failed: $e');
+    }
+  }
+
+  Future<void> _fetchConversations() async {
+    try {
+      final rows = await _fastApi.fetchConversations(limit: 32);
+      final mapped = rows.map<Map<String, dynamic>>((entry) {
+        final contactId = (entry['contact_id'] ?? '').toString();
+        final unread = entry['unread_count'] as int? ?? 0;
+        final isSender = entry['is_sender_last_message'] == true;
+        final profile = (entry['contact_profile_picture'] as String?)?.trim();
+        return {
+          'contactId': contactId,
+          'contactName': (entry['contact_name'] ?? 'Unknown').toString(),
+          'lastMessage': (entry['last_message'] ?? '').toString(),
+          'isSeen': unread == 0,
+          'isSender': isSender,
+          'contactProfilePictureUrl': profile != null && profile.isNotEmpty
+              ? _fastApi.resolveMediaUrl(profile)
+              : null,
+        };
+      }).where((chat) => chat['contactId'].toString().isNotEmpty).toList();
+      if (!mounted) return;
+      setState(() {
+        messages = mapped;
+      });
+    } catch (e) {
+      print('⚠️ FastAPI fetch conversations failed: $e');
+    }
   }
 
   int get _unreadCount => messages.where((chat) {
@@ -644,18 +511,20 @@ class _ChatListScreenState extends State<ChatListScreen> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () async {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChatDetailScreen(
-                  userId: supabase.auth.currentUser!.id,
-                  receiverId: chat['contactId'],
-                  userName: chat['contactName'],
+            onTap: () async {
+              final currentUserId = _currentUserId;
+              if (currentUserId == null) return;
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChatDetailScreen(
+                    userId: currentUserId,
+                    receiverId: chat['contactId'],
+                    userName: chat['contactName'],
+                  ),
                 ),
-              ),
-            );
-            fetchMessages();
+              );
+              await _fetchConversations();
           },
           borderRadius: BorderRadius.circular(16),
           child: AnimatedContainer(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
@@ -11,6 +12,7 @@ import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/notification_service.dart';
 import '../widgets/call_dialogs.dart';
+import '../services/fastapi_service.dart';
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -23,11 +25,12 @@ class ChatDetailScreen extends StatefulWidget {
   final String receiverId;
   final String userName;
 
-  ChatDetailScreen({
+  const ChatDetailScreen({
     required this.userId,
     required this.receiverId,
     required this.userName,
-  });
+    Key? key,
+  }) : super(key: key);
 
   @override
   _ChatDetailScreenState createState() => _ChatDetailScreenState();
@@ -36,6 +39,7 @@ class ChatDetailScreen extends StatefulWidget {
 class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final TextEditingController _messageController = TextEditingController();
   final SupabaseClient supabase = Supabase.instance.client;
+  final FastApiService _fastApi = FastApiService.instance;
   List<dynamic> messages = [];
   bool isTyping = false;
   bool otherUserTyping = false;
@@ -68,6 +72,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final Map<String, RealtimeChannel> _sigChans = {};
 
   final ScrollController _scrollController = ScrollController();
+  Timer? _typingStatusTimer;
   final List<_ConversationHighlight> _conversationHighlights = const [
     _ConversationHighlight(
       icon: Icons.pets_outlined,
@@ -146,8 +151,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     _messageController.addListener(_messageTextListener);
     _recorder = FlutterSoundRecorder();
     _initAudio(); // ask mic permission, open recorder & player
-    fetchMessages().then((_) => _scrollToBottom());
-    markMessagesAsSeen();
+    _loadThread().then((_) => _scrollToBottom());
+    _markSeen();
     subscribeToMessages();
     subscribeToTyping();
     listenToTyping();
@@ -170,154 +175,66 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   Future<void> _loadSelfName() async {
     try {
-      final row = await supabase
-          .from('users')
-          .select('name')
-          .eq('id', widget.userId)
-          .maybeSingle();
-      if (mounted) {
-        setState(() {
-          _myDisplayName = (row?['name']?.toString() ?? '').trim();
-        });
-      }
-    } catch (_) {
-      // ignore
+      final profile = await _fastApi.fetchUserById(widget.userId);
+      if (!mounted) return;
+      setState(() {
+        _myDisplayName = (profile['name'] as String?)?.trim() ?? profile['email'] ?? widget.userId;
+      });
+    } catch (e) {
+      print('⚠️ FastAPI load self name failed: $e');
     }
   }
 
   Future<void> _loadReceiverProfile() async {
     try {
-      final row = await supabase
-          .from('users')
-          .select('profile_picture')
-          .eq('id', widget.receiverId)
-          .maybeSingle();
-      
-      print('Receiver profile data: $row'); // Debug log
-      
-      if (mounted) {
-        setState(() {
-          _receiverProfilePicture = row?['profile_picture']?.toString();
-        });
-        print('Set receiver profile picture: $_receiverProfilePicture'); // Debug log
-      }
+      final profile = await _fastApi.fetchUserById(widget.receiverId);
+      if (!mounted) return;
+      setState(() {
+        _receiverProfilePicture = profile['profile_picture'] as String?;
+      });
     } catch (e) {
-      print('Error loading receiver profile: $e'); // Debug log
+      print('⚠️ FastAPI load receiver profile failed: $e');
     }
   }
 
-  // Get full URL for profile picture
+  Future<String> _resolveSenderName() async {
+    if (_myDisplayName != null && _myDisplayName!.isNotEmpty) {
+      return _myDisplayName!;
+    }
+    try {
+      final profile = await _fastApi.fetchUserById(widget.userId);
+      final name = (profile['name'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) {
+        return name;
+      }
+      final email = profile['email'] as String?;
+      if (email != null && email.isNotEmpty) {
+        return email;
+      }
+    } catch (e) {
+      print('⚠️ FastAPI resolve sender name failed: $e');
+    }
+    return 'Someone';
+  }
+
+  // Get full URL for profile pictures or fallback to FastAPI resolver
   String? _getProfilePictureUrl(String? profilePicture) {
     if (profilePicture == null || profilePicture.isEmpty) {
-      print('Profile picture is null or empty'); // Debug log
       return null;
     }
-    
-    print('Processing profile picture: $profilePicture'); // Debug log
-    
-    // If it's already a full URL, return as is
     if (profilePicture.startsWith('http://') || profilePicture.startsWith('https://')) {
-      print('Profile picture is already a full URL'); // Debug log
       return profilePicture;
     }
-    
-    // If it's a storage path, try different bucket names
-    try {
-      // Try common bucket names for profile pictures
-      List<String> possibleBuckets = ['profile-pictures', 'avatars', 'users', 'images'];
-      
-      for (String bucket in possibleBuckets) {
-        try {
-          String url = supabase.storage.from(bucket).getPublicUrl(profilePicture);
-          print('Generated URL for bucket $bucket: $url'); // Debug log
-          return url;
-        } catch (e) {
-          print('Failed to get URL from bucket $bucket: $e'); // Debug log
-          continue;
-        }
-      }
-      
-      // If all buckets failed, try the default one
-      String url = supabase.storage.from('profile-pictures').getPublicUrl(profilePicture);
-      print('Using default bucket URL: $url'); // Debug log
-      return url;
-    } catch (e) {
-      print('Error generating profile picture URL: $e'); // Debug log
-      return null;
-    }
-  }
-
-  // Build a signed URL for a storage object (works for private buckets), fallback to public URL
-  Future<String?> _signedUrlFor(String bucket, String path, {int ttlSeconds = 60 * 60 * 24}) async {
-    try {
-      return await supabase.storage.from(bucket).createSignedUrl(path, ttlSeconds);
-    } catch (_) {
-      try {
-        return supabase.storage.from(bucket).getPublicUrl(path);
-      } catch (_) {
-        return null;
-      }
-    }
-  }
-
-  // Normalize message media reference into bucket+path
-  ({String bucket, String path}) _resolveStorage(String type, String? raw) {
-    // Default bucket
-    String bucket = 'chat-media';
-    var value = (raw ?? '').trim();
-
-    // Strip full public/signed URLs to a relative path: .../object/public/<bucket>/<path>
-    final reFull = RegExp(r'.*/storage/v1/object/(?:public|sign)/([^/]+)/(.+)$');
-    final m = reFull.firstMatch(value);
-    if (m != null) {
-      bucket = m.group(1)!;
-      final path = m.group(2)!;
-      return (bucket: bucket, path: path);
-    }
-
-    // Accept full http(s) later in _mediaUrl
-
-    // Strip "public/<bucket>/<path>" shorthand
-    if (value.startsWith('public/')) {
-      final rest = value.substring('public/'.length);
-      final slash = rest.indexOf('/');
-      if (slash > 0) {
-        bucket = rest.substring(0, slash);
-        final path = rest.substring(slash + 1);
-        return (bucket: bucket, path: path);
-      }
-    }
-
-    // Remove leading slashes
-    value = value.replaceFirst(RegExp(r'^/+'), '');
-
-    // If prefixed with bucket name (e.g., chat-media/images/...), drop the bucket segment
-    if (value.startsWith('chat-media/')) value = value.substring('chat-media/'.length);
-    if (value.startsWith('voice/')) {
-      // Ambiguous: could be folder or bucket. If type is voice, assume current default bucket.
-      return (bucket: bucket, path: value);
-    }
-    if (value.startsWith('images/')) {
-      return (bucket: bucket, path: value);
-    }
-
-    // Fallbacks by type
-    if (type == 'voice') return (bucket: bucket, path: 'voice/$value');
-    return (bucket: bucket, path: 'images/$value');
+    return _fastApi.resolveMediaUrl(profilePicture);
   }
 
   Future<String?> _mediaUrl(Map msg) async {
-    final type = (msg['type'] ?? '').toString();
     final media = msg['media_url']?.toString();
     if (media == null || media.isEmpty) return null;
-
-    // If a full URL was stored, use it directly
     if (media.startsWith('http://') || media.startsWith('https://')) {
       return media;
     }
-
-    final ref = _resolveStorage(type, media);
-    return _signedUrlFor(ref.bucket, ref.path);
+    return _fastApi.resolveMediaUrl(media);
   }
 
   // Toggle play/pause for a given voice message
@@ -350,90 +267,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     _callRx = supabase.channel('call_sig:$myKey');
     _callRx!
         // DISABLED: call_invite is now handled globally by CallInviteService
-        /* .onBroadcast(
-          event: 'call_invite',
-          callback: (payload, [ref]) async {
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
-            if (body == null) return;
-            final to = (body['to'] ?? '').toString();
-            final from = (body['from'] ?? '').toString();
-            final callId = (body['call_id'] ?? '').toString();
-            final mode = (body['mode'] ?? 'voice').toString();
-            if (to != widget.userId || callId.isEmpty) return;
-            if (_incomingPromptedCallId == callId) return;
-            _incomingPromptedCallId = callId;
-
-            if (!mounted) return;
-            final accept = await showDialog<bool>(
-              context: context,
-              barrierDismissible: true,
-              builder: (_) => AlertDialog(
-                title: Text(mode == 'video' ? 'Incoming video call' : 'Incoming voice call'),
-                content: const Text('Join this call?'),
-                actions: [
-                  TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Decline')),
-                  TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Accept')),
-                ],
-              ),
-            );
-
-            if (accept == true) {
-              // Debug: Log call details for receiver
-              print('🔵 RECEIVER accepting call:');
-              print('   From: $from');
-              print('   To: ${widget.userId}');
-              print('   CallID received: $callId');
-              print('   Mode: $mode');
-              
-              // DB record for history
-              try {
-                await supabase.from('messages').insert({
-                  'sender_id': widget.userId,
-                  'receiver_id': from,
-                  'type': 'call_accept',
-                  'call_id': callId,
-                  'call_mode': mode,
-                  'content': '[call_accept]',
-                  'is_seen': false,
-                });
-              } catch (_) {}
-              // Realtime acknowledge
-              await _sendSignal(from, 'call_accept', {
-                'from': widget.userId,
-                'to': from,
-                'call_id': callId,
-                'mode': mode,
-              });
-              
-              print('🔵 RECEIVER joining Zego with callID: $callId');
-              // Longer delay to let caller's Zego instance fully initialize the room
-              print('🔵 RECEIVER waiting 1.5 seconds for room initialization...');
-              await Future.delayed(Duration(milliseconds: 1500));
-              print('🔵 RECEIVER now joining...');
-              await _joinZegoCall(callId: callId, video: mode == 'video');
-            } else {
-              // DB record for history
-              try {
-                await supabase.from('messages').insert({
-                  'sender_id': widget.userId,
-                  'receiver_id': from,
-                  'type': 'call_decline',
-                  'call_id': callId,
-                  'call_mode': mode,
-                  'content': '[call_decline]',
-                  'is_seen': false,
-                });
-              } catch (_) {}
-              // Realtime decline
-              await _sendSignal(from, 'call_decline', {
-                'from': widget.userId,
-                'to': from,
-                'call_id': callId,
-                'mode': mode,
-              });
-            }
-          },
-        ) */
         .onBroadcast(
           event: 'call_accept',
           callback: (payload, [ref]) async {
@@ -589,23 +422,23 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       _player?.closePlayer();
     } catch (_) {}
     _stopIncomingCallTone();
+    _typingStatusTimer?.cancel();
     supabase.removeAllChannels();
     // No-op: removeAllChannels() already cleans up _callRx/_sigChans
     super.dispose();
   }
 
-  Future<void> fetchMessages() async {
-    final response = await supabase
-        .from('messages')
-        .select()
-        .or(
-            'and(sender_id.eq.${widget.userId},receiver_id.eq.${widget.receiverId}),and(sender_id.eq.${widget.receiverId},receiver_id.eq.${widget.userId})')
-        .order('sent_at', ascending: true);
-
-    setState(() {
-      messages = response;
-    });
-    _scrollToBottom();
+  Future<void> _loadThread() async {
+    try {
+      final rows = await _fastApi.fetchConversationThread(widget.receiverId);
+      if (!mounted) return;
+      setState(() {
+        messages = rows;
+      });
+      _scrollToBottom();
+    } catch (e) {
+      print('⚠️ FastAPI load thread failed: $e');
+    }
   }
 
   void _scrollToBottom() {
@@ -618,12 +451,44 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
-  Future<void> markMessagesAsSeen() async {
-    await supabase.from('messages').update({'is_seen': true}).match({
-      'sender_id': widget.receiverId,
-      'receiver_id': widget.userId,
+  Future<void> _markSeen() async {
+    try {
+      await _fastApi.markMessagesAsSeen(widget.receiverId);
+    } catch (e) {
+      print('⚠️ FastAPI mark seen failed: $e');
+    }
+  }
+
+  Future<void> _refreshConversation() async {
+    await _loadThread();
+    await _markSeen();
+  }
+
+  Future<void> _postMessage({
+    required String content,
+    required String type,
+    String? mediaUrl,
+    String? receiverId,
+    String? callId,
+    String? callMode,
+  }) async {
+    final payload = <String, dynamic>{
+      'sender_id': widget.userId,
+      'receiver_id': receiverId ?? widget.receiverId,
+      'content': content,
+      'type': type,
       'is_seen': false,
-    });
+      if (mediaUrl != null && mediaUrl.isNotEmpty) 'media_url': mediaUrl,
+      if (callId != null && callId.isNotEmpty) 'call_id': callId,
+      if (callMode != null && callMode.isNotEmpty) 'call_mode': callMode,
+      if (_replyingToMessage != null) ...{
+        'reply_to_message_id': _replyingToMessage!['id'],
+        'reply_to_content': _getReplyPreview(_replyingToMessage!),
+        'reply_to_sender_id': _replyingToMessage!['sender_id'],
+      },
+    };
+
+    await _fastApi.sendMessage(payload);
   }
 
   void subscribeToMessages() {
@@ -641,8 +506,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             // Refresh chat list
             if ((from == widget.userId && to == widget.receiverId) ||
                 (from == widget.receiverId && to == widget.userId)) {
-              await fetchMessages();
-              await markMessagesAsSeen();
+              await _refreshConversation();
             }
 
             // Handle call invite when I am the receiver
@@ -675,17 +539,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     _dismissIncomingCallPrompt(dialogContext: ctx);
 
                     if (!mounted) return;
-                    try {
-                      await supabase.from('messages').insert({
-                        'sender_id': widget.userId,
-                        'receiver_id': callerId,
-                        'type': 'call_accept',
-                        'call_id': callId,
-                        'call_mode': mode,
-                        'content': '[call_accept]',
-                        'is_seen': false,
-                      });
-                    } catch (_) {}
+                    await _postMessage(
+                      content: '[call_accept]',
+                      receiverId: callerId,
+                      type: 'call_accept',
+                      callId: callId,
+                      callMode: mode,
+                    );
+                    await _refreshConversation();
                     await _sendSignal(callerId, 'call_accept', {
                       'from': widget.userId,
                       'to': callerId,
@@ -697,17 +558,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   onDecline: (ctx) async {
                     _dismissIncomingCallPrompt(dialogContext: ctx);
 
-                    try {
-                      await supabase.from('messages').insert({
-                        'sender_id': widget.userId,
-                        'receiver_id': callerId,
-                        'type': 'call_decline',
-                        'call_id': callId,
-                        'call_mode': mode,
-                        'content': '[call_decline]',
-                        'is_seen': false,
-                      });
-                    } catch (_) {}
+                    await _postMessage(
+                      content: '[call_decline]',
+                      receiverId: callerId,
+                      type: 'call_decline',
+                      callId: callId,
+                      callMode: mode,
+                    );
+                    await _refreshConversation();
                     await _sendSignal(callerId, 'call_decline', {
                       'from': widget.userId,
                       'to': callerId,
@@ -798,15 +656,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         subtitle: 'Waiting for ${widget.userName} to answer',
         onCancel: (ctx) async {
           try {
-            await supabase.from('messages').insert({
-              'sender_id': widget.userId,
-              'receiver_id': widget.receiverId,
-              'type': 'call_cancel',
-              'call_id': callId,
-              'call_mode': video ? 'video' : 'voice',
-              'content': '[call_cancel]',
-              'is_seen': false,
-            });
+            await _postMessage(
+              content: '[call_cancel]',
+              receiverId: widget.receiverId,
+              type: 'call_cancel',
+              callId: callId,
+              callMode: video ? 'video' : 'voice',
+            );
+            await _refreshConversation();
           } catch (_) {}
           await _sendSignal(widget.receiverId, 'call_cancel', {
             'from': widget.userId,
@@ -856,15 +713,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     print('   Mode: ${video ? "video" : "voice"}');
 
     try {
-      await supabase.from('messages').insert({
-        'sender_id': widget.userId,
-        'receiver_id': widget.receiverId,
-        'type': 'call',
-        'content': video ? '[video_call]' : '[voice_call]',
-        'call_id': callId,
-        'call_mode': video ? 'video' : 'voice',
-        'is_seen': false,
-      });
+      await _postMessage(
+        content: video ? '[video_call]' : '[voice_call]',
+        type: 'call',
+        callId: callId,
+        callMode: video ? 'video' : 'voice',
+      );
+      await _refreshConversation();
     } catch (_) {}
     // NEW: realtime call invite
     await _sendSignal(widget.receiverId, 'call_invite', {
@@ -881,70 +736,45 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   void subscribeToTyping() {
-    _messageController.addListener(() async {
+    _messageController.addListener(() {
       final typing = _messageController.text.trim().isNotEmpty;
       if (typing != isTyping) {
         isTyping = typing;
-        await supabase.from('typing_status').upsert({
-          'user_id': widget.userId,
-          'chat_with_id': widget.receiverId,
-          'is_typing': isTyping
+        _fastApi.updateTypingStatus(widget.receiverId, isTyping).catchError((e) {
+          print('⚠️ FastAPI typing update failed: $e');
         });
       }
     });
   }
 
   void listenToTyping() {
-    supabase
-        .channel('public:typing_status')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'typing_status',
-          callback: (payload, [ref]) {
-            final data = payload.newRecord;
-            if (data['user_id'] == widget.receiverId &&
-                data['chat_with_id'] == widget.userId) {
-              setState(() {
-                otherUserTyping = data['is_typing'];
-              });
-            }
-          },
-        )
-        .subscribe();
+    _typingStatusTimer?.cancel();
+    _typingStatusTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      try {
+        final typing = await _fastApi.fetchTypingStatus(widget.receiverId);
+        if (!mounted) return;
+        if (otherUserTyping != typing) {
+          setState(() {
+            otherUserTyping = typing;
+          });
+        }
+      } catch (e) {
+        print('⚠️ FastAPI typing poll failed: $e');
+      }
+    });
   }
 
   Future<void> _sendMessage() async {
     final content = _messageController.text.trim();
     if (content.isEmpty) return;
 
-    final messageData = {
-      'sender_id': widget.userId,
-      'receiver_id': widget.receiverId,
-      'content': content,
-      'is_seen': false,
-      'type': 'text',
-    };
+    await _postMessage(
+      content: content,
+      type: 'text',
+    );
 
-    // Add reply reference if replying to a message
-    if (_replyingToMessage != null) {
-      messageData['reply_to_message_id'] = _replyingToMessage!['id'];
-      messageData['reply_to_content'] = _getReplyPreview(_replyingToMessage!);
-      messageData['reply_to_sender_id'] = _replyingToMessage!['sender_id'];
-    }
-
-    await supabase.from('messages').insert(messageData);
-
-    // Send message notification
     try {
-      final senderResponse = await supabase
-          .from('users')
-          .select('name')
-          .eq('id', widget.userId)
-          .single();
-      
-      final senderName = senderResponse['name'] as String? ?? 'Someone';
-      
+      final senderName = await _resolveSenderName();
       await sendMessageNotification(
         recipientId: widget.receiverId,
         senderId: widget.userId,
@@ -956,14 +786,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
 
     _messageController.clear();
-    _clearReply(); // Clear reply after sending
-    await supabase.from('typing_status').upsert({
-      'user_id': widget.userId,
-      'chat_with_id': widget.receiverId,
-      'is_typing': false,
-    });
+    _clearReply();
 
-    await fetchMessages();
+    try {
+      await _fastApi.updateTypingStatus(widget.receiverId, false);
+    } catch (e) {
+      print('⚠️ FastAPI update typing status failed: $e');
+    }
+
+    await _refreshConversation();
   }
 
   Future<void> _recordOrSendVoice() async {
@@ -1267,9 +1098,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   Future<void> _sendVoiceMessage() async {
     if (_recordedFilePath == null) return;
-    
+
     try {
-      // Show loading indicator
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1293,43 +1123,26 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         );
       }
 
-      final fileBytes = await File(_recordedFilePath!).readAsBytes();
-      final fileName = 'voice_${DateTime.now().millisecondsSinceEpoch}.aac';
-      
-      await supabase.storage.from('chat-media').uploadBinary(
-        'voice/$fileName',
-        fileBytes,
-        fileOptions: const FileOptions(
-          contentType: 'audio/aac',
-          upsert: true,
-        ),
+      final file = File(_recordedFilePath!);
+      final upload = await _fastApi.uploadChatMedia(
+        file: file,
+        type: 'voice',
+        contentType: 'audio/aac',
       );
 
-      await supabase.from('messages').insert({
-        'sender_id': widget.userId,
-        'receiver_id': widget.receiverId,
-        'content': '[voice]',
-        'is_seen': false,
-        'type': 'voice',
-        'media_url': 'voice/$fileName',
-        // Add reply fields if replying
-        if (_replyingToMessage != null) ...{
-          'reply_to_message_id': _replyingToMessage!['id'],
-          'reply_to_content': _getReplyPreview(_replyingToMessage!),
-          'reply_to_sender_id': _replyingToMessage!['sender_id'],
-        },
-      });
+      final mediaPath = upload['path']?.toString();
+      if (mediaPath == null || mediaPath.isEmpty) {
+        throw Exception('FastAPI upload did not return a path');
+      }
 
-      // Send voice message notification
+      await _postMessage(
+        content: '[voice]',
+        type: 'voice',
+        mediaUrl: mediaPath,
+      );
+
       try {
-        final senderResponse = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', widget.userId)
-            .single();
-        
-        final senderName = senderResponse['name'] as String? ?? 'Someone';
-        
+        final senderName = await _resolveSenderName();
         await sendMessageNotification(
           recipientId: widget.receiverId,
           senderId: widget.userId,
@@ -1340,10 +1153,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         print('Error sending voice message notification: $e');
       }
 
-      // Clean up and refresh
       await _deleteRecording();
-      _clearReply(); // Clear reply after sending
-      
+      _clearReply();
+
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1355,8 +1167,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         );
       }
 
-      fetchMessages();
-      
+      await _refreshConversation();
     } catch (e) {
       print('Error sending voice message: $e');
       if (mounted) {
@@ -1678,33 +1489,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   String _getReplyPreview(Map<String, dynamic> message) {
-    final type = message['type']?.toString() ?? 'text';
+    final type = (message['type'] ?? '').toString();
     final content = message['content']?.toString() ?? '';
-    
+
     switch (type) {
       case 'image':
         return '📷 Image';
       case 'voice':
         return '🎵 Voice message';
       case 'call':
-        return '📞 Call';
+        return '📞 Call event';
       default:
-        // Limit text preview to 50 characters
-        return content.length > 50 ? '${content.substring(0, 50)}...' : content;
+        final trimmed = content.trim();
+        if (trimmed.isEmpty) return 'Message';
+        return trimmed.length > 50 ? '${trimmed.substring(0, 50)}...' : trimmed;
     }
-  }
 
-  Future<void> _pickImage() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 2048,
-      maxHeight: 2048,
-      imageQuality: 85, // Slightly compress to ensure compatibility
-    );
-    if (pickedFile != null) {
-      await _showImageEditOptions(File(pickedFile.path));
-    }
   }
 
   Future<void> _captureImage() async {
@@ -1717,6 +1517,23 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     );
     if (pickedFile != null) {
       await _showImageEditOptions(File(pickedFile.path));
+    }
+  }
+
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    try {
+      final pickedFile = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: 85,
+      );
+      if (pickedFile != null) {
+        await _showImageEditOptions(File(pickedFile.path));
+      }
+    } catch (e) {
+      print('Error picking image: $e');
     }
   }
 
@@ -2048,55 +1865,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       if (!_isValidImageFile(bytes)) {
         throw Exception('Invalid image file format');
       }
-      
-      // Get file extension and normalize it
-      final ext = file.path.split('.').last.toLowerCase();
-      final normalizedExt = _normalizeImageExtension(ext);
-      final filename = '${DateTime.now().millisecondsSinceEpoch}.$normalizedExt';
-      
-      // Always use JPEG content type for better compatibility
-      // Most image viewers can handle JPEG reliably
-      final contentType = 'image/jpeg';
 
-      print('Normalized extension: $normalizedExt, Content-Type: $contentType');
-
-      // Upload with proper headers for image handling
-      await supabase.storage.from('chat-media').uploadBinary(
-        'images/$filename',
-        bytes,
-        fileOptions: FileOptions(
-          contentType: contentType,
-          upsert: true,
-          // Add cache control headers for better performance
-          cacheControl: '31536000', // 1 year cache
-        ),
+      final uploadType = type == 'image' ? 'images' : type;
+      final upload = await _fastApi.uploadChatMedia(
+        file: file,
+        type: uploadType,
+        contentType: 'image/jpeg',
       );
 
-      await supabase.from('messages').insert({
-        'sender_id': widget.userId,
-        'receiver_id': widget.receiverId,
-        'content': '[image]',
-        'is_seen': false,
-        'type': type,
-        'media_url': 'images/$filename',
-        // Add reply fields if replying
-        if (_replyingToMessage != null) ...{
-          'reply_to_message_id': _replyingToMessage!['id'],
-          'reply_to_content': _getReplyPreview(_replyingToMessage!),
-          'reply_to_sender_id': _replyingToMessage!['sender_id'],
-        },
-      });
+      final mediaPath = upload['path']?.toString();
+      if (mediaPath == null || mediaPath.isEmpty) {
+        throw Exception('FastAPI upload did not return a path');
+      }
 
-      // Send image message notification
+      await _postMessage(
+        content: '[image]',
+        type: type,
+        mediaUrl: mediaPath,
+      );
+
       try {
-        final senderResponse = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', widget.userId)
-            .single();
-        
-        final senderName = senderResponse['name'] as String? ?? 'Someone';
-        
+        final senderName = await _resolveSenderName();
         await sendMessageNotification(
           recipientId: widget.receiverId,
           senderId: widget.userId,
@@ -2107,7 +1896,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         print('Error sending image message notification: $e');
       }
 
-      // Hide loading indicator
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2119,8 +1907,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         );
       }
 
-      _clearReply(); // Clear reply after sending
-      fetchMessages();
+      _clearReply();
+      await _refreshConversation();
     } catch (e) {
       print('Error uploading image: $e');
       if (mounted) {
@@ -3678,8 +3466,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // New: pull-to-refresh handler
   Future<void> _refreshAll() async {
-    await fetchMessages();
-    await markMessagesAsSeen();
+    await _refreshConversation();
   }
 }
 

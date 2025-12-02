@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:PetTrackCare/screens/chat_detail_screen.dart';
 import 'package:PetTrackCare/services/notification_service.dart';
 import '../services/auto_migration_service.dart';
+import '../services/fastapi_service.dart';
 
 const deepRed = Color(0xFFB82132);
 const coral = Color(0xFFD2665A);
@@ -20,7 +20,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  final supabase = Supabase.instance.client;
+  final _fastApi = FastApiService.instance;
 
   String userName = '';
   String userRole = '';
@@ -50,7 +50,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   static const List<String> _jobStatusOptions = ['All', 'Pending', 'Active', 'Completed'];
 
   late TabController _sitterTabController;
-  RealtimeChannel? _jobsChannel; // realtime subscription channel
   
   // Search controller for location search
   final TextEditingController _locationSearchController = TextEditingController();
@@ -63,7 +62,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     fetchUserData();
-    _loadJobs();
     _sitterTabController = TabController(length: 3, vsync: this);
     
     // Trigger auto-migration when HomeScreen loads
@@ -76,8 +74,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     print('=== AUTO-MIGRATION TRIGGER FROM HOME_SCREEN ===');
     debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM HomeScreen.initState()');
     print('Timestamp: ${DateTime.now().toIso8601String()}');
-    print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
-    print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
+    print('User: ${widget.userId}');
+    print('User Email: [hidden for security]');
     
     // Debug environment variables
     print('🔧 Environment Check:');
@@ -116,22 +114,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     });
   }
 
-  Future<void> _loadJobs() async {
-  final response = await supabase
-      .from('sitting_jobs_with_owner')
-      .select('id, status, start_date, end_date, pet_name, pet_type, owner_name, owner_id, pet_id, pets(profile_picture)');
-
-  setState(() {
-    sittingJobs = response as List;
-  });
-}
-
   @override
   void dispose() {
     _sitterTabController.dispose();
     _locationSearchController.dispose();
-    // unsubscribe realtime channel
-    _jobsChannel?.unsubscribe();
     super.dispose();
   }
 
@@ -158,16 +144,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> fetchUserData() async {
     try {
-      final userRes = await supabase.from('users').select().eq('id', widget.userId).maybeSingle();
-      if (userRes == null) {
-        _showEnhancedSnackBar('User profile not found. Please contact support.', isError: true);
-        setState(() => isLoading = false);
-        return;
-      }
+      final resolvedUser = Map<String, dynamic>.from(await _fastApi.fetchUserById(widget.userId));
 
       setState(() {
-        userRole = userRes['role'];
-        userName = userRes['name'];
+        userRole = (resolvedUser['role'] as String?) ?? 'Pet Owner';
+        userName = (resolvedUser['name'] ?? resolvedUser['email'] ?? 'PetTrackCare').toString();
       });
 
       await Future.wait([
@@ -181,9 +162,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         fetchDailySummary()
       ]);
 
-      // subscribe to realtime after initial data load (pets and jobs ready)
-      _setupRealtime();
-
       setState(() => isLoading = false);
     } catch (e) {
       print('❌ fetchUserData ERROR: $e');
@@ -193,71 +171,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> fetchAvailableSitters({String? locationQuery}) async {
     try {
-      // Get all sitters with their basic info from public.users including address
-      final rows = await supabase
-          .from('sitters')
-          .select('id, user_id, is_available, hourly_rate, bio, experience, users!inner(id, name, role, profile_picture, address), sitter_reviews(rating)')
-          .eq('users.role', 'Pet Sitter');
-
-      final List<dynamic> list = (rows as List?) ?? [];
-      
-      // Map the data with address from public.users
-      final sittersWithAddress = list.map<Map<String, dynamic>>((raw) {
-        final m = Map<String, dynamic>.from(raw as Map);
-        final user = (m['users'] as Map?) ?? {};
-        final reviews = (m['sitter_reviews'] as List?) ?? [];
-        final userId = (m['user_id'] ?? user['id'])?.toString();
-        
-        double? avgRating;
-        if (reviews.isNotEmpty) {
-          final num sum = reviews.fold<num>(0, (acc, e) => acc + ((e['rating'] ?? 0) as num));
-          avgRating = (sum / reviews.length).toDouble();
-        }
-        
-        // Get address from public.users table
-        final address = user['address']?.toString() ?? 'Location not specified';
-        
-        return {
-          'id': userId,
-          'user_id': userId,
-          'sitter_id': m['id']?.toString(),
-          'name': (user['name'] ?? 'Sitter').toString(),
-          'is_available': m['is_available'],
-          'rate_per_hour': m['hourly_rate'],
-          'bio': m['bio'],
-          'experience': m['experience'],
-          'rating': avgRating,
-          'profile_picture': user['profile_picture'],
-          'address': address,
-        };
-      }).toList();
-
-      // Filter by location if search query is provided
-      List<dynamic> filteredSitters = sittersWithAddress;
-      if (locationQuery != null && locationQuery.trim().isNotEmpty) {
-        final query = locationQuery.toLowerCase().trim();
-        final matchingSitters = sittersWithAddress.where((sitter) {
-          final address = (sitter['address'] ?? '').toString().toLowerCase();
-          // Enable partial matching: "buenavista" matches "Buenavista, Agusan del Norte"
-          return address != 'location not specified' && address.contains(query);
-        }).toList();
-        
-        if (matchingSitters.isEmpty && sittersWithAddress.isNotEmpty) {
-          // If no sitters match the location, show message but still display all
-          if (mounted) {
-            _showEnhancedSnackBar('No sitters found in "$locationQuery". Showing all available sitters.');
-          }
-          filteredSitters = sittersWithAddress;
-        } else {
-          filteredSitters = matchingSitters;
-          // Show success message for location search
-          if (mounted && matchingSitters.isNotEmpty) {
-            _showEnhancedSnackBar('Found ${matchingSitters.length} sitter(s) in "$locationQuery"');
+      final rows = await _fastApi.fetchSitters(
+        locationQuery: locationQuery,
+        limit: 50,
+        offset: 0,
+      );
+      if (mounted) {
+        if (locationQuery != null && locationQuery.trim().isNotEmpty) {
+          final trimmed = locationQuery.trim();
+          if (rows.isEmpty) {
+            _showEnhancedSnackBar('No sitters found in "$trimmed". Showing all available sitters.');
+          } else {
+            _showEnhancedSnackBar('Found ${rows.length} sitter(s) in "$trimmed"');
           }
         }
       }
-
-      setState(() => availableSitters = filteredSitters);
+      setState(() => availableSitters = rows);
     } catch (e) {
       print('❌ fetchAvailableSitters ERROR: $e');
       if (mounted) {
@@ -267,8 +196,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> fetchOwnedPets() async {
-    final petRes = await supabase.from('pets').select().eq('owner_id', widget.userId);
-    setState(() => pets = petRes);
+    try {
+      final petRes = await _fastApi.fetchPets(ownerId: widget.userId);
+      setState(() => pets = petRes);
+    } catch (backendError) {
+      print('⚠️ FastAPI fetchPets failed: $backendError');
+      if (mounted) {
+        _showEnhancedSnackBar('Failed to load pets.', isError: true);
+      }
+    }
     // After we have the owner's pets, fetch any pending sitting requests they created
     await fetchOwnerPendingRequests();
     // Also fetch active jobs for the owner
@@ -276,59 +212,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> fetchOwnerPendingRequests() async {
-    try {
-      if (pets.isEmpty) {
-        setState(() {
-          ownerPendingRequests = [];
-          pendingSitterIds = {};
-        });
-        return;
-      }
-
-      // Build pet_id list owned by the user
-      final petIds = pets
-          .map((p) => p['id'])
-          .where((id) => id != null && id.toString().isNotEmpty)
-          .map<String>((id) => id.toString())
-          .toList();
-
-      if (petIds.isEmpty) {
-        setState(() {
-          ownerPendingRequests = [];
-          pendingSitterIds = {};
-        });
-        return;
-      }
-
-      // Query A: filter by pet_id IN (...) + status = Pending
-      final a = await supabase
-          .from('sitting_jobs')
-          .select('id, sitter_id, pet_id, status, created_at')
-          .eq('status', 'Pending')
-          .inFilter('pet_id', petIds);
-
-      // Query B: inner join pets and filter by pets.owner_id (covers cases where policies rely on join)
-      final b = await supabase
-          .from('sitting_jobs')
-          .select('id, sitter_id, pet_id, status, created_at, pets!inner(id, owner_id)')
-          .eq('status', 'Pending')
-          .eq('pets.owner_id', widget.userId);
-
-      // Merge and dedupe by id
-      final List<dynamic> listA = (a as List?) ?? [];
-      final List<dynamic> listB = (b as List?) ?? [];
-      final Map<String, Map<String, dynamic>> byId = {};
-      for (final row in [...listA, ...listB]) {
-        final id = row['id']?.toString();
-        if (id != null && id.isNotEmpty) {
-          byId[id] = Map<String, dynamic>.from(row as Map);
-        }
-      }
-      final merged = byId.values.toList();
-
+    if (pets.isEmpty) {
       setState(() {
-        ownerPendingRequests = merged;
-        pendingSitterIds = merged
+        ownerPendingRequests = [];
+        pendingSitterIds = {};
+      });
+      return;
+    }
+
+    try {
+      final rows = await _fastApi.fetchOwnerJobs(ownerId: widget.userId, status: 'Pending');
+      setState(() {
+        ownerPendingRequests = rows;
+        pendingSitterIds = rows
             .map((r) => r['sitter_id'])
             .where((id) => id != null && id.toString().isNotEmpty)
             .map<String>((id) => id.toString())
@@ -340,50 +236,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> fetchSittingJobs() async {
-    final jobsRes = await supabase
-        .from('sitting_jobs_with_owner')
-        .select('id, status, start_date, end_date, pet_name, pet_type, owner_name, owner_id, pet_id, pets(profile_picture)')
-        .eq('sitter_id', widget.userId)
-        .neq('status', 'Cancelled') // exclude declined/cancelled jobs from Assigned Jobs
-        .order('start_date', ascending: false);
-
-    // Compute completed jobs count from fetched jobs
-    final completed = (jobsRes as List)
-        .where((j) => (j['status'] ?? '').toString().toLowerCase() == 'completed')
-        .length;
-
-    setState(() {
-      sittingJobs = jobsRes;
-      completedJobsCount = completed;
-    });
+    try {
+      final jobsRes = await _fastApi.fetchSittingJobsForSitter(widget.userId);
+      final completed = jobsRes
+          .where((j) => (j['status'] ?? '').toString().toLowerCase() == 'completed')
+          .length;
+      setState(() {
+        sittingJobs = jobsRes;
+        completedJobsCount = completed;
+      });
+    } catch (e) {
+      print('❌ fetchSittingJobs ERROR: $e');
+      if (mounted) {
+        _showEnhancedSnackBar('Failed to load jobs.', isError: true);
+      }
+    }
   }
 
   // NEW: fetch latest sitter reviews
   Future<void> fetchSitterReviews() async {
     try {
-      // Try resolving sitters.id from current user's id (works when accessible)
-      final sitterId = await _resolveSitterIdForReview(widget.userId);
-
-      if (sitterId != null) {
-        final res = await supabase
-            .from('sitter_reviews')
-            .select('*, users!reviewer_id(name, profile_picture)')
-            .eq('sitter_id', sitterId)
-            .order('created_at', ascending: false)
-            .limit(10);
-        setState(() => sitterReviews = res);
-        return;
-      }
-
-      // Fallback: join sitter_reviews -> sitters and filter by sitters.user_id
-      // Useful when direct reads to sitters are restricted by RLS.
-      final fallback = await supabase
-          .from('sitter_reviews')
-          .select('id, rating, comment, created_at, owner_name, reviewer_id, users!reviewer_id(name, profile_picture), sitters!inner(user_id)')
-          .eq('sitters.user_id', widget.userId)
-          .order('created_at', ascending: false)
-          .limit(10);
-      setState(() => sitterReviews = fallback);
+      final res = await _fastApi.fetchSitterReviews(widget.userId);
+      setState(() => sitterReviews = res);
     } catch (e) {
       print('❌ fetchSitterReviews ERROR: $e');
       setState(() => sitterReviews = []);
@@ -392,40 +266,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Future<void> fetchDailySummary() async {
     try {
-      final summaryRes = await supabase
-          .from('behavior_logs')
-          .select()
-          .eq('user_id', widget.userId)
-          .order('log_date', ascending: false)
-          .limit(1)
-          .maybeSingle();
-      if (summaryRes != null) {
-        setState(() => summary = summaryRes);
-      }
-    } catch (_) {}
+      final summaryRes = await _fastApi.fetchLatestBehaviorLog(widget.userId);
+      setState(() => summary = summaryRes);
+    } catch (e) {
+      print('❌ fetchDailySummary ERROR: $e');
+      setState(() => summary = {});
+    }
   }
 
   // Fetch reviews for a sitter by their users.id (resolves to sitters.id, with join fallback)
   Future<List<dynamic>> _fetchReviewsForSitterUser(String sitterUserId) async {
     try {
-      final sitterId = await _resolveSitterIdForReview(sitterUserId);
-      if (sitterId != null) {
-        final res = await supabase
-            .from('sitter_reviews')
-            .select('*, users!reviewer_id(name, profile_picture)')
-            .eq('sitter_id', sitterId)
-            .order('created_at', ascending: false)
-            .limit(20);
-        return (res as List?) ?? [];
-      }
-      // Fallback join via sitters.user_id
-      final res = await supabase
-          .from('sitter_reviews')
-          .select('id, rating, comment, created_at, owner_name, reviewer_id, users!reviewer_id(name, profile_picture), sitters!inner(user_id)')
-          .eq('sitters.user_id', sitterUserId)
-          .order('created_at', ascending: false)
-          .limit(20);
-      return (res as List?) ?? [];
+      return await _fastApi.fetchSitterReviews(sitterUserId);
     } catch (e) {
       print('❌ _fetchReviewsForSitterUser ERROR: $e');
       return [];
@@ -623,127 +475,69 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // Realtime: listen for INSERT/UPDATE/DELETE on sitting_jobs and refresh view when relevant
-  void _setupRealtime() {
-    _jobsChannel?.unsubscribe();
-    _jobsChannel = supabase
-        .channel('sitting_jobs_${widget.userId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'sitting_jobs',
-          callback: (payload) {
-            final newRow = payload.newRecord as Map<String, dynamic>?;
-            final oldRow = payload.oldRecord as Map<String, dynamic>?;
-            final row = newRow ?? oldRow;
-            if (row == null) return;
-
-            final sitterMatches = (row['sitter_id']?.toString() ?? '') == widget.userId;
-            final jobPetId = row['pet_id']?.toString();
-            final ownerMatches = jobPetId != null && pets.any((p) => p['id']?.toString() == jobPetId);
-
-            if (sitterMatches || ownerMatches) {
-              // Fetch the latest data segments that could be affected
-              fetchSittingJobs();
-              fetchOwnerPendingRequests();
-              fetchOwnerActiveJobs();
-            }
-          },
-        )
-        .subscribe();
-  }
-
   // Update job status: return updated row (if allowed) and patch UI safely
   Future<void> _updateJobStatus(String jobId, String status) async {
+    final update = <String, dynamic>{'status': status};
+    if (status == 'Active') {
+      update['start_date'] = DateTime.now().toIso8601String().substring(0, 10);
+    }
+    if (status == 'Completed') {
+      update['end_date'] = DateTime.now().toIso8601String().substring(0, 10);
+    }
+
     try {
-      final update = <String, dynamic>{'status': status};
+      final jobResponse = Map<String, dynamic>.from(await _fastApi.updateSittingJob(jobId, update));
+      final petName = jobResponse['pet_name']?.toString() ?? 'Pet';
+      final ownerId = jobResponse['owner_id']?.toString();
+      final sitterId = jobResponse['sitter_id']?.toString();
+      final actorName = userName.isNotEmpty
+          ? userName
+          : (userRole.isNotEmpty ? userRole : 'PetTrackCare');
+
+      String? notificationRecipient;
+      String? notificationType;
       if (status == 'Active') {
-        update['start_date'] = DateTime.now().toIso8601String().substring(0, 10);
-      }
-      if (status == 'Completed') {
-        update['end_date'] = DateTime.now().toIso8601String().substring(0, 10);
+        notificationRecipient = ownerId;
+        notificationType = 'job_accepted';
+      } else if (status == 'Cancelled') {
+        notificationRecipient = widget.userId == ownerId ? sitterId : ownerId;
+        notificationType = 'job_declined';
+      } else if (status == 'Completed') {
+        notificationRecipient = sitterId;
+        notificationType = 'job_completed';
       }
 
-      // Perform update without select() to avoid PostgREST single-object errors on 0 rows
-      await supabase.from('sitting_jobs').update(update).eq('id', jobId);
-
-      // Try to send notifications (don't fail if this errors)
-      try {
-        // Get job details for notifications
-        final jobResponse = await supabase
-            .from('sitting_jobs')
-            .select('pet_id, sitter_id, pets(name, owner_id), users!sitter_id(name)')
-            .eq('id', jobId)
-            .single();
-        
-        final petData = jobResponse['pets'] as Map<String, dynamic>?;
-        final sitterData = jobResponse['users'] as Map<String, dynamic>?;
-        final petName = petData?['name'] as String? ?? 'Pet';
-        final ownerId = petData?['owner_id'] as String?;
-        final sitterName = sitterData?['name'] as String? ?? 'Sitter';
-        
-        // Send notifications based on status change
-        if (status == 'Active' || status == 'Cancelled') {
-          // Sitter accepted or declined - notify owner
-          if (ownerId != null) {
-            await sendJobNotification(
-              recipientId: ownerId,
-              actorId: widget.userId,
-              jobId: jobId,
-              type: status == 'Active' ? 'job_accepted' : 'job_declined',
-              petName: petName,
-              actorName: sitterName,
-            );
-          }
-        } else if (status == 'Completed') {
-          // Job completed - notify the other party
-          final sitterId = jobResponse['sitter_id'] as String?;
-          if (widget.userId == sitterId && ownerId != null) {
-            // Sitter completed the job - notify owner
-            await sendJobNotification(
-              recipientId: ownerId,
-              actorId: widget.userId,
-              jobId: jobId,
-              type: 'job_completed',
-              petName: petName,
-              actorName: sitterName,
-            );
-          } else if (widget.userId == ownerId && sitterId != null) {
-            // Owner marked as completed - notify sitter
-            final ownerResponse = await supabase.from('users').select('name').eq('id', widget.userId).single();
-            final ownerName = ownerResponse['name'] as String? ?? 'Pet Owner';
-            
-            await sendJobNotification(
-              recipientId: sitterId,
-              actorId: widget.userId,
-              jobId: jobId,
-              type: 'job_completed',
-              petName: petName,
-              actorName: ownerName,
-            );
-          }
+      if (notificationRecipient != null && notificationRecipient != widget.userId && notificationType != null) {
+        try {
+          await sendJobNotification(
+            recipientId: notificationRecipient,
+            actorId: widget.userId,
+            jobId: jobId,
+            type: notificationType,
+            petName: petName,
+            actorName: actorName,
+          );
+        } catch (notificationError) {
+          print('⚠️ Notification failed: $notificationError');
         }
-      } catch (notificationError) {
-        // Log notification errors but don't fail the job update
-        print('⚠️ Failed to send notification: $notificationError');
       }
 
-      // Optimistically patch local UI
       setState(() {
         final idx = sittingJobs.indexWhere((j) => j['id']?.toString() == jobId);
         if (idx != -1) {
           if (status == 'Cancelled') {
             sittingJobs.removeAt(idx);
           } else {
-            sittingJobs[idx] = { ...sittingJobs[idx], ...update, 'id': jobId };
+            sittingJobs[idx] = jobResponse;
           }
+        } else if (status != 'Cancelled') {
+          sittingJobs.add(jobResponse);
         }
         completedJobsCount = sittingJobs
             .where((j) => (j['status'] ?? '').toString().toLowerCase() == 'completed')
             .length;
       });
 
-      // Refresh lists to stay in sync with backend/RLS (fire and forget - don't block on errors)
       Future.wait([
         fetchSittingJobs(),
         fetchOwnerPendingRequests(),
@@ -780,26 +574,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // Get pets that are not currently assigned to any active sitting job
   Future<List<Map<String, dynamic>>> _getAvailablePetsForHiring() async {
     try {
-      // Get all pet IDs that are currently in active or pending sitting jobs
-      final activeJobsResponse = await supabase
-          .from('sitting_jobs')
-          .select('pet_id')
-          .or('status.eq.Active,status.eq.Pending');
-      
-      final List<dynamic> activeJobs = activeJobsResponse as List;
-      final Set<String> assignedPetIds = activeJobs
+      final activeJobs = await _fastApi.fetchOwnerJobs(ownerId: widget.userId, status: 'Active');
+      final pendingJobs = await _fastApi.fetchOwnerJobs(ownerId: widget.userId, status: 'Pending');
+      final assignedPetIds = [
+        ...activeJobs,
+        ...pendingJobs,
+      ]
           .map((job) => job['pet_id']?.toString())
           .where((id) => id != null && id.isNotEmpty)
           .cast<String>()
           .toSet();
-      
-      // Filter out pets that are already assigned
-      final availablePets = pets.where((pet) {
-        final petId = pet['id']?.toString();
-        return petId != null && !assignedPetIds.contains(petId);
-      }).map((pet) => Map<String, dynamic>.from(pet as Map)).toList();
-      
-      return availablePets;
+
+      return pets
+          .where((pet) {
+            final petId = pet['id']?.toString();
+            return petId != null && !assignedPetIds.contains(petId);
+          })
+          .map((pet) => Map<String, dynamic>.from(pet as Map<String, dynamic>))
+          .toList();
     } catch (e) {
       print('❌ _getAvailablePetsForHiring ERROR: $e');
       return [];
@@ -1128,31 +920,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         'end_date': null,
         'status': 'Pending',
       };
-      
-      // Insert the job and get the job ID
-      final response = await supabase.from('sitting_jobs').insert(payload).select('id').single();
-      final jobId = response['id'].toString();
-      
-      // Get pet name for notification
-      final petResponse = await supabase.from('pets').select('name').eq('id', petId).single();
-      final petName = petResponse['name'] as String? ?? 'Pet';
-      
-      // Get owner name for notification
-      final ownerResponse = await supabase.from('users').select('name').eq('id', widget.userId).single();
-      final ownerName = ownerResponse['name'] as String? ?? 'Pet Owner';
+      final response = await _fastApi.createSittingJob(payload);
+      final jobId = response['id']?.toString();
+      final petData = pets.firstWhere(
+        (p) => p['id'] == petId,
+        orElse: () => <String, dynamic>{},
+      );
+      final petName = petData['name']?.toString() ?? 'Pet';
+      final ownerName = (userName.isEmpty ? 'Pet Owner' : userName);
       
       // Try to send notification (fire and forget)
-      try {
-        await sendJobNotification(
-          recipientId: sitterId,
-          actorId: widget.userId,
-          jobId: jobId,
-          type: 'job_request',
-          petName: petName,
-          actorName: ownerName,
-        );
-      } catch (notifError) {
-        print('⚠️ Failed to send job notification: $notifError');
+      if (jobId != null) {
+        try {
+          await sendJobNotification(
+            recipientId: sitterId,
+            actorId: widget.userId,
+            jobId: jobId,
+            type: 'job_request',
+            petName: petName,
+            actorName: ownerName,
+          );
+        } catch (notifError) {
+          print('⚠️ Failed to send job notification: $notifError');
+        }
       }
       
       setState(() {
@@ -1178,40 +968,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         setState(() => ownerActiveJobs = []);
         return;
       }
-      final petIds = pets
-          .map((p) => p['id'])
-          .where((id) => id != null && id.toString().isNotEmpty)
-          .map<String>((id) => id.toString())
-          .toList();
-      if (petIds.isEmpty) {
-        setState(() => ownerActiveJobs = []);
-        return;
-      }
-
-      // Include pets(name, profile_picture) and sitter info so we can display both pet and sitter details
-      final a = await supabase
-          .from('sitting_jobs')
-          .select('id, sitter_id, pet_id, status, start_date, end_date, created_at, pets(name, profile_picture), users!sitter_id(name, profile_picture)')
-          .eq('status', 'Active')
-          .inFilter('pet_id', petIds);
-
-      final b = await supabase
-          .from('sitting_jobs')
-          .select('id, sitter_id, pet_id, status, start_date, end_date, created_at, pets!inner(id, owner_id, name, profile_picture), users!sitter_id(name, profile_picture)')
-          .eq('status', 'Active')
-          .eq('pets.owner_id', widget.userId);
-
-      final List<dynamic> listA = (a as List?) ?? [];
-      final List<dynamic> listB = (b as List?) ?? [];
-      final Map<String, Map<String, dynamic>> byId = {};
-      for (final row in [...listA, ...listB]) {
-        final id = row['id']?.toString();
-        if (id != null && id.isNotEmpty) {
-          // FIX: properly cast row to Map<String, dynamic>
-          byId[id] = Map<String, dynamic>.from(row as Map);
-        }
-      }
-      setState(() => ownerActiveJobs = byId.values.toList());
+      final rows = await _fastApi.fetchOwnerJobs(ownerId: widget.userId, status: 'Active');
+      setState(() => ownerActiveJobs = rows);
     } catch (e) {
       print('❌ fetchOwnerActiveJobs ERROR: $e');
     }
@@ -1509,13 +1267,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 // 1) complete job
                                 await _updateJobStatus(job['id'].toString(), 'Completed');
 
-                                // 2) sitter_reviews.sitter_id must be sitters.id.
                                 final sitterUserId = job['sitter_id']?.toString();
-                                final sitterIdForReview = sitterUserId == null
-                                    ? null
-                                    : await _resolveSitterIdForReview(sitterUserId);
-
-                                if (sitterIdForReview == null) {
+                                if (sitterUserId == null) {
                                   if (mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -1528,18 +1281,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   return;
                                 }
 
-                                // Force integer rating and request the inserted id back for verification.
-                                await supabase
-                                    .from('sitter_reviews')
-                                    .insert({
-                                      'sitter_id': sitterIdForReview,
-                                      'reviewer_id': widget.userId,                    // users.id (uuid)
-                                      'rating': rating.round(),                        // strict int 1..5
-                                      'comment': comment.trim().isEmpty ? null : comment.trim(),
-                                      'owner_name': (userName.isEmpty ? 'Pet Owner' : userName),
-                                    })
-                                    .select('id')
-                                    .single();
+                                await _fastApi.createSitterReview(
+                                  sitterUserId,
+                                  {
+                                    'rating': rating.round(),
+                                    'comment': comment.trim().isEmpty ? null : comment.trim(),
+                                    'owner_name': (userName.isEmpty ? 'Pet Owner' : userName),
+                                  },
+                                );
 
                                 // Optional: refresh reviews (useful if current user is the sitter)
                                 await fetchSitterReviews();
@@ -1586,33 +1335,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         );
       },
     );
-  }
-
-  // Resolve sitter_id for sitter_reviews FK.
-  // Accepts either a users.id (preferred) or a sitters.id and returns sitters.id.
-  Future<String?> _resolveSitterIdForReview(String sitterIdentifier) async {
-    try {
-      // Prefer mapping from user_id -> sitters.id
-      final viaUser = await supabase
-          .from('sitters')
-          .select('id')
-          .eq('user_id', sitterIdentifier)
-          .maybeSingle();
-      if (viaUser != null && viaUser['id'] != null) {
-        return viaUser['id'].toString();
-      }
-
-      // If the identifier is already a sitters.id, allow it
-      final viaId = await supabase
-          .from('sitters')
-          .select('id')
-          .eq('id', sitterIdentifier)
-          .maybeSingle();
-      if (viaId != null && viaId['id'] != null) {
-        return viaId['id'].toString();
-      }
-    } catch (_) {}
-    return null; // explicit null so callers can handle properly
   }
 
   // New: Greeting header with gradient and time-aware salutation
@@ -3079,12 +2801,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // NEW: load sitter availability from sitters by user_id
   Future<void> fetchSitterAvailability() async {
     try {
-      final row = await supabase
-          .from('sitters')
-          .select('is_available')
-          .eq('user_id', widget.userId)
-          .maybeSingle();
-      setState(() => _isSitterAvailable = (row?['is_available'] == true));
+      final row = await _fastApi.fetchSitterProfile(widget.userId);
+      setState(() => _isSitterAvailable = (row['is_available'] == true));
     } catch (e) {
       print('❌ fetchSitterAvailability ERROR: $e');
       setState(() => _isSitterAvailable = false);
@@ -3094,11 +2812,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // NEW: fetch sitter profile data
   Future<void> fetchSitterProfile() async {
     try {
-      final row = await supabase
-          .from('sitters')
-          .select('id, bio, experience, hourly_rate, is_available')
-          .eq('user_id', widget.userId)
-          .maybeSingle();
+      final row = await _fastApi.fetchSitterProfile(widget.userId);
       setState(() => _sitterProfile = row);
     } catch (e) {
       print('❌ fetchSitterProfile ERROR: $e');
@@ -3119,10 +2833,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       if (experience != null) updates['experience'] = experience;
       if (hourlyRate != null) updates['hourly_rate'] = hourlyRate;
 
-      await supabase
-          .from('sitters')
-          .update(updates)
-          .eq('user_id', widget.userId);
+      await _fastApi.updateSitterProfile(widget.userId, updates);
 
       // Refresh profile data
       await fetchSitterProfile();
@@ -3187,7 +2898,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _isSitterAvailable = value; // optimistic
     });
     try {
-      await supabase.from('sitters').update({'is_available': value}).eq('user_id', widget.userId);
+      await _fastApi.updateSitterProfile(widget.userId, {'is_available': value});
       if (mounted) {
         _showEnhancedSnackBar(value ? 'You are now Available.' : 'You are now Busy.');
       }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../screens/community_screen.dart';
+import '../services/fastapi_service.dart';
 
 class SavedPostsModal extends StatefulWidget {
   final String userId;
@@ -16,6 +16,7 @@ class SavedPostsModal extends StatefulWidget {
 
 class _SavedPostsModalState extends State<SavedPostsModal> {
   static const deepRed = Color(0xFFB22222);
+  final FastApiService _fastApi = FastApiService.instance;
   List<Map<String, dynamic>> savedPosts = [];
   bool isLoading = true;
 
@@ -26,42 +27,18 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
   }
 
   Future<void> _loadSavedPosts() async {
+    if (!mounted) return;
+    setState(() => isLoading = true);
     try {
-      final response = await Supabase.instance.client
-          .from('bookmarks')
-          .select('''
-            post_id,
-            community_posts:post_id (
-              id,
-              content,
-              image_url,
-              created_at,
-              profiles:user_id (
-                name,
-                profile_picture
-              )
-            )
-          ''')
-          .eq('user_id', widget.userId);
-
+      final posts = await _fastApi.fetchBookmarkedPosts();
+      if (!mounted) return;
       setState(() {
-        savedPosts = (response as List<dynamic>).map((bookmark) {
-          final post = bookmark['community_posts'] as Map<String, dynamic>?;
-          if (post != null) {
-            return {
-              'id': post['id'],
-              'content': post['content'],
-              'image_url': post['image_url'],
-              'created_at': post['created_at'],
-              'user': post['profiles'],
-            };
-          }
-          return null;
-        }).where((post) => post != null).cast<Map<String, dynamic>>().toList();
+        savedPosts = posts;
         isLoading = false;
       });
     } catch (e) {
       print('Error loading saved posts: $e');
+      if (!mounted) return;
       setState(() {
         isLoading = false;
       });
@@ -70,11 +47,7 @@ class _SavedPostsModalState extends State<SavedPostsModal> {
 
   Future<void> _removeFromSaved(String postId) async {
     try {
-      await Supabase.instance.client
-          .from('bookmarks')
-          .delete()
-          .eq('user_id', widget.userId)
-          .eq('post_id', postId);
+      await _fastApi.unbookmarkCommunityPost(postId);
 
       setState(() {
         savedPosts.removeWhere((post) => post['id'] == postId);

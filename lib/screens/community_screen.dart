@@ -6,7 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'notification_screen.dart';
-import '../services/notification_service.dart';
+import '../services/fastapi_service.dart';
 
 Map<String, bool> likedPosts = {};
 Map<String, TextEditingController> commentControllers = {};
@@ -89,16 +89,83 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   late ScrollController _scrollController;
   String? highlightedPostId; // Track which post to highlight
   GlobalKey targetPostKey = GlobalKey(); // Key for the target post
+  String currentUserName = 'Someone';
+
+  Map<String, dynamic> _normalizePost(Map<String, dynamic> rawPost) {
+    final normalized = Map<String, dynamic>.from(rawPost);
+    normalized['users'] = normalized['users'] ?? normalized['user'];
+    normalized['bookmarks'] = (normalized['bookmarks'] as List<dynamic>?)
+            ?.map((entry) => Map<String, dynamic>.from(entry))
+            .toList() ??
+        [];
+    normalized['likes'] = (normalized['likes'] as List<dynamic>?)
+            ?.map((entry) => Map<String, dynamic>.from(entry))
+            .toList() ??
+        [];
+    normalized['comments'] = _normalizeComments(normalized['comments']);
+    return normalized;
+  }
+
+  List<Map<String, dynamic>> _normalizeComments(dynamic rawComments) {
+    final comments = (rawComments as List<dynamic>?) ?? [];
+    final normalized = comments.map((entry) {
+      final comment = Map<String, dynamic>.from(entry);
+      comment['users'] = comment['users'] ?? comment['user'];
+      comment['comment_likes'] = (comment['comment_likes'] as List<dynamic>?)
+              ?.map((like) => Map<String, dynamic>.from(like))
+              .toList() ??
+          (comment['likes'] as List<dynamic>?)
+              ?.map((like) => Map<String, dynamic>.from(like))
+              .toList() ??
+          [];
+      comment['replies'] = (comment['replies'] as List<dynamic>?)
+              ?.map((reply) => _normalizeReply(Map<String, dynamic>.from(reply)))
+              .toList() ??
+          [];
+      return comment;
+    }).toList();
+
+    normalized.sort((a, b) {
+      final dateA = DateTime.tryParse((a['created_at'] ?? '').toString()) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final dateB = DateTime.tryParse((b['created_at'] ?? '').toString()) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return dateB.compareTo(dateA);
+    });
+
+    return normalized;
+  }
+
+  Map<String, dynamic> _normalizeReply(Map<String, dynamic> rawReply) {
+    final reply = Map<String, dynamic>.from(rawReply);
+    reply['users'] = reply['users'] ?? reply['user'];
+    return reply;
+  }
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
     highlightedPostId = widget.targetPostId; // Set target post for highlighting
+    _loadCurrentUserName();
     fetchPosts();
     loadCommentCounts();
     loadCommentReplies(); // Load replies on initialization
     loadBookmarkedPosts(); // Load bookmarked posts
+  }
+
+  Future<void> _loadCurrentUserName() async {
+    try {
+      final currentUser = await FastApiService.instance.fetchCurrentUser();
+      final name = (currentUser['name'] as String?)?.trim();
+      if (mounted && name != null && name.isNotEmpty) {
+        setState(() {
+          currentUserName = name;
+        });
+      }
+    } catch (e) {
+      print('Error loading current user name: $e');
+    }
   }
 
   @override
@@ -239,82 +306,55 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       
       // Extract mentions from comment text
       final mentions = extractMentions(commentText);
-      
-      // Insert comment into database
-      final newComment = await Supabase.instance.client
-          .from('comments')
-          .insert({
-        'post_id': postId,
-        'user_id': widget.userId,
-        'content': commentText,
-      }).select('id, content, created_at, user_id').single();
+      // Insert comment via FastAPI
+      final newComment = await FastApiService.instance
+          .createCommunityComment(postId: postId, content: commentText);
 
-      print('Comment inserted: $newComment');
+      print('Comment created via FastAPI: $newComment');
 
-      // Wait a moment for any database triggers to create notifications
-      await Future.delayed(Duration(milliseconds: 500));
-      
-      // Send comment notification using new service
-      final postData = await Supabase.instance.client
-          .from('community_posts')
-          .select('user_id')
-          .eq('id', postId)
-          .single();
-      
-      final postOwnerId = postData['user_id'];
-      if (postOwnerId != widget.userId) {
-        // Get current user name
-        final currentUserResponse = await Supabase.instance.client
-            .from('users')
-            .select('name')
-            .eq('id', widget.userId)
-            .single();
-        final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
-        
-        await sendCommunityNotification(
-          recipientId: postOwnerId,
-          actorId: widget.userId,
-          type: 'comment',
-          message: '$currentUserName commented on your post',
-          postId: postId,
+      final postOwner = posts.cast<Map<String, dynamic>>().firstWhere(
+        (post) => post['id'].toString() == postId,
+        orElse: () => <String, dynamic>{},
+      );
+      final postOwnerId = postOwner['user_id'];
+      final actorName = (newComment['users'] ?? newComment['user'] ?? {})['name'] as String? ?? 'Someone';
+
+      if (postOwnerId != null && postOwnerId != widget.userId) {
+        await FastApiService.instance.createNotification({
+          'user_id': postOwnerId,
+          'actor_id': widget.userId,
+          'type': 'comment',
+          'message': '$actorName commented on your post',
+          'post_id': postId,
+          'comment_id': newComment['id'].toString(),
+        });
+      }
+
+      if (mentions.isNotEmpty) {
+        await sendMentionNotifications(
+          mentions,
+          postId,
           commentId: newComment['id'].toString(),
-          actorName: currentUserName,
         );
       }
 
-      // Send mention notifications
-      if (mentions.isNotEmpty) {
-        await sendMentionNotifications(mentions, postId, commentId: newComment['id'].toString());
-      }
-
-      // Get user data
-      final userData = await Supabase.instance.client
-          .from('users')
-          .select('name, profile_picture') // <-- add profile_picture
-          .eq('id', widget.userId)
-          .single();
-
-      print('User data fetched: $userData');
-
-      // Combine comment and user data
-      final fullComment = {
-        ...Map<String, dynamic>.from(newComment),
-        'users': userData,
-        'comment_likes': []
-      };
+      final normalizedComment = Map<String, dynamic>.from(newComment);
+      normalizedComment['users'] = normalizedComment['users'] ?? normalizedComment['user'];
+      normalizedComment['comment_likes'] = normalizedComment['comment_likes'] ?? [];
+      normalizedComment['likes'] = normalizedComment['likes'] ?? [];
+      normalizedComment['replies'] = normalizedComment['replies'] ?? [];
 
       setState(() {
         if (postComments[postId] == null) {
           postComments[postId] = [];
         }
-        postComments[postId]!.insert(0, fullComment);
-  commentCounts[postId] = postComments[postId]!.length; // Always use postComments[postId]?.length
-        // Mark this post as locally updated
+        postComments[postId]!.insert(0, normalizedComment);
+        commentCounts[postId] = postComments[postId]!.length;
         locallyUpdatedPosts[postId] = true;
         print('COMMENT ADDED - Post $postId marked as locally updated with ${commentCounts[postId]} comments');
         print('COMMENT ADDED - commentCounts map: $commentCounts');
         print('COMMENT ADDED - postComments length for $postId: ${postComments[postId]?.length}');
-        print('COMMENT ADDED - Full comment: $fullComment');
+        print('COMMENT ADDED - Normalized comment: $normalizedComment');
       });
 
       // Save the updated counts to persistent storage
@@ -354,15 +394,15 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   // Load bookmarked posts for current user
   Future<void> loadBookmarkedPosts() async {
     try {
-      final response = await Supabase.instance.client
-          .from('bookmarks')
-          .select('post_id')
-          .eq('user_id', widget.userId);
-      
+      final response = await FastApiService.instance.fetchBookmarkedPosts();
+
       setState(() {
         bookmarkedPosts.clear();
         for (var bookmark in response) {
-          bookmarkedPosts[bookmark['post_id'].toString()] = true;
+          final postId = bookmark['post_id']?.toString();
+          if (postId != null && postId.isNotEmpty) {
+            bookmarkedPosts[postId] = true;
+          }
         }
       });
     } catch (e) {
@@ -381,11 +421,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     }
 
     try {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('id, name, profile_picture')
-          .ilike('name', '%$query%')
-          .limit(5);
+      final response = await FastApiService.instance.searchUsers(query);
 
       setState(() {
         userSuggestions[fieldId] = List<Map<String, dynamic>>.from(response);
@@ -467,36 +503,30 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     if (mentionedUsernames.isEmpty) return;
 
     try {
-      // Get current user name for notification
-      final currentUserResponse = await Supabase.instance.client
-          .from('users')
-          .select('name')
-          .eq('id', widget.userId)
-          .single();
-      final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
+      final currentUser = await FastApiService.instance.fetchUserById(widget.userId);
+      final currentUserName = currentUser['name'] as String? ?? 'Someone';
+      final notifiedUsers = <String>{};
 
-      // Get user IDs for mentioned usernames
-      final userResponse = await Supabase.instance.client
-          .from('users')
-          .select('id, name')
-          .inFilter('name', mentionedUsernames);
+      for (final rawUsername in mentionedUsernames) {
+        final candidates = await FastApiService.instance.searchUsers(rawUsername);
+        for (final candidate in candidates) {
+          final candidateId = candidate['id']?.toString();
+          final candidateName = (candidate['name'] ?? '').toString();
+          if (candidateId == null || candidateId == widget.userId) continue;
+          if (notifiedUsers.contains(candidateId)) continue;
+          if (candidateName.toLowerCase() != rawUsername.toLowerCase()) continue;
 
-      for (var user in userResponse) {
-        final mentionedUserId = user['id'];
-        if (mentionedUserId == widget.userId) continue; // Don't notify self
-
-        final message = '$currentUserName mentioned you in a ${commentId != null ? 'comment' : 'post'}';
-        
-        // Use the new notification service
-        await sendCommunityNotification(
-          recipientId: mentionedUserId,
-          actorId: widget.userId,
-          type: 'mention',
-          message: message,
-          postId: postId,
-          commentId: commentId,
-          actorName: currentUserName,
-        );
+          await FastApiService.instance.createNotification({
+            'user_id': candidateId,
+            'actor_id': widget.userId,
+            'type': 'mention',
+            'message': '$currentUserName mentioned you in a ${commentId != null ? 'comment' : 'post'}',
+            'post_id': postId,
+            if (commentId != null) 'comment_id': commentId,
+          });
+          notifiedUsers.add(candidateId);
+          break;
+        }
       }
     } catch (e) {
       print('Error sending mention notifications: $e');
@@ -558,11 +588,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     try {
       if (isCurrentlyBookmarked) {
         // Remove bookmark
-        await Supabase.instance.client
-            .from('bookmarks')
-            .delete()
-            .eq('user_id', widget.userId)
-            .eq('post_id', postId);
+        await FastApiService.instance.unbookmarkCommunityPost(postId);
         
         setState(() {
           bookmarkedPosts[postId] = false;
@@ -577,12 +603,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
         );
       } else {
         // Add bookmark
-        await Supabase.instance.client
-            .from('bookmarks')
-            .insert({
-          'user_id': widget.userId,
-          'post_id': postId,
-        });
+        await FastApiService.instance.bookmarkCommunityPost(postId);
         
         setState(() {
           bookmarkedPosts[postId] = true;
@@ -689,139 +710,46 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
   Future<void> fetchPosts() async {
     setState(() => isLoading = true);
     try {
-      // First fetch the posts with basic information
-      final response = await Supabase.instance.client
-          .from('community_posts')
-          .select('''
-            *,
-            users!community_posts_user_id_fkey (
-              name,
-              role,
-              profile_picture
-            ),
-            likes (
-              user_id
-            ),
-            comments (
-              id,
-              content,
-              user_id,
-              created_at,
-              users!comments_user_id_fkey (
-                name,
-                profile_picture
-              ),
-              comment_likes (
-                user_id
-              )
-            )
-          ''')
-          .order('created_at', ascending: false);
-
-      print('Fetched posts response: ${response.toString()}');
+      final response = await FastApiService.instance.fetchCommunityPosts(limit: 60);
+      final normalizedPosts = response.map((post) => _normalizePost(post)).toList();
 
       setState(() {
-        posts = response;
-        // Process each post's data
+        posts = normalizedPosts;
         for (var post in posts) {
-          final postId = post['id'].toString();
-          print('Processing post ID: $postId');
-
-          // Handle likes
-          final likes = post['likes'] as List? ?? [];
+          final postId = post['id']?.toString();
+          if (postId == null) continue;
+          final likes = (post['likes'] as List<dynamic>? ?? [])
+              .map((entry) => Map<String, dynamic>.from(entry))
+              .toList();
           likedPosts[postId] = likes.any((like) => like['user_id'] == widget.userId);
           likeCounts[postId] = likes.length;
-          
-          // Initialize comment controllers if not exists
-          if (!commentControllers.containsKey(postId)) {
-            commentControllers[postId] = TextEditingController();
-          }
 
-          // Process comments
-          try {
-            List<Map<String, dynamic>> comments = [];
-            if (post['comments'] != null && post['comments'] is List) {
-              comments = (post['comments'] as List).map((comment) {
-                if (comment is! Map<String, dynamic>) {
-                  return Map<String, dynamic>.from(comment);
-                }
-                return comment;
-              }).toList();
-
-              // Sort comments by created_at date (newest first) - SAFE parsing
-              comments.sort((a, b) {
-                final dateA = DateTime.tryParse((a['created_at'] ?? '').toString()) ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                final dateB = DateTime.tryParse((b['created_at'] ?? '').toString()) ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                return dateB.compareTo(dateA);
-              });
-            }
-            
-            // Preserve existing comment data - only update if fetched count is higher
-            final existingCount = commentCounts[postId];
-            final fetchedCount = comments.length;
-            
-            // Only update if we don't have a local count or if fetched count is higher
-            if (existingCount == null || fetchedCount > existingCount) {
-              postComments[postId] = comments;
-              commentCounts[postId] = fetchedCount;
-              print('Updated comment data for post $postId: $fetchedCount comments');
-            } else {
-              // Keep existing count but update postComments if we don't have it
-              if (postComments[postId] == null) {
-                postComments[postId] = comments;
-              }
-              // Ensure the count is properly set even if we're preserving
-              commentCounts[postId] = existingCount;
-              print('Preserved existing comment count for post $postId: $existingCount comments (fetched $fetchedCount)');
-            }
-          } catch (e) {
-            print('Error processing comments for post $postId: $e');
-            // Only clear if there's no existing data to preserve
-            if (postComments[postId] == null) {
-              postComments[postId] = [];
-            }
-          }
-
-          // Initialize comment input state
+          commentControllers.putIfAbsent(postId, () => TextEditingController());
           showCommentInput[postId] = showCommentInput[postId] ?? false;
-          // Initialize reply input state
           showReplyInput[postId] = showReplyInput[postId] ?? false;
           replyControllers.putIfAbsent(postId, () => TextEditingController());
+
+          final comments = (post['comments'] as List<dynamic>? ?? [])
+              .map((entry) => Map<String, dynamic>.from(entry))
+              .toList();
+          postComments[postId] = comments;
+          commentCounts[postId] = comments.length;
+
+          for (var comment in comments) {
+            final commentId = comment['id']?.toString();
+            if (commentId == null) continue;
+            final replies = (comment['replies'] as List<dynamic>? ?? [])
+                .map((entry) => Map<String, dynamic>.from(entry))
+                .toList();
+            commentReplies[commentId] = replies;
+            replyPage[commentId] = 1;
+            replyHasMore[commentId] = replies.length >= 5;
+            likedComments[commentId] = (comment['comment_likes'] as List<dynamic>?)
+                    ?.any((like) => like['user_id'] == widget.userId) ??
+                false;
+          }
         }
       });
-
-      // After posts and comments are processed, prefetch replies for all comments so they persist across restarts
-      try {
-        final allCommentIds = <String>{};
-        postComments.forEach((postId, comments) {
-          for (var c in comments) {
-            final cid = c['id']?.toString();
-            if (cid != null) allCommentIds.add(cid);
-          }
-        });
-
-        if (allCommentIds.isNotEmpty) {
-          final commentIdList = allCommentIds.toList();
-          final responses = await Future.wait(commentIdList.map((cid) async {
-            final res = await Supabase.instance.client
-                .from('replies')
-                .select('*, users!replies_user_id_fkey(name, profile_picture)')
-                .eq('comment_id', cid)
-                .order('created_at', ascending: false);
-            return res as List<dynamic>;
-          }));
-
-          for (var i = 0; i < commentIdList.length; i++) {
-            final cid = commentIdList[i];
-            final res = responses[i];
-            commentReplies[cid] = List<Map<String, dynamic>>.from(res.map((r) => Map<String, dynamic>.from(r)));
-          }
-        }
-      } catch (e) {
-        print('Error prefetching replies: $e');
-      }
     } catch (e) {
       print('Error fetching posts: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -829,7 +757,6 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       );
     } finally {
       setState(() => isLoading = false);
-      // After posts are loaded, scroll to target post if specified
       if (widget.targetPostId != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _scrollToTargetPost();
@@ -905,22 +832,24 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     try {
       final currentPage = refresh ? 0 : (replyPage[commentId] ?? 0);
 
-      final response = await Supabase.instance.client
-          .from('replies')
-          .select('*, users!replies_user_id_fkey(name, profile_picture)')
-          .eq('comment_id', commentId)
-          .order('created_at', ascending: false)
-          .range(currentPage * limit, currentPage * limit + limit - 1);
+      final response = await FastApiService.instance.fetchRepliesForComment(
+        commentId: commentId,
+        limit: limit,
+        offset: currentPage * limit,
+      );
 
-      final List<dynamic> rows = response as List<dynamic>;
+      final List<Map<String, dynamic>> rows = response
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .map(_normalizeReply)
+          .toList();
 
       setState(() {
         if (refresh) {
-          commentReplies[commentId] = List<Map<String, dynamic>>.from(rows.map((r) => Map<String, dynamic>.from(r)));
+          commentReplies[commentId] = rows;
           replyPage[commentId] = 1;
         } else {
           commentReplies.putIfAbsent(commentId, () => []);
-          commentReplies[commentId]!.addAll(rows.map((r) => Map<String, dynamic>.from(r)));
+          commentReplies[commentId]!.addAll(rows);
           replyPage[commentId] = (replyPage[commentId] ?? 0) + 1;
         }
 
@@ -937,78 +866,52 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     try {
       // Extract mentions from reply content
       final mentions = extractMentions(content);
-      
-      final newReply = await Supabase.instance.client
-          .from('replies')
-          .insert({
-        'comment_id': commentId,
-        'user_id': widget.userId,
-        'content': content,
-      }).select('id, content, created_at, user_id').single();
+      final newReply = await FastApiService.instance.createCommunityReply(
+        commentId: commentId,
+        content: content,
+      );
 
-      final userData = await Supabase.instance.client
-          .from('users')
-          .select('name, profile_picture') // <-- add profile_picture
-          .eq('id', widget.userId)
-          .single();
+      final normalizedReply = _normalizeReply(Map<String, dynamic>.from(newReply));
+      final actorName = (normalizedReply['users'] ?? {})['name'] as String? ?? 'Someone';
 
-      final fullReply = {
-        ...Map<String, dynamic>.from(newReply),
-        'users': userData,
-      };
-
-      // Wait a moment for any database triggers to create notifications
-      await Future.delayed(Duration(milliseconds: 500));
-      
-      // Update any existing notifications for this reply to include actor_id
-      // We need to get the comment owner to send notification to
-      final commentOwner = await Supabase.instance.client
-          .from('comments')
-          .select('user_id, post_id')
-          .eq('id', commentId)
-          .single();
-      
-      final commentOwnerId = commentOwner['user_id'];
-      final postId = commentOwner['post_id'];
-      if (commentOwnerId != widget.userId) {
-        // Get current user name
-        final currentUserResponse = await Supabase.instance.client
-            .from('users')
-            .select('name')
-            .eq('id', widget.userId)
-            .single();
-        final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
-        
-        await sendCommunityNotification(
-          recipientId: commentOwnerId,
-          actorId: widget.userId,
-          type: 'reply',
-          message: '$currentUserName replied to your comment',
-          postId: postId,
-          commentId: commentId,
-          actorName: currentUserName,
-        );
+      String? postId;
+      String? commentOwnerId;
+      for (var entry in postComments.entries) {
+        for (var comment in entry.value) {
+          if (comment['id']?.toString() == commentId) {
+            commentOwnerId = comment['user_id']?.toString();
+            postId = comment['post_id']?.toString();
+            break;
+          }
+        }
+        if (commentOwnerId != null) break;
       }
 
-      // Send mention notifications
+      if (commentOwnerId != null && commentOwnerId != widget.userId) {
+        await FastApiService.instance.createNotification({
+          'user_id': commentOwnerId,
+          'actor_id': widget.userId,
+          'type': 'reply',
+          'message': '$actorName replied to your comment',
+          'post_id': postId,
+          'comment_id': commentId,
+        });
+      }
+
       if (mentions.isNotEmpty) {
-        await sendMentionNotifications(mentions, postId, commentId: commentId);
+        await sendMentionNotifications(
+          mentions,
+          postId ?? '',
+          commentId: commentId,
+        );
       }
 
       setState(() {
         commentReplies.putIfAbsent(commentId, () => []);
-        commentReplies[commentId]!.insert(0, fullReply);
-        // reset pagination so next fetch includes this new reply if user views more
+        commentReplies[commentId]!.insert(0, normalizedReply);
         replyPage[commentId] = 1;
         replyHasMore[commentId] = true;
-
-        // Removed: dummy insert and forced comment count updates for replies
-        // Replies do not change top-level comment counts
-
-        // Hide the reply input after posting
         showReplyInput[commentId] = false;
-        
-        // Hide mention suggestions
         final fieldId = 'reply_$commentId';
         showUserSuggestions[fieldId] = false;
         userSuggestions[fieldId] = [];
@@ -1031,10 +934,11 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     });
 
     try {
-      await Supabase.instance.client
-          .from('replies')
-          .update({'content': newContent})
-          .eq('id', replyId);
+      await FastApiService.instance.updateCommunityReply(
+        commentId: commentId,
+        replyId: replyId,
+        content: newContent,
+      );
     } catch (e) {
       // rollback
       setState(() {
@@ -1053,7 +957,10 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     });
 
     try {
-      await Supabase.instance.client.from('replies').delete().eq('id', replyId);
+      await FastApiService.instance.deleteCommunityReply(
+        commentId: commentId,
+        replyId: replyId,
+      );
     } catch (e) {
       // rollback
       setState(() {
@@ -1088,12 +995,11 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
           .getPublicUrl(filePath);
     }
 
-    final newPost = await Supabase.instance.client.from('community_posts').insert({
-      'user_id': widget.userId,
+    final newPost = await FastApiService.instance.createCommunityPost({
       'type': type,
       'content': content,
-      'image_url': imageUrl,
-    }).select('id').single();
+      if (imageUrl != null) 'image_url': imageUrl,
+    });
 
     // Send mention notifications for posts
     if (mentions.isNotEmpty) {
@@ -1744,8 +1650,8 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                                 child: Text(
                                   'Cancel',
                                   style: TextStyle(
-                                    color: Colors.red,
                                     fontWeight: FontWeight.w600,
+                                    color: Colors.red,
                                   ),
                                 ),
                               ),
@@ -1759,7 +1665,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                                         setModalState(() {
                                           isSubmitting = true;
                                         });
-                                        
+
                                         String reason = selectedViolation;
                                         if (selectedViolation == 'Other' && detailsController.text.trim().isNotEmpty) {
                                           reason = detailsController.text.trim();
@@ -1775,7 +1681,7 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                                           });
                                           return;
                                         }
-                                        
+
                                         try {
                                           // Submit report to database
                                           String finalReason = reason;
@@ -1785,21 +1691,18 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
                                           if (detailsController.text.trim().isNotEmpty) {
                                             finalReason += ' - ${detailsController.text.trim()}';
                                           }
-                                          
-                                          await Supabase.instance.client
-                                              .from('reports')
-                                              .insert({
-                                            'post_id': post['id'],
-                                            'user_id': widget.userId,
-                                            'reason': finalReason,
+                                          final targetPostId = post['id']?.toString();
+                                          if (targetPostId == null || targetPostId.isEmpty) {
+                                            throw Exception('Unable to report: missing post id');
+                                          }
+                                          await FastApiService.instance.reportCommunityPost(
+                                            postId: targetPostId,
+                                            reason: finalReason,
+                                          );
+                                          setState(() {
+                                            post['reported'] = true;
                                           });
-                                          
-                                          // Update the reported status of the post
-                                          await Supabase.instance.client
-                                              .from('community_posts')
-                                              .update({'reported': true})
-                                              .eq('id', post['id']);
-                                          
+
                                           Navigator.pop(context);
                                           ScaffoldMessenger.of(context).showSnackBar(
                                             SnackBar(
@@ -1896,38 +1799,22 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
       final foundTime = getDetailedPhilippinesTime(DateTime.now().toUtc());
       final updatedContent = '$currentContent\n\nUPDATE: Pet has been found! - $foundTime';
       
-      await Supabase.instance.client
-          .from('community_posts')
-          .update({
-            'type': 'found',
-            'content': updatedContent,
-          })
-          .eq('id', post['id']);
+      await FastApiService.instance.updateCommunityPost(post['id'].toString(), {
+        'type': 'found',
+        'content': updatedContent,
+      });
 
       // Also update the is_missing status in the pets table for the post owner
       try {
         final userId = post['user_id'];
         if (userId != null) {
-          // Get all pets owned by this user that are currently marked as missing
-          final missingPets = await Supabase.instance.client
-              .from('pets')
-              .select('id, name')
-              .eq('owner_id', userId)
-              .eq('is_missing', true);
-          
-          if (missingPets is List && missingPets.isNotEmpty) {
-            // Try to match the pet by name in the post content
-            for (var pet in missingPets) {
-              final petName = pet['name']?.toString() ?? '';
-              if (petName.isNotEmpty && currentContent.contains(petName)) {
-                // Found matching pet - update is_missing status
-                await Supabase.instance.client
-                    .from('pets')
-                    .update({'is_missing': false})
-                    .eq('id', pet['id']);
-                print('✅ Updated pet ${pet['id']} is_missing status to false');
-                break;
-              }
+          final missingPets = await FastApiService.instance.fetchPets(ownerId: userId.toString());
+          for (var pet in missingPets) {
+            final petName = pet['name']?.toString() ?? '';
+            if (petName.isNotEmpty && currentContent.contains(petName)) {
+              await FastApiService.instance.updatePet(pet['id'].toString(), {'is_missing': false});
+              print('✅ Updated pet ${pet['id']} is_missing status to false');
+              break;
             }
           }
         }
@@ -1978,76 +1865,18 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     if (confirm != true) return;
 
     try {
-      // Delete in the correct order to handle foreign key constraints
-      
-      // 1. First delete all notifications related to comments on this post
-      final commentIds = await Supabase.instance.client
-          .from('comments')
-          .select('id')
-          .eq('post_id', postId);
-      
-      if (commentIds.isNotEmpty) {
-        final commentIdList = commentIds.map((c) => c['id']).toList();
-        
-        // Delete notifications for these comments
-        await Supabase.instance.client
-            .from('notifications')
-            .delete()
-            .inFilter('comment_id', commentIdList);
-        
-        // Delete replies to these comments
-        await Supabase.instance.client
-            .from('replies')
-            .delete()
-            .inFilter('comment_id', commentIdList);
-        
-        // Delete comment likes
-        await Supabase.instance.client
-            .from('comment_likes')
-            .delete()
-            .inFilter('comment_id', commentIdList);
-      }
-      
-      // 2. Delete all notifications related to this post
-      await Supabase.instance.client
-          .from('notifications')
-          .delete()
-          .eq('post_id', postId);
-      
-      // 3. Delete all comments on this post
-      await Supabase.instance.client
-          .from('comments')
-          .delete()
-          .eq('post_id', postId);
-      
-      // 4. Delete all likes on this post
-      await Supabase.instance.client
-          .from('likes')
-          .delete()
-          .eq('post_id', postId);
-      
-      // 5. Delete all bookmarks for this post
-      await Supabase.instance.client
-          .from('bookmarks')
-          .delete()
-          .eq('post_id', postId);
-      
-      // 6. Finally delete the post itself
-      await Supabase.instance.client
-          .from('community_posts')
-          .delete()
-          .eq('id', postId);
+      await FastApiService.instance.deleteCommunityPost(postId);
 
       // Clean up local state
       setState(() {
-        posts.removeWhere((post) => post['id'].toString() == postId);
-        postComments.remove(postId);
-        commentCounts.remove(postId);
-        locallyUpdatedPosts.remove(postId);
-        likedPosts.remove(postId);
-        likeCounts.remove(postId);
-        bookmarkedPosts.remove(postId);
-        showCommentInput.remove(postId);
+      posts.removeWhere((post) => post['id'].toString() == postId);
+      postComments.remove(postId);
+      commentCounts.remove(postId);
+      locallyUpdatedPosts.remove(postId);
+      likedPosts.remove(postId);
+      likeCounts.remove(postId);
+      bookmarkedPosts.remove(postId);
+      showCommentInput.remove(postId);
         commentControllers.remove(postId);
       });
 
@@ -2141,21 +1970,15 @@ void showEditPostModal(Map post) {
                 if (imageChanged) updatedFields['image_url'] = newImageUrl;
 
                 try {
-                  final response = await Supabase.instance.client
-                    .from('community_posts')
-                    .update(updatedFields)
-                    .eq('id', post['id'])
-                    .select('*');
-
-                  if (response.isEmpty) {
-                    print('No post updated.');
-                  } else {
-                    print('Post updated successfully.');
-                    Navigator.pop(context);
-                    fetchPosts(); // Refresh the list
-                  }
+                  await FastApiService.instance.updateCommunityPost(post['id'].toString(), updatedFields);
+                  print('Post updated successfully.');
+                  Navigator.pop(context);
+                  fetchPosts(); // Refresh the list
                 } catch (e) {
                   print('Error updating post: $e');
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to update post. Please try again.')),
+                  );
                 }
               },
               style: ElevatedButton.styleFrom(
@@ -2210,7 +2033,7 @@ void showEditPostModal(Map post) {
         showCommentInput.putIfAbsent(postId, () => false);
         commentControllers.putIfAbsent(postId, () => TextEditingController());
 
-      int likeCount = (post['likes'] != null && post['likes'] is List) ? post['likes'].length : 0;
+      final displayLikeCount = likeCounts[postId] ?? 0;
       if (!postComments.containsKey(postId)) {
         List<Map<String, dynamic>> comments = [];
         if (post['comments'] != null && post['comments'] is List) {
@@ -2545,83 +2368,50 @@ void showEditPostModal(Map post) {
                               color: (likedPosts[postId] ?? false) ? Colors.red : deepRed,
                             ),
                             onPressed: () async {
-                              // Any user can like/unlike any post
                               final bool currentLikeState = likedPosts[postId] ?? false;
                               final bool newLikeState = !currentLikeState;
+                              final int oldLikeCount = likeCounts[postId] ?? 0;
+                              final int updatedLikeCount = newLikeState
+                                  ? oldLikeCount + 1
+                                  : (oldLikeCount > 0 ? oldLikeCount - 1 : 0);
+                              final postOwnerId = post['user_id']?.toString();
                               setState(() {
                                 likedPosts[postId] = newLikeState;
-                                if (newLikeState) {
-                                  likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
-                                } else {
-                                  likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
-                                }
+                                likeCounts[postId] = updatedLikeCount;
                               });
                               try {
                                 if (newLikeState) {
-                                  await Supabase.instance.client
-                                    .from('likes')
-                                    .insert({'post_id': postId, 'user_id': widget.userId});
-                                  
-                                  // Send like notification using new service
-                                  if (post['user_id'] != widget.userId) {
-                                    // Get current user name
-                                    final currentUserResponse = await Supabase.instance.client
-                                        .from('users')
-                                        .select('name')
-                                        .eq('id', widget.userId)
-                                        .single();
-                                    final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
-                                    
-                                    await sendCommunityNotification(
-                                      recipientId: post['user_id'],
-                                      actorId: widget.userId,
-                                      type: 'like',
-                                      message: '$currentUserName liked your post',
-                                      postId: postId,
-                                      actorName: currentUserName,
-                                    );
+                                  await FastApiService.instance.likeCommunityPost(postId);
+                                  if (postOwnerId != null && postOwnerId != widget.userId) {
+                                    await FastApiService.instance.createNotification({
+                                      'user_id': postOwnerId,
+                                      'actor_id': widget.userId,
+                                      'type': 'like',
+                                      'message': '$currentUserName liked your post',
+                                      'post_id': postId,
+                                    });
                                   }
                                 } else {
-                                  await Supabase.instance.client
-                                    .from('likes')
-                                    .delete()
-                                    .eq('post_id', postId)
-                                    .eq('user_id', widget.userId);
+                                  await FastApiService.instance.unlikeCommunityPost(postId);
                                 }
-                                final updatedPost = await Supabase.instance.client
-                                  .from('community_posts')
-                                  .select('*, likes(user_id)')
-                                  .eq('id', postId)
-                                  .single();
-                                setState(() {
-                                  final index = posts.indexWhere((p) => p['id'].toString() == postId);
-                                  if (index != -1) {
-                                    posts[index]['likes'] = updatedPost['likes'];
-                                    likeCounts[postId] = updatedPost['likes']?.length ?? 0;
-                                  }
-                                });
                               } catch (e) {
                                 print('Error updating like: $e');
                                 setState(() {
                                   likedPosts[postId] = currentLikeState;
-                                  if (currentLikeState) {
-                                    likeCounts[postId] = (likeCounts[postId] ?? 0) + 1;
-                                  } else {
-                                    likeCounts[postId] = (likeCounts[postId] ?? 1) - 1;
-                                  }
+                                  likeCounts[postId] = oldLikeCount;
                                 });
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text('Failed to update like. Please try again.'),
                                     duration: Duration(seconds: 2),
-                                  )
+                                  ),
                                 );
                               }
                             },
                           ),
-                          if (likeCount > 0)
+                          if (displayLikeCount > 0)
                             Text(
-                              '$likeCount', 
+                              '$displayLikeCount', 
                               style: TextStyle(fontSize: 12),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -2827,22 +2617,36 @@ void showEditPostModal(Map post) {
                                                                     onPressed: () async {
                                                                       final newContent = editCommentControllers[commentId]?.text.trim();
                                                                       if (newContent?.isNotEmpty ?? false) {
-                                                                        final originalContent = comment['content'];
+                                                                        final originalComment = Map<String, dynamic>.from(comment);
                                                                         setState(() { commentLoading[commentId] = true; });
                                                                         Navigator.pop(context);
                                                                         try {
-                                                                          await Supabase.instance.client
-                                                                              .from('comments')
-                                                                              .update({'content': newContent})
-                                                                              .eq('id', commentId);
+                                                                          final updatedComment = await FastApiService.instance.updateCommunityComment(
+                                                                            commentId: commentId,
+                                                                            content: newContent!,
+                                                                          );
+                                                                          final normalizedComment = Map<String, dynamic>.from(updatedComment);
+                                                                          normalizedComment['users'] = normalizedComment['users'] ?? normalizedComment['user'];
+                                                                          normalizedComment['comment_likes'] = normalizedComment['comment_likes'] ?? normalizedComment['likes'] ?? [];
+                                                                          normalizedComment['replies'] = normalizedComment['replies'] ?? [];
                                                                           setState(() {
-                                                                            comment['content'] = newContent;
+                                                                            final index = postComments[postId]
+                                                                                ?.indexWhere((c) => c['id']?.toString() == commentId) ??
+                                                                            -1;
+                                                                            if (index != -1) {
+                                                                              postComments[postId]![index] = normalizedComment;
+                                                                            }
                                                                             commentLoading[commentId] = false;
                                                                           });
                                                                         } catch (e) {
                                                                           print('Error updating comment: $e');
                                                                           setState(() {
-                                                                            comment['content'] = originalContent;
+                                                                            final index = postComments[postId]
+                                                                                ?.indexWhere((c) => c['id']?.toString() == commentId) ??
+                                                                            -1;
+                                                                            if (index != -1) {
+                                                                              postComments[postId]![index] = originalComment;
+                                                                            }
                                                                             commentLoading[commentId] = false;
                                                                           });
                                                                           ScaffoldMessenger.of(context).showSnackBar(
@@ -2882,15 +2686,13 @@ void showEditPostModal(Map post) {
                                                             );
                                                             if (confirm == true) {
                                                               final deletedComment = {...comment};
-                                                              final commentIndex = postComments[postId]!.indexOf(comment);
+                                                              final commentIndex = postComments[postId]
+                                                                  ?.indexWhere((c) => c['id']?.toString() == commentId) ??
+                                                              -1;
                                                               setState(() { commentLoading[commentId] = true; });
                                                               try {
-                                                                await Supabase.instance.client
-                                                                  .from('comments')
-                                                                  .delete()
-                                                                  .eq('id', commentId);
+                                                                await FastApiService.instance.deleteCommunityComment(commentId: commentId);
                                                                 setState(() {
-                                                                  // Remove from original storage so future renders stay clean
                                                                   postComments[postId]?.removeWhere((c) =>
                                                                       c['id']?.toString() == commentId);
                                                                   commentCounts[postId] = postComments[postId]?.length ?? 0;
@@ -2899,8 +2701,7 @@ void showEditPostModal(Map post) {
                                                               } catch (e) {
                                                                 print('Error deleting comment: $e');
                                                                 setState(() {
-                                                                  // Rollback visualization only
-                                                                  if (!postComments[postId]!.contains(deletedComment)) {
+                                                                  if (commentIndex != -1 && !postComments[postId]!.contains(deletedComment)) {
                                                                     postComments[postId]!.insert(commentIndex, deletedComment);
                                                                   }
                                                                   commentCounts[postId] = postComments[postId]!.length;
@@ -2942,62 +2743,35 @@ void showEditPostModal(Map post) {
                                           children: [
                                             InkWell(
                                               onTap: () async {
-                                                // Any user can like/unlike any comment
                                                 final currentLikeState = likedComments[commentId] ?? false;
                                                 final newLikeState = !currentLikeState;
-                                                final oldLikes = comment['comment_likes'] as List? ?? [];
+                                                final oldLikes = (comment['comment_likes'] as List?)
+                                                    ?.map((entry) => Map<String, dynamic>.from(entry))
+                                                    .toList() ?? [];
+                                                final updatedLikes = newLikeState
+                                                    ? [...oldLikes, {'user_id': widget.userId}]
+                                                    : oldLikes.where((like) => like['user_id'] != widget.userId).toList();
                                                 setState(() {
                                                   likedComments[commentId] = newLikeState;
-                                                  if (newLikeState) {
-                                                    comment['comment_likes'] = [...oldLikes, {'user_id': widget.userId}];
-                                                  } else {
-                                                    comment['comment_likes'] = oldLikes.where((like) => like['user_id'] != widget.userId).toList();
-                                                  }
+                                                  comment['comment_likes'] = updatedLikes;
                                                 });
                                                 try {
                                                   if (newLikeState) {
-                                                    await Supabase.instance.client
-                                                        .from('comment_likes')
-                                                        .insert({
-                                                      'comment_id': commentId,
-                                                      'user_id': widget.userId
-                                                    });
-                                                    
-                                                    // Send comment like notification using new service
-                                                    final commentOwnerId = comment['user_id'];
-                                                    if (commentOwnerId != widget.userId) {
-                                                      // Get current user name
-                                                      final currentUserResponse = await Supabase.instance.client
-                                                          .from('users')
-                                                          .select('name')
-                                                          .eq('id', widget.userId)
-                                                          .single();
-                                                      final currentUserName = currentUserResponse['name'] as String? ?? 'Someone';
-                                                      
-                                                      await sendCommunityNotification(
-                                                        recipientId: commentOwnerId,
-                                                        actorId: widget.userId,
-                                                        type: 'comment_like',
-                                                        message: '$currentUserName liked your comment',
-                                                        commentId: commentId,
-                                                        actorName: currentUserName,
-                                                      );
+                                                    await FastApiService.instance.likeCommunityComment(commentId);
+                                                    final commentOwnerId = comment['user_id']?.toString();
+                                                    if (commentOwnerId != null && commentOwnerId != widget.userId) {
+                                                      await FastApiService.instance.createNotification({
+                                                        'user_id': commentOwnerId,
+                                                        'actor_id': widget.userId,
+                                                        'type': 'comment_like',
+                                                        'message': '$currentUserName liked your comment',
+                                                        'comment_id': commentId,
+                                                        'post_id': postId,
+                                                      });
                                                     }
                                                   } else {
-                                                    await Supabase.instance.client
-                                                        .from('comment_likes')
-                                                        .delete()
-                                                        .eq('comment_id', commentId)
-                                                        .eq('user_id', widget.userId);
+                                                    await FastApiService.instance.unlikeCommunityComment(commentId);
                                                   }
-                                                  final updatedComment = await Supabase.instance.client
-                                                    .from('comments')
-                                                    .select('comment_likes(*)')
-                                                    .eq('id', commentId)
-                                                    .single();
-                                                  setState(() {
-                                                    comment['comment_likes'] = updatedComment['comment_likes'];
-                                                  });
                                                 } catch (e) {
                                                   print('Error updating comment like: $e');
                                                   setState(() {
@@ -3008,7 +2782,7 @@ void showEditPostModal(Map post) {
                                                     SnackBar(
                                                       content: Text('Failed to update comment like. Please try again.'),
                                                       duration: Duration(seconds: 2),
-                                                    )
+                                                    ),
                                                   );
                                                 }
                                               },

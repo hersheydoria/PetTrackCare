@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
+import '../services/fastapi_service.dart';
 import '../services/notification_service.dart';
 import 'chat_detail_screen.dart';
 
@@ -20,15 +20,18 @@ class NotificationScreen extends StatefulWidget {
 }
 
 class _NotificationScreenState extends State<NotificationScreen> {
-  final supabase = Supabase.instance.client;
+  final _fastApi = FastApiService.instance;
   List<Map<String, dynamic>> notifications = [];
-  StreamSubscription<List<Map<String, dynamic>>>? _subscription;
-  RealtimeChannel? _realtimeChannel;
   bool isLoading = true;
 
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+  final Map<String, Map<String, dynamic>> _userCache = {};
   final Map<String, String?> _avatarCache = {};
-  final Map<String, String?> _postCaptionCache = {};
+  final Set<String> _seenNotificationIds = {};
+  Timer? _pollingTimer;
+  bool _isRefreshing = false;
+  String? _currentUserId;
+  bool _authFailed = false;
 
   @override
   void initState() {
@@ -39,10 +42,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   @override
   void dispose() {
-    _subscription?.cancel();
-    if (_realtimeChannel != null) {
-      supabase.removeChannel(_realtimeChannel!);
-    }
+    _pollingTimer?.cancel();
     super.dispose();
   }
 
@@ -61,69 +61,29 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   Future<void> _initNotifications() async {
-    final user = supabase.auth.currentUser;
-    if (user == null) {
+    if (!_fastApi.hasToken) {
       setState(() => isLoading = false);
       return;
     }
-    final userId = user.id;
-    
-    print('🔧 Initializing notifications for user: $userId');
 
     try {
-      final res = await supabase
-          .from('notifications')
-          .select()
-          .eq('user_id', userId)
-          .order('created_at', ascending: false);
-      setState(() {
-        notifications = List<Map<String, dynamic>>.from(res);
-        isLoading = false;
-      });
-      print('📋 Loaded ${notifications.length} existing notifications');
-      _prefetchCaptionsFor(notifications);
+      final user = await _fastApi.fetchCurrentUser();
+      _currentUserId = user['id']?.toString();
     } catch (e) {
-      print('❌ Error loading notifications: $e');
-      setState(() => isLoading = false);
+      print('❌ Failed to load current user for notifications: $e');
+      if (e.toString().contains('401')) {
+        await _handleAuthFailure();
+        return;
+      }
     }
 
-    _realtimeChannel = supabase.channel('notifications_user_$userId');
-    
-    print('📡 Setting up realtime subscription for user: $userId');
-    print('   Channel: notifications_user_$userId');
+    if (_currentUserId == null) {
+      setState(() => isLoading = false);
+      return;
+    }
 
-    _realtimeChannel!.onPostgresChanges(
-      event: PostgresChangeEvent.insert,
-      schema: 'public',
-      table: 'notifications',
-      filter: PostgresChangeFilter(
-        type: PostgresChangeFilterType.eq,
-        column: 'user_id',
-        value: userId,
-      ),
-      callback: (payload) {
-        print('🔔 Realtime notification received in notification_screen');
-        print('   User ID filter: $userId');
-        print('   Payload: ${payload.newRecord}');
-        
-        final newRow = payload.newRecord;
-        final row = Map<String, dynamic>.from(newRow);
-        
-        print('   Processed row: $row');
-        
-        setState(() {
-          notifications = [row, ...notifications];
-        });
-        
-        print('📱 Calling _showLocalNotification for system notification...');
-        // Show system notification (appears outside the app)
-        _showLocalNotification(row);
-      },
-    );
-
-    print('🔗 Subscribing to realtime channel...');
-    final subscribeResult = await _realtimeChannel!.subscribe();
-    print('📡 Realtime subscription result: $subscribeResult');
+    await _refreshNotifications();
+    _startPolling();
   }
 
   Future<void> _showLocalNotification(Map<String, dynamic> n) async {
@@ -134,7 +94,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final title = await _buildNotificationTitle(n);
     final body = n['message']?.toString() ?? '';
     final type = n['type']?.toString();
-    final currentUserId = supabase.auth.currentUser?.id;
+    final currentUserId = _currentUserId;
     
     print('   Title: $title');
     print('   Body: $body');
@@ -145,22 +105,19 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final payloadMap = <String, dynamic>{};
     if (n['id'] != null) payloadMap['notificationId'] = n['id'].toString();
     if (n['post_id'] != null) payloadMap['postId'] = n['post_id'].toString();
+    if (n['postId'] != null && payloadMap['postId'] == null) {
+      payloadMap['postId'] = n['postId'].toString();
+    }
+    if (n['post_id'] != null) payloadMap['post_id'] = n['post_id'].toString();
     if (n['job_id'] != null) payloadMap['jobId'] = n['job_id'].toString();
+    if (n['job_id'] != null) payloadMap['job_id'] = n['job_id'].toString();
     if (n['type'] != null) payloadMap['type'] = n['type'].toString();
     if (n['actor_id'] != null) {
       payloadMap['senderId'] = n['actor_id'].toString();
       // Get actor name for message notifications
       if (type == 'message') {
-        try {
-          final actorResponse = await supabase
-              .from('users')
-              .select('name')
-              .eq('id', n['actor_id'])
-              .single();
-          payloadMap['senderName'] = actorResponse['name'] ?? 'Someone';
-        } catch (e) {
-          payloadMap['senderName'] = 'Someone';
-        }
+        final actorName = await _getActorName(n['actor_id'].toString());
+        payloadMap['senderName'] = actorName ?? 'Someone';
       }
     }
     final payload = json.encode(payloadMap);
@@ -186,7 +143,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
   void _handleNotificationPayloadTap(String payload) async {
     try {
       final Map<String, dynamic> map = json.decode(payload) as Map<String, dynamic>;
-      final postId = map['postId']?.toString();
+      var postId = map['postId']?.toString();
+      postId ??= map['post_id']?.toString();
       final notificationId = map['notificationId']?.toString();
       final jobId = map['jobId']?.toString();
       final notificationType = map['type']?.toString();
@@ -240,7 +198,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
       if (idx != -1) notifications[idx]['is_read'] = true;
     });
     try {
-      await supabase.from('notifications').update({'is_read': true}).eq('id', id);
+      await _fastApi.updateNotification(id, {'is_read': true});
     } catch (e) {
       print('Failed to mark notification read: $e');
     }
@@ -249,173 +207,56 @@ class _NotificationScreenState extends State<NotificationScreen> {
   String? _extractPostId(Map<String, dynamic> n) {
     final postId = n['post_id']?.toString();
     if (postId != null && postId.isNotEmpty) return postId;
+    final camelPostId = n['postId']?.toString();
+    if (camelPostId != null && camelPostId.isNotEmpty) return camelPostId;
     return null;
   }
 
   Future<String?> _extractPostIdAsync(Map<String, dynamic> n) async {
-    // First try direct post_id
-    final postId = n['post_id']?.toString();
-    if (postId != null && postId.isNotEmpty) return postId;
-    
-    // For comment-related notifications, get post_id from the comment
-    final type = n['type']?.toString() ?? '';
-    final commentId = n['comment_id']?.toString();
-    final replyId = n['reply_id']?.toString();
-    
-    if ((type == 'comment_like' || type == 'reply' || type == 'mention') && commentId != null && commentId.isNotEmpty) {
-      try {
-        final commentRes = await supabase
-            .from('comments')
-            .select('post_id')
-            .eq('id', commentId)
-            .maybeSingle();
-        
-        final commentPostId = commentRes?['post_id']?.toString();
-        if (commentPostId != null && commentPostId.isNotEmpty) {
-          return commentPostId;
-        }
-      } catch (e) {
-        print('Error fetching post_id from comment: $e');
-      }
-    }
-    
-    // For reply notifications, we might need to get the post_id from the reply's comment
-    if (type == 'reply' && replyId != null && replyId.isNotEmpty) {
-      try {
-        final replyRes = await supabase
-            .from('replies')
-            .select('comment_id')
-            .eq('id', replyId)
-            .maybeSingle();
-        
-        final parentCommentId = replyRes?['comment_id']?.toString();
-        if (parentCommentId != null && parentCommentId.isNotEmpty) {
-          final commentRes = await supabase
-              .from('comments')
-              .select('post_id')
-              .eq('id', parentCommentId)
-              .maybeSingle();
-          
-          final commentPostId = commentRes?['post_id']?.toString();
-          if (commentPostId != null && commentPostId.isNotEmpty) {
-            return commentPostId;
-          }
-        }
-      } catch (e) {
-        print('Error fetching post_id from reply: $e');
-      }
-    }
-    
-    return null;
-  }
-
-  Future<void> _prefetchCaptionsFor(List<Map<String, dynamic>> items) async {
-    final ids = <String>{};
-    
-    // First collect post IDs from direct post_id fields
-    for (final n in items) {
-      final pid = _extractPostId(n);
-      if (pid != null && !_postCaptionCache.containsKey(pid)) {
-        ids.add(pid);
-      }
-    }
-    
-    // Then collect post IDs from comment-related notifications
-    for (final n in items) {
-      final pid = await _extractPostIdAsync(n);
-      if (pid != null && !_postCaptionCache.containsKey(pid)) {
-        ids.add(pid);
-      }
-    }
-    
-    if (ids.isEmpty) return;
-    try {
-      final List<dynamic> rows = await supabase
-          .from('community_posts')
-          .select('id, content')
-          .inFilter('id', ids.toList());
-      for (final r in rows) {
-        final id = r['id']?.toString();
-        final content = r['content']?.toString();
-        if (id != null) _postCaptionCache[id] = content;
-      }
-      if (mounted) setState(() {});
-    } catch (_) {}
+    return _extractPostId(n);
   }
 
   Future<String> _buildNotificationTitle(Map<String, dynamic> n) async {
-    // First, check if we have a message from the database triggers (with content previews)
-    final msg = n['message'];
-    if (msg != null && msg.toString().isNotEmpty) {
-      // If we have actor_id, prepend the actor name to the message
-      final actorId = n['actor_id'];
-      if (actorId != null) {
-        try {
-          final userRow = await supabase
-              .from('users')
-              .select('name')
-              .eq('id', actorId.toString())
-              .maybeSingle();
-          final actorName = userRow?['name']?.toString() ?? 'Someone';
-          
-          // Return actor name + message from database
-          return '$actorName ${msg.toString()}';
-        } catch (e) {
-          print('Error getting actor name: $e');
-          // Return just the message if we can't get actor name
-          return msg.toString();
-        }
-      } else {
-        // Return just the message if no actor_id
-        return msg.toString();
+    final msg = n['message']?.toString();
+    final actorId = n['actor_id']?.toString();
+    final actorName = actorId != null ? await _getActorName(actorId) : null;
+
+    if (msg != null && msg.isNotEmpty) {
+      return actorName != null ? '$actorName $msg' : msg;
+    }
+
+    if (actorName != null) {
+      final type = n['type']?.toString() ?? '';
+      switch (type) {
+        case 'like':
+          return '$actorName liked your post';
+        case 'comment':
+          return '$actorName commented on your post';
+        case 'comment_like':
+          return '$actorName liked your comment';
+        case 'reply':
+          return '$actorName replied to your comment';
+        case 'mention':
+          return '$actorName mentioned you in a ${n['comment_id'] != null ? 'comment' : 'post'}';
+        case 'follow':
+          return '$actorName started following you';
+        case 'missing_pet':
+          return '$actorName posted about a missing pet';
+        case 'found_pet':
+          return '$actorName posted about a found pet';
+        case 'job_request':
+          return '$actorName sent you a job request';
+        case 'job_accepted':
+          return '$actorName accepted your job request';
+        case 'job_declined':
+          return '$actorName declined your job request';
+        case 'job_completed':
+          return '$actorName marked a job as completed';
+        default:
+          return '$actorName interacted with your content';
       }
     }
-    
-    // Fallback to generic messages if no message in database (for older notifications)
-    final actorId = n['actor_id'];
-    if (actorId != null) {
-      try {
-        final userRow = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', actorId.toString())
-            .maybeSingle();
-        final actorName = userRow?['name']?.toString() ?? 'Someone';
-        
-        final type = n['type']?.toString() ?? '';
-        switch (type) {
-          case 'like':
-            return '$actorName liked your post';
-          case 'comment':
-            return '$actorName commented on your post';
-          case 'comment_like':
-            return '$actorName liked your comment';
-          case 'reply':
-            return '$actorName replied to your comment';
-          case 'mention':
-            return '$actorName mentioned you in a ${n['comment_id'] != null ? 'comment' : 'post'}';
-          case 'follow':
-            return '$actorName started following you';
-          case 'missing_pet':
-            return '$actorName posted about a missing pet';
-          case 'found_pet':
-            return '$actorName posted about a found pet';
-          case 'job_request':
-            return '$actorName sent you a job request';
-          case 'job_accepted':
-            return '$actorName accepted your job request';
-          case 'job_declined':
-            return '$actorName declined your job request';
-          case 'job_completed':
-            return '$actorName marked a job as completed';
-          default:
-            return '$actorName interacted with your content';
-        }
-      } catch (e) {
-        print('Error building notification title with actor: $e');
-      }
-    }
-    
+
     return 'You have a new notification';
   }
 
@@ -423,23 +264,33 @@ class _NotificationScreenState extends State<NotificationScreen> {
     if (_avatarCache.containsKey(userId)) {
       return _avatarCache[userId];
     }
+    final userRow = await _fetchUser(userId);
+    final userPic = userRow?['profile_picture']?.toString();
+    if (userPic != null && userPic.trim().isNotEmpty && !userPic.toLowerCase().contains('default')) {
+      _avatarCache[userId] = userPic;
+      return userPic;
+    }
+    _avatarCache[userId] = null;
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _fetchUser(String userId) async {
+    if (_userCache.containsKey(userId)) {
+      return _userCache[userId];
+    }
     try {
-      final userRow = await supabase
-          .from('users')
-          .select('profile_picture')
-          .eq('id', userId)
-          .maybeSingle();
-      final userPic = userRow?['profile_picture']?.toString();
-      if (userPic != null && userPic.trim().isNotEmpty && !userPic.toLowerCase().contains('default')) {
-        _avatarCache[userId] = userPic;
-        return userPic;
-      }
-      _avatarCache[userId] = null;
-      return null;
-    } catch (_) {
-      _avatarCache[userId] = null;
+      final user = await _fastApi.fetchUserById(userId);
+      _userCache[userId] = user;
+      return user;
+    } catch (e) {
+      print('Error fetching user $userId: $e');
       return null;
     }
+  }
+
+  Future<String?> _getActorName(String userId) async {
+    final user = await _fetchUser(userId);
+    return user?['name']?.toString();
   }
 
   String? _extractPublicUserId(Map<String, dynamic> n) {
@@ -510,25 +361,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
     // Handle message notifications - navigate to chat
     if (type == 'message' && actorId != null) {
       // Get sender name for navigation
-      String senderName = 'Chat';
-      try {
-        final userResponse = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', actorId)
-            .single();
-        senderName = userResponse['name'] as String? ?? 'Chat';
-      } catch (e) {
-        print('Error getting sender name: $e');
-      }
+      final senderName = await _getActorName(actorId) ?? 'Chat';
       
       print('Navigating to chat with senderId=$actorId, senderName=$senderName');
-      final currentUser = supabase.auth.currentUser;
-      if (currentUser != null) {
+      if (_currentUserId != null) {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => ChatDetailScreen(
-              userId: currentUser.id,
+              userId: _currentUserId!,
               receiverId: actorId,
               userName: senderName,
             ),
@@ -573,8 +413,13 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = supabase.auth.currentUser;
-    if (user == null) {
+    final signedIn = _currentUserId != null;
+    if (!signedIn) {
+      final title = _authFailed ? 'Session Expired' : 'Sign In Required';
+      final subtitle = _authFailed
+          ? 'Your session expired. Please log back in to keep receiving notifications.'
+          : 'Please sign in to view your notifications';
+      final actionLabel = _authFailed ? 'Re-Login' : 'Sign In';
       return Scaffold(
         backgroundColor: lightBlush,
         appBar: AppBar(
@@ -588,13 +433,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
             ),
           ),
         ),
-        body: _buildEmptyState(
-          icon: Icons.login,
-          title: 'Sign In Required',
-          subtitle: 'Please sign in to view your notifications',
-          actionLabel: 'Sign In',
-          onAction: () => Navigator.of(context).pushNamed('/login'),
-        ),
+        body: isLoading
+            ? _buildLoadingState()
+            : _buildEmptyState(
+                icon: Icons.login,
+                title: title,
+                subtitle: subtitle,
+                actionLabel: actionLabel,
+                onAction: () => Navigator.of(context).pushNamed('/login'),
+              ),
       );
     }
 
@@ -660,10 +507,11 @@ class _NotificationScreenState extends State<NotificationScreen> {
                 });
                 
                 try {
-                  await supabase
-                      .from('notifications')
-                      .update({'is_read': true})
-                      .inFilter('id', unreadIds.map((id) => id.toString()).toList());
+                  final futures = unreadIds
+                      .map((id) => id?.toString())
+                      .whereType<String>()
+                      .map((id) => _fastApi.updateNotification(id, {'is_read': true}));
+                  await Future.wait(futures);
                   
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -1054,25 +902,41 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   // Refresh functionality
-  Future<void> _refreshNotifications() async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return;
-    
+  Future<void> _refreshNotifications({bool showNewSystemNotifications = false}) async {
+    if (_currentUserId == null || _isRefreshing) return;
+    _isRefreshing = true;
+
     try {
-      final res = await supabase
-          .from('notifications')
-          .select()
-          .eq('user_id', user.id)
-          .order('created_at', ascending: false);
-      
-      setState(() {
-        notifications = List<Map<String, dynamic>>.from(res);
-      });
-      
-      _prefetchCaptionsFor(notifications);
+      final fetched = await _fastApi.fetchNotifications();
+      final newEntries = showNewSystemNotifications
+          ? fetched.where((n) => _isNotificationNew(n)).toList()
+          : <Map<String, dynamic>>[];
+
+      if (mounted) {
+        setState(() {
+          notifications = fetched;
+          isLoading = false;
+        });
+      }
+
+      _seenNotificationIds.addAll(
+        fetched
+            .map((n) => n['id']?.toString())
+            .whereType<String>(),
+      );
+
+      if (showNewSystemNotifications && newEntries.isNotEmpty) {
+        for (final entry in newEntries.reversed) {
+          await _showLocalNotification(entry);
+        }
+      }
     } catch (e) {
       print('Error refreshing notifications: $e');
-      if (mounted) {
+      if (e.toString().contains('401')) {
+        await _handleAuthFailure();
+        return;
+      }
+      if (!showNewSystemNotifications && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to refresh notifications'),
@@ -1082,7 +946,33 @@ class _NotificationScreenState extends State<NotificationScreen> {
           ),
         );
       }
+    } finally {
+      _isRefreshing = false;
     }
+  }
+
+  Future<void> _handleAuthFailure() async {
+    print('🚪 Notification screen auth failure detected – clearing session');
+    await _fastApi.logout();
+    if (mounted) {
+      setState(() {
+        _currentUserId = null;
+        isLoading = false;
+        _authFailed = true;
+      });
+    }
+  }
+
+  bool _isNotificationNew(Map<String, dynamic> item) {
+    final id = item['id']?.toString();
+    return id != null && !_seenNotificationIds.contains(id);
+  }
+
+  void _startPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _refreshNotifications(showNewSystemNotifications: true);
+    });
   }
 
   // Enhanced avatar with better styling

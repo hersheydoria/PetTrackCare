@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'main_navigation.dart';
 import 'onboarding_screen.dart';
-import '../services/notification_service.dart';
+import '../services/fastapi_service.dart';
 
 class LoginScreen extends StatefulWidget {
   @override
@@ -62,46 +61,28 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  // New: check persisted Supabase session and skip login if present
   Future<void> _checkExistingSession() async {
-    final session = Supabase.instance.client.auth.currentSession;
-    final user = session?.user;
-    if (user != null) {
-      // Check user status in public.users table
-      try {
-        final userData = await Supabase.instance.client
-            .from('users')
-            .select('status')
-            .eq('id', user.id)
-            .single();
-        
-        final userStatus = userData['status']?.toString().toLowerCase();
-        
-        if (userStatus == 'inactive') {
-          // Sign out the user immediately if inactive
-          await Supabase.instance.client.auth.signOut();
-          if (mounted) {
-            setState(() => isCheckingSession = false);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Your account has been deactivated. Please contact support.'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-          return;
-        }
-      } catch (e) {
-        print('Error checking user status: $e');
-        // If we can't check status, allow the session to continue but log the error
-      }
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _navigateAfterLogin(user.id);
-      });
-    } else {
+    await FastApiService.instance.initialize();
+    if (!FastApiService.instance.hasToken) {
       if (mounted) setState(() => isCheckingSession = false);
+      return;
     }
+
+    try {
+      final currentUser = await FastApiService.instance.fetchCurrentUser();
+      final userId = currentUser['id']?.toString();
+      if (userId != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _navigateAfterLogin(userId);
+        });
+        return;
+      }
+    } catch (e) {
+      print('Failed to refresh FastAPI session: $e');
+      await FastApiService.instance.logout();
+    }
+
+    if (mounted) setState(() => isCheckingSession = false);
   }
 
   // Helper method to check if onboarding is needed and navigate accordingly
@@ -134,50 +115,14 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => isLoading = true);
 
     try {
-      final response = await Supabase.instance.client.auth.signInWithPassword(
-        email: emailController.text.trim(),
-        password: passwordController.text.trim(),
+      await FastApiService.instance.login(
+        emailController.text.trim(),
+        passwordController.text.trim(),
       );
-
-      final user = response.user;
-
-      if (user != null) {
-        // Check user status in public.users table
-        try {
-          final userData = await Supabase.instance.client
-              .from('users')
-              .select('status')
-              .eq('id', user.id)
-              .single();
-          
-          final userStatus = userData['status']?.toString().toLowerCase();
-          
-          if (userStatus == 'inactive') {
-            // Sign out the user immediately
-            await Supabase.instance.client.auth.signOut();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Your account has been deactivated. Please contact support.'),
-                backgroundColor: Colors.red,
-              ),
-            );
-            setState(() => isLoading = false);
-            return;
-          }
-        } catch (e) {
-          print('Error checking user status: $e');
-          // If we can't check status, allow login but log the error
-        }
-
-        // Reinitialize notification subscription for the logged-in user
-        await reinitializeNotificationSubscription();
-
-        _navigateAfterLogin(user.id);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Login failed: No user found.')),
-        );
-      }
+      final currentUser = await FastApiService.instance.fetchCurrentUser();
+      final userId = currentUser['id']?.toString();
+      if (userId == null) throw Exception('Unable to resolve user id');
+      _navigateAfterLogin(userId);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Login failed: ${e.toString()}')),
@@ -187,26 +132,12 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => isLoading = false);
   }
 
-  void _resetPassword() async {
-    final email = emailController.text.trim();
-
-    if (email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please enter your email to reset your password')),
-      );
-      return;
-    }
-
-    try {
-      await Supabase.instance.client.auth.resetPasswordForEmail(email);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Password reset email sent')),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reset failed: ${e.toString()}')),
-      );
-    }
+  void _resetPassword() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Password reset is handled on the FastAPI backend. Please contact support if you need help.'),
+      ),
+    );
   }
 
   @override
