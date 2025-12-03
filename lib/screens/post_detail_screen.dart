@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/fastapi_service.dart';
 
 // Colors from community_screen
 const deepRed = Color(0xFFB82132);
@@ -21,14 +21,15 @@ class PostDetailScreen extends StatefulWidget {
 }
 
 class _PostDetailScreenState extends State<PostDetailScreen> {
+  final FastApiService _fastApi = FastApiService.instance;
   Map<String, dynamic>? post;
+  Map<String, dynamic>? _currentUser;
   bool isLoading = true;
   String? error;
 
   // Local state for comment actions
   final Map<String, TextEditingController> editCommentControllers = {};
   final Map<String, bool> commentLoading = {};
-  final Map<String, bool> likedComments = {};
   final Map<String, bool> showReplyInput = {};
   final Map<String, TextEditingController> replyControllers = {};
   final TextEditingController newCommentController = TextEditingController();
@@ -37,8 +38,23 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchPost();
+    _initialize();
   }
+
+  Future<void> _initialize() async {
+    await _refreshCurrentUser();
+    await _fetchPost();
+  }
+
+  Future<void> _refreshCurrentUser() async {
+    try {
+      _currentUser = await _fastApi.fetchCurrentUser();
+    } catch (e) {
+      print('⚠️ Failed to refresh user: $e');
+    }
+  }
+
+  String? get _currentUserId => _currentUser?['id']?.toString();
 
   Future<void> _fetchPost() async {
     setState(() {
@@ -46,39 +62,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       error = null;
     });
     try {
-      final res = await Supabase.instance.client
-          .from('community_posts')
-          .select('''
-            *,
-            users!community_posts_user_id_fkey (
-              name,
-              role,
-              profile_picture
-            ),
-            likes (
-              user_id
-            ),
-            comments (
-              id,
-              content,
-              user_id,
-              created_at,
-              users!comments_user_id_fkey (
-                name,
-                profile_picture
-              ),
-              comment_likes (
-                user_id
-              )
-            )
-          ''')
-          .eq('id', widget.postId)
-          .maybeSingle();
-      if (res == null) {
-        error = 'Post not found';
-      } else {
-        post = res;
-      }
+      post = await _fastApi.fetchCommunityPost(widget.postId);
     } catch (e) {
       error = 'Failed to load post';
     }
@@ -109,10 +93,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       commentLoading[commentId] = true;
     });
     try {
-      await Supabase.instance.client
-          .from('comments')
-          .update({'content': newContent})
-          .eq('id', commentId);
+      final updated = await _fastApi.updateCommunityComment(commentId: commentId, content: newContent);
+      setState(() {
+        post!['comments'][idx] = updated;
+      });
     } catch (e) {
       setState(() {
         post!['comments'][idx]['content'] = original;
@@ -133,10 +117,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       commentLoading[commentId] = true;
     });
     try {
-      await Supabase.instance.client
-          .from('comments')
-          .delete()
-          .eq('id', commentId);
+      await _fastApi.deleteCommunityComment(commentId: commentId);
     } catch (e) {
       setState(() {
         post!['comments'].insert(idx, deleted);
@@ -151,41 +132,30 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   }
 
   Future<void> _likeComment(String commentId, bool isLiked, int idx) async {
-    final oldLikes = post!['comments'][idx]['comment_likes'] as List? ?? [];
-    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
-    if (currentUserId == null) return; // Ensure non-null
+    final currentUserId = _currentUserId;
+    if (currentUserId == null) return;
+    final originalLikes = (post!['comments'][idx]['likes'] as List?) ?? [];
+    final oldLikes = originalLikes
+        .map((entry) => Map<String, dynamic>.from(entry as Map))
+        .toList();
     setState(() {
-      likedComments[commentId] = !isLiked;
       if (!isLiked) {
-        post!['comments'][idx]['comment_likes'] = [...oldLikes, {'user_id': currentUserId}];
+        post!['comments'][idx]['likes'] = [...oldLikes, {'user_id': currentUserId}];
       } else {
-        post!['comments'][idx]['comment_likes'] = oldLikes.where((like) => like['user_id'] != currentUserId).toList();
+        post!['comments'][idx]['likes'] = oldLikes.where((like) =>
+          like['user_id']?.toString() != currentUserId
+        ).toList();
       }
     });
     try {
       if (!isLiked) {
-        await Supabase.instance.client
-            .from('comment_likes')
-            .insert({'comment_id': commentId, 'user_id': currentUserId});
+        await _fastApi.likeCommunityComment(commentId);
       } else {
-        await Supabase.instance.client
-            .from('comment_likes')
-            .delete()
-            .eq('comment_id', commentId)
-            .eq('user_id', currentUserId);
+        await _fastApi.unlikeCommunityComment(commentId);
       }
-      final updatedComment = await Supabase.instance.client
-          .from('comments')
-          .select('comment_likes(*)')
-          .eq('id', commentId)
-          .single();
-      setState(() {
-        post!['comments'][idx]['comment_likes'] = updatedComment['comment_likes'];
-      });
     } catch (e) {
       setState(() {
-        likedComments[commentId] = isLiked;
-        post!['comments'][idx]['comment_likes'] = oldLikes;
+        post!['comments'][idx]['likes'] = oldLikes;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to update comment like'))
@@ -195,30 +165,14 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
   Future<void> _replyComment(String commentId, String content, int idx) async {
     if (content.trim().isEmpty) return;
-    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
-    if (currentUserId == null) return; // Ensure non-null
     try {
-      final newReply = await Supabase.instance.client
-          .from('replies')
-          .insert({
-        'comment_id': commentId,
-        'user_id': currentUserId,
-        'content': content,
-      }).select('id, content, created_at, user_id').single();
-
-      final userData = await Supabase.instance.client
-          .from('users')
-          .select('name, profile_picture')
-          .eq('id', currentUserId)
-          .single();
-
-      final fullReply = {
-        ...Map<String, dynamic>.from(newReply),
-        'users': userData,
-      };
-
+      final newReply = await _fastApi.createCommunityReply(commentId: commentId, content: content);
       setState(() {
-        post!['comments'][idx]['replies'] = (post!['comments'][idx]['replies'] ?? [])..insert(0, fullReply);
+        final existingReplies = (post!['comments'][idx]['replies'] as List?) ?? [];
+        post!['comments'][idx]['replies'] = [
+          newReply,
+          ...existingReplies.map((entry) => Map<String, dynamic>.from(entry as Map)),
+        ];
         replyControllers[commentId]?.clear();
         showReplyInput[commentId] = false;
       });
@@ -231,38 +185,19 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     final text = newCommentController.text.trim();
     if (text.isEmpty) return;
     setState(() => isPostingComment = true);
-    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
-    if (currentUserId == null) {
+    if (_currentUserId == null) {
       setState(() => isPostingComment = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('You must be signed in to comment.')));
       return;
     }
     try {
-      final newComment = await Supabase.instance.client
-          .from('comments')
-          .insert({
-            'post_id': widget.postId,
-            'user_id': currentUserId,
-            'content': text,
-          })
-          .select('id, content, created_at, user_id')
-          .single();
-
-      final userData = await Supabase.instance.client
-          .from('users')
-          .select('name, profile_picture')
-          .eq('id', currentUserId)
-          .single();
-
-      final fullComment = {
-        ...Map<String, dynamic>.from(newComment),
-        'users': userData,
-        'comment_likes': [],
-        'replies': [],
-      };
-
+      final newComment = await _fastApi.createCommunityComment(postId: widget.postId, content: text);
       setState(() {
-        post!['comments'] = [fullComment, ...((post!['comments'] as List?) ?? [])];
+        final existingComments = (post!['comments'] as List?) ?? [];
+        post!['comments'] = [
+          newComment,
+          ...existingComments.map((entry) => Map<String, dynamic>.from(entry as Map)),
+        ];
         newCommentController.clear();
       });
     } catch (e) {
@@ -281,64 +216,67 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
               ? Center(child: Text(error!))
               : post == null
                   ? const Center(child: Text('No post data'))
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: Card(
-                        margin: EdgeInsets.zero,
-                        elevation: 4,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        child: Padding(
-                          padding: EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                  : Builder(
+                      builder: (context) {
+                        final author = (post!['user'] as Map<String, dynamic>?) ?? {};
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.all(16),
+                          child: Card(
+                            margin: EdgeInsets.zero,
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            child: Padding(
+                              padding: EdgeInsets.all(12),
+                              child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  CircleAvatar(
-                                    radius: 20,
-                                    backgroundImage: post!['users']?['profile_picture'] != null &&
-                                            post!['users']!['profile_picture'].toString().isNotEmpty
-                                        ? NetworkImage(post!['users']!['profile_picture'])
-                                        : AssetImage('assets/logo.png') as ImageProvider,
-                                  ),
-                                  SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 20,
+                                        backgroundImage: author['profile_picture'] != null &&
+                                                author['profile_picture'].toString().isNotEmpty
+                                            ? NetworkImage(author['profile_picture'])
+                                            : AssetImage('assets/logo.png') as ImageProvider,
+                                      ),
+                                      SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Text(
-                                              post!['users']?['name'] ?? 'Unknown',
-                                              style: TextStyle(fontWeight: FontWeight.bold),
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  author['name'] ?? 'Unknown',
+                                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                                ),
+                                                SizedBox(width: 8),
+                                                Text(
+                                                  _getTimeAgo(DateTime.tryParse(post!['created_at'] ?? '')?.toLocal() ?? DateTime.now()),
+                                                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                                                ),
+                                              ],
                                             ),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              _getTimeAgo(DateTime.tryParse(post!['created_at'] ?? '')?.toLocal() ?? DateTime.now()),
-                                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                                            Container(
+                                              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: author['role'] == 'Pet Owner' ? sitterColor : ownerColor,
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
+                                              child: Text(
+                                                author['role'] ?? 'User',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
                                             ),
                                           ],
                                         ),
-                                        Container(
-                                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: post!['users']?['role'] == 'Pet Owner' ? sitterColor : ownerColor,
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          child: Text(
-                                            post!['users']?['role'] ?? 'User',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.white,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
                               SizedBox(height: 10),
                               Text(post!['content'] ?? ''),
                               SizedBox(height: 10),
@@ -379,12 +317,12 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                               ...((post!['comments'] as List?) ?? []).asMap().entries.map((entry) {
                                 final idx = entry.key;
                                 final comment = entry.value;
-                                final user = comment['users'] ?? {};
+                                final user = (comment['user'] as Map<String, dynamic>?) ?? {};
                                 final commentId = comment['id'].toString();
                                 final commentProfilePic = user['profile_picture'];
-                                final commentLikes = comment['comment_likes'] as List? ?? [];
-                                final isLiked = commentLikes.any((like) => like['user_id'] == Supabase.instance.client.auth.currentUser?.id);
-                                likedComments[commentId] = isLiked;
+                                final commentLikes = comment['likes'] as List? ?? [];
+                                final isLiked = _currentUserId != null &&
+                                  commentLikes.any((like) => like['user_id']?.toString() == _currentUserId);
 
                                 return Stack(
                                   children: [
@@ -427,7 +365,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                                                 ),
                                                               ],
                                                             ),
-                                                            if (comment['user_id'] == Supabase.instance.client.auth.currentUser?.id)
+                                                            if (_currentUserId != null && comment['user_id']?.toString() == _currentUserId)
                                                               PopupMenuButton<String>(
                                                                 icon: Icon(Icons.more_vert, size: 16),
                                                                 onSelected: (value) async {
@@ -573,7 +511,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                                   child: Column(
                                                     children: [
                                                       ...((comment['replies'] as List?) ?? []).map((r) {
-                                                        final replyProfilePic = r['users']?['profile_picture'];
+                                                        final replyUser = (r['user'] as Map<String, dynamic>?) ?? {};
+                                                        final replyProfilePic = replyUser['profile_picture'];
                                                         return Row(
                                                           crossAxisAlignment: CrossAxisAlignment.start,
                                                           children: [
@@ -590,7 +529,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                                                 children: [
                                                                   Row(
                                                                     children: [
-                                                                      Text(r['users']?['name'] ?? 'Unknown', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                                                      Text(replyUser['name'] ?? 'Unknown', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                                                                       SizedBox(width: 8),
                                                                       Text(
                                                                         _getTimeAgo(DateTime.tryParse(r['created_at']) ?? DateTime.now()),
@@ -654,7 +593,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                           ),
                         ),
                       ),
-                    ),
-    );
-  }
-}
+                    );
+                  },
+                ),
+              );
+            }
+          }

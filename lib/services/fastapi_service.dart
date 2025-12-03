@@ -40,8 +40,8 @@ class FastApiService {
   }
 
   Map<String, String> get _formHeaders => {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      };
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
 
   Future<void> _ensureAccessTokenLoaded() async {
     if (_accessToken != null && _accessToken!.isNotEmpty) {
@@ -59,10 +59,7 @@ class FastApiService {
     final response = await _client.post(
       url,
       headers: _formHeaders,
-      body: {
-        'username': email,
-        'password': password,
-      },
+      body: {'username': email, 'password': password},
     );
 
     if (response.statusCode != 200) {
@@ -120,7 +117,9 @@ class FastApiService {
     if (ownerId != null && ownerId.isNotEmpty) {
       queryParams['owner_id'] = ownerId;
     }
-    final uri = Uri.parse('$_baseUrl/pets/').replace(queryParameters: queryParams.isEmpty ? null : queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/pets/',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
     final response = await _client.get(uri, headers: await _jsonHeaders);
 
     if (response.statusCode != 200) {
@@ -133,17 +132,29 @@ class FastApiService {
 
   Future<void> createPet(Map<String, dynamic> payload) async {
     final uri = Uri.parse('$_baseUrl/pets/');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create pet failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create pet failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
   Future<void> updatePet(String petId, Map<String, dynamic> payload) async {
     final uri = Uri.parse('$_baseUrl/pets/$petId');
-    final response = await _client.patch(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update pet failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update pet failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -151,29 +162,40 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/pets/$petId');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI delete pet failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI delete pet failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchConversations({int limit = 24}) async {
-    final uri = Uri.parse('$_baseUrl/messages/conversations').replace(queryParameters: {
-      'limit': limit.toString(),
-    });
+  Future<List<Map<String, dynamic>>> fetchConversations({
+    int limit = 24,
+  }) async {
+    final uri = Uri.parse(
+      '$_baseUrl/messages/conversations',
+    ).replace(queryParameters: {'limit': limit.toString()});
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch conversations failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch conversations failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> fetchConversationThread(String peerId, {int limit = 150}) async {
-    final uri = Uri.parse('$_baseUrl/messages/thread/$peerId').replace(queryParameters: {
-      'limit': limit.toString(),
-    });
+  Future<List<Map<String, dynamic>>> fetchConversationThread(
+    String peerId, {
+    int limit = 150,
+  }) async {
+    final uri = Uri.parse(
+      '$_baseUrl/messages/thread/$peerId',
+    ).replace(queryParameters: {'limit': limit.toString()});
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch conversation thread failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch conversation thread failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -181,20 +203,28 @@ class FastApiService {
 
   Future<Map<String, dynamic>> sendMessage(Map<String, dynamic> payload) async {
     final uri = Uri.parse('$_baseUrl/messages/');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI send message failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI send message failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
   Future<void> markMessagesAsSeen(String peerId) async {
-    final uri = Uri.parse('$_baseUrl/messages/seen').replace(queryParameters: {
-      'peer_id': peerId,
-    });
+    final uri = Uri.parse(
+      '$_baseUrl/messages/seen',
+    ).replace(queryParameters: {'peer_id': peerId});
     final response = await _client.post(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI mark messages seen failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI mark messages seen failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -203,13 +233,12 @@ class FastApiService {
     final response = await _client.post(
       uri,
       headers: await _jsonHeaders,
-      body: jsonEncode({
-        'chat_with_id': chatWithId,
-        'is_typing': isTyping,
-      }),
+      body: jsonEncode({'chat_with_id': chatWithId, 'is_typing': isTyping}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update typing status failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update typing status failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -217,7 +246,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/messages/typing-status/$peerId');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch typing status failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch typing status failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     return data['is_typing'] as bool? ?? false;
@@ -245,7 +276,9 @@ class FastApiService {
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI upload media failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI upload media failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -258,7 +291,11 @@ class FastApiService {
     return _uploadMedia(file: file, type: type, contentType: contentType);
   }
 
-  Future<String> uploadProfileImage(File file, {String type = 'images', String? contentType}) async {
+  Future<String> uploadProfileImage(
+    File file, {
+    String type = 'images',
+    String? contentType,
+  }) async {
     final uploaded = await _uploadMedia(
       file: file,
       type: type,
@@ -283,11 +320,13 @@ class FastApiService {
     return '$_baseUrl$normalized';
   }
 
-  Future<List<Map<String, dynamic>>> fetchPosts({int limit = 20, int offset = 0}) async {
-    final uri = Uri.parse('$_baseUrl/posts/').replace(queryParameters: {
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    });
+  Future<List<Map<String, dynamic>>> fetchPosts({
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/posts/').replace(
+      queryParameters: {'limit': limit.toString(), 'offset': offset.toString()},
+    );
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
       throw Exception('FastAPI fetch posts failed (${response.statusCode})');
@@ -308,29 +347,61 @@ class FastApiService {
       if (postType != null) 'type': postType,
       if (userId != null) 'user_id': userId,
     };
-    final uri = Uri.parse('$_baseUrl/community/posts').replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/community/posts',
+    ).replace(queryParameters: queryParams);
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch community posts failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch community posts failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<Map<String, dynamic>> createCommunityPost(Map<String, dynamic> payload) async {
-    final uri = Uri.parse('$_baseUrl/community/posts');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
-    if (response.statusCode >= 400) {
-      throw Exception('FastAPI create community post failed (${response.statusCode}): ${response.body}');
+  Future<Map<String, dynamic>> fetchCommunityPost(String postId) async {
+    final uri = Uri.parse('$_baseUrl/community/posts/$postId');
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode != 200) {
+      throw Exception(
+        'FastAPI fetch community post failed (${response.statusCode})',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
-  Future<Map<String, dynamic>> updateCommunityPost(String postId, Map<String, dynamic> payload) async {
-    final uri = Uri.parse('$_baseUrl/community/posts/$postId');
-    final response = await _client.patch(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+  Future<Map<String, dynamic>> createCommunityPost(
+    Map<String, dynamic> payload,
+  ) async {
+    final uri = Uri.parse('$_baseUrl/community/posts');
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update community post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create community post failed (${response.statusCode}): ${response.body}',
+      );
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>> updateCommunityPost(
+    String postId,
+    Map<String, dynamic> payload,
+  ) async {
+    final uri = Uri.parse('$_baseUrl/community/posts/$postId');
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode >= 400) {
+      throw Exception(
+        'FastAPI update community post failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -339,7 +410,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/posts/$postId');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI delete community post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI delete community post failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -354,7 +427,9 @@ class FastApiService {
       body: jsonEncode({'content': content}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create community comment failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create community comment failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -370,18 +445,20 @@ class FastApiService {
       body: jsonEncode({'content': content}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update community comment failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update community comment failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
-  Future<void> deleteCommunityComment({
-    required String commentId,
-  }) async {
+  Future<void> deleteCommunityComment({required String commentId}) async {
     final uri = Uri.parse('$_baseUrl/community/comments/$commentId');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI delete community comment failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI delete community comment failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -396,7 +473,9 @@ class FastApiService {
       body: jsonEncode({'content': content}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create community reply failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create community reply failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -406,14 +485,18 @@ class FastApiService {
     required String replyId,
     required String content,
   }) async {
-    final uri = Uri.parse('$_baseUrl/community/comments/$commentId/replies/$replyId');
+    final uri = Uri.parse(
+      '$_baseUrl/community/comments/$commentId/replies/$replyId',
+    );
     final response = await _client.patch(
       uri,
       headers: await _jsonHeaders,
       body: jsonEncode({'content': content}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update reply failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update reply failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -422,10 +505,14 @@ class FastApiService {
     required String commentId,
     required String replyId,
   }) async {
-    final uri = Uri.parse('$_baseUrl/community/comments/$commentId/replies/$replyId');
+    final uri = Uri.parse(
+      '$_baseUrl/community/comments/$commentId/replies/$replyId',
+    );
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI delete reply failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI delete reply failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -434,13 +521,16 @@ class FastApiService {
     int limit = 5,
     int offset = 0,
   }) async {
-    final uri = Uri.parse('$_baseUrl/community/comments/$commentId/replies').replace(queryParameters: {
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    });
+    final uri = Uri.parse(
+      '$_baseUrl/community/comments/$commentId/replies',
+    ).replace(
+      queryParameters: {'limit': limit.toString(), 'offset': offset.toString()},
+    );
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch comment replies failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch comment replies failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -450,7 +540,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/posts/$postId/likes');
     final response = await _client.post(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI like post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI like post failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -458,7 +550,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/posts/$postId/likes');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI unlike post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI unlike post failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -466,7 +560,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/comments/$commentId/likes');
     final response = await _client.post(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI like comment failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI like comment failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -474,7 +570,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/comments/$commentId/likes');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI unlike comment failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI unlike comment failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -482,29 +580,36 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/bookmarks/me');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch bookmarks failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch bookmarks failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
-    return data.map<Map<String, dynamic>?>((entry) {
-      final bookmark = Map<String, dynamic>.from(entry as Map);
-      final post = bookmark['post'] as Map<String, dynamic>?;
-      if (post == null) return null;
-      final user = post['user'] as Map<String, dynamic>?;
-      return {
-        'id': post['id'],
-        'content': post['content'],
-        'image_url': post['image_url'],
-        'created_at': bookmark['created_at'] ?? post['created_at'],
-        'user': user,
-      };
-    }).whereType<Map<String, dynamic>>().toList();
+    return data
+        .map<Map<String, dynamic>?>((entry) {
+          final bookmark = Map<String, dynamic>.from(entry as Map);
+          final post = bookmark['post'] as Map<String, dynamic>?;
+          if (post == null) return null;
+          final user = post['user'] as Map<String, dynamic>?;
+          return {
+            'id': post['id'],
+            'content': post['content'],
+            'image_url': post['image_url'],
+            'created_at': bookmark['created_at'] ?? post['created_at'],
+            'user': user,
+          };
+        })
+        .whereType<Map<String, dynamic>>()
+        .toList();
   }
 
   Future<void> bookmarkCommunityPost(String postId) async {
     final uri = Uri.parse('$_baseUrl/community/posts/$postId/bookmarks');
     final response = await _client.post(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI bookmark post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI bookmark post failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -512,7 +617,9 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/community/posts/$postId/bookmarks');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI remove bookmark failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI remove bookmark failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -527,15 +634,16 @@ class FastApiService {
       body: jsonEncode({'reason': reason}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI report post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI report post failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
   Future<List<Map<String, dynamic>>> searchUsers(String query) async {
-    final uri = Uri.parse('$_baseUrl/users').replace(queryParameters: {
-      'query': query,
-      'limit': '5',
-    });
+    final uri = Uri.parse(
+      '$_baseUrl/users',
+    ).replace(queryParameters: {'query': query, 'limit': '5'});
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
       throw Exception('FastAPI search users failed (${response.statusCode})');
@@ -544,11 +652,19 @@ class FastApiService {
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<Map<String, dynamic>> createNotification(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> createNotification(
+    Map<String, dynamic> payload,
+  ) async {
     final uri = Uri.parse('$_baseUrl/notifications/');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create notification failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create notification failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -561,7 +677,9 @@ class FastApiService {
       body: jsonEncode({'message': message}),
     );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI submit feedback failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI submit feedback failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -569,26 +687,43 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/notifications/me');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch notifications failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch notifications failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<Map<String, dynamic>> updateNotification(String notificationId, Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> updateNotification(
+    String notificationId,
+    Map<String, dynamic> payload,
+  ) async {
     final uri = Uri.parse('$_baseUrl/notifications/$notificationId');
-    final response = await _client.patch(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update notification failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update notification failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
   Future<void> createPost(Map<String, dynamic> payload) async {
     final uri = Uri.parse('$_baseUrl/posts/');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create post failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create post failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -605,16 +740,26 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/users/me');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch current user failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch current user failed (${response.statusCode})',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
-  Future<Map<String, dynamic>> updateCurrentUser(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> updateCurrentUser(
+    Map<String, dynamic> payload,
+  ) async {
     final uri = Uri.parse('$_baseUrl/users/me');
-    final response = await _client.patch(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update current user failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update current user failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -623,11 +768,17 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/users/me');
     final response = await _client.delete(uri, headers: await _jsonHeaders);
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI delete current user failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI delete current user failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchSitters({String? locationQuery, int limit = 20, int offset = 0}) async {
+  Future<List<Map<String, dynamic>>> fetchSitters({
+    String? locationQuery,
+    int limit = 20,
+    int offset = 0,
+  }) async {
     final queryParams = <String, String>{
       'limit': limit.toString(),
       'offset': offset.toString(),
@@ -635,7 +786,9 @@ class FastApiService {
     if (locationQuery != null && locationQuery.isNotEmpty) {
       queryParams['location'] = locationQuery;
     }
-    final uri = Uri.parse('$_baseUrl/sitters/').replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/sitters/',
+    ).replace(queryParameters: queryParams);
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
       throw Exception('FastAPI fetch sitters failed (${response.statusCode})');
@@ -648,16 +801,27 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/sitters/$userId');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch sitter profile failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch sitter profile failed (${response.statusCode})',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
-  Future<void> updateSitterProfile(String userId, Map<String, dynamic> payload) async {
+  Future<void> updateSitterProfile(
+    String userId,
+    Map<String, dynamic> payload,
+  ) async {
     final uri = Uri.parse('$_baseUrl/sitters/$userId');
-    final response = await _client.patch(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update sitter profile failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update sitter profile failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
@@ -665,42 +829,59 @@ class FastApiService {
     final uri = Uri.parse('$_baseUrl/sitters/$userId/reviews');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch sitter reviews failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch sitter reviews failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> fetchSittingJobsForSitter(String userId) async {
+  Future<List<Map<String, dynamic>>> fetchSittingJobsForSitter(
+    String userId,
+  ) async {
     final uri = Uri.parse('$_baseUrl/sitting_jobs/sitter/$userId');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch sitter jobs failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch sitter jobs failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> fetchOwnerJobs({required String ownerId, String? status}) async {
-    final queryParams = <String, String>{
-      if (status != null) 'status': status,
-    };
-    final uri = Uri.parse('$_baseUrl/sitting_jobs/owner/$ownerId').replace(
-      queryParameters: queryParams.isEmpty ? null : queryParams,
-    );
+  Future<List<Map<String, dynamic>>> fetchOwnerJobs({
+    required String ownerId,
+    String? status,
+  }) async {
+    final queryParams = <String, String>{if (status != null) 'status': status};
+    final uri = Uri.parse(
+      '$_baseUrl/sitting_jobs/owner/$ownerId',
+    ).replace(queryParameters: queryParams.isEmpty ? null : queryParams);
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch owner jobs failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch owner jobs failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  Future<Map<String, dynamic>> createSittingJob(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> createSittingJob(
+    Map<String, dynamic> payload,
+  ) async {
     final uri = Uri.parse('$_baseUrl/sitting_jobs/');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create job failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create job failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
@@ -710,41 +891,62 @@ class FastApiService {
     Map<String, dynamic> payload,
   ) async {
     final uri = Uri.parse('$_baseUrl/sitting_jobs/$jobId');
-    final response = await _client.patch(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI update job failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI update job failed (${response.statusCode}): ${response.body}',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
-  Future<void> createSitterReview(String userId, Map<String, dynamic> payload) async {
+  Future<void> createSitterReview(
+    String userId,
+    Map<String, dynamic> payload,
+  ) async {
     final uri = Uri.parse('$_baseUrl/sitters/$userId/reviews');
-    final response = await _client.post(uri, headers: await _jsonHeaders, body: jsonEncode(payload));
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
     if (response.statusCode >= 400) {
-      throw Exception('FastAPI create review failed (${response.statusCode}): ${response.body}');
+      throw Exception(
+        'FastAPI create review failed (${response.statusCode}): ${response.body}',
+      );
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchAssignedPetsForSitter(String sitterId) async {
+  Future<List<Map<String, dynamic>>> fetchAssignedPetsForSitter(
+    String sitterId,
+  ) async {
     final uri = Uri.parse('$_baseUrl/sitting_jobs/sitter/$sitterId');
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch assigned pets failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch assigned pets failed (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as List<dynamic>;
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
   Future<Map<String, dynamic>> fetchLatestBehaviorLog(String userId) async {
-    final uri = Uri.parse('$_baseUrl/behavior_logs/latest').replace(queryParameters: {
-      'user_id': userId,
-    });
+    final uri = Uri.parse(
+      '$_baseUrl/behavior_logs/latest',
+    ).replace(queryParameters: {'user_id': userId});
     final response = await _client.get(uri, headers: await _jsonHeaders);
     if (response.statusCode == 404) {
       return <String, dynamic>{};
     }
     if (response.statusCode != 200) {
-      throw Exception('FastAPI fetch latest behavior log failed (${response.statusCode})');
+      throw Exception(
+        'FastAPI fetch latest behavior log failed (${response.statusCode})',
+      );
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }

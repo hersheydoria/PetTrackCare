@@ -92,6 +92,17 @@ async def list_posts(
     return query.offset(offset).limit(limit).all()
 
 
+@router.get("/posts/{post_id}", response_model=CommunityPostRead)
+async def get_post(
+    post_id: str,
+    db: Session = Depends(get_db),
+) -> models.CommunityPost:
+    post = _load_post(db, post_id)
+    if not post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+    return post
+
+
 @router.post("/posts", response_model=CommunityPostRead)
 async def create_post(
     payload: CommunityPostCreate,
