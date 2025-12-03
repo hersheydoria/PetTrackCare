@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'fastapi_service.dart';
 
 class MissingPetAlertService {
   static final MissingPetAlertService _instance = MissingPetAlertService._internal();
@@ -48,45 +48,52 @@ class MissingPetAlertService {
   }
 
   // Start monitoring for missing pet posts
+  final FastApiService _fastApi = FastApiService.instance;
+
   void _startMissingPetAlerts() {
     print('🔔 MissingPetAlertService: Starting monitoring timer (every 5 seconds)');
     _alertTimer?.cancel();
     _alertTimer = Timer.periodic(Duration(seconds: 5), (timer) async {
       try {
         print('🔔 MissingPetAlertService: Checking for missing pets...');
-        final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+        Map<String, dynamic>? currentUser;
+        try {
+          currentUser = await _fastApi.fetchCurrentUser();
+        } catch (e) {
+          print('🔔 MissingPetAlertService: Failed to fetch current user: $e');
+          return;
+        }
+        final currentUserId = currentUser?['id']?.toString();
         if (currentUserId == null || _context == null) {
           print('🔔 MissingPetAlertService: No user ID or context, skipping check');
           return;
         }
-        
+
         print('🔔 MissingPetAlertService: User ID: $currentUserId, Context available: ${_context != null}');
 
         try {
-          final posts = await Supabase.instance.client
-              .from('community_posts')
-              .select('*, users!inner(name)')
-              .eq('type', 'missing')
-              .neq('user_id', currentUserId) // Don't show alerts for your own pets
-              .order('created_at', ascending: false)
-              .limit(5); // Get more posts to check for validity
+          final posts = await _fastApi.fetchCommunityPosts(
+            limit: 5,
+            postType: 'missing',
+          );
+
+          final availablePosts = posts
+              .where((post) => post['user_id']?.toString() != currentUserId)
+              .toList();
 
           print('🔔 MissingPetAlertService: Query completed successfully');
-          print('🔔 MissingPetAlertService: Posts raw result: $posts');
-          print('🔔 MissingPetAlertService: Found ${posts.length} missing posts');
-          print('🔔 MissingPetAlertService: Posts data type: ${posts.runtimeType}');
-          
-          print('🔔 MissingPetAlertService: Posts is a List with ${posts.length} items');
-          if (posts.isNotEmpty) {
-            print('🔔 MissingPetAlertService: First post structure: ${posts[0].keys.toList()}');
-            print('🔔 MissingPetAlertService: First post raw: ${posts[0]}');
-            
-            // Check each post to find a valid missing pet alert
-            for (var post in posts) {
+          print('🔔 MissingPetAlertService: Posts raw result: $availablePosts');
+          print('🔔 MissingPetAlertService: Found ${availablePosts.length} missing posts');
+          print('🔔 MissingPetAlertService: Posts data type: ${availablePosts.runtimeType}');
+
+          if (availablePosts.isNotEmpty) {
+            print('🔔 MissingPetAlertService: First post structure: ${availablePosts[0].keys.toList()}');
+            print('🔔 MissingPetAlertService: First post raw: ${availablePosts[0]}');
+
+            for (var post in availablePosts) {
               try {
-                print('🔔 MissingPetAlertService: Processing post: ${post['id']} (type: ${post['id'].runtimeType})');
-                
-                // Handle postId as String (UUID) from database
+                print('🔔 MissingPetAlertService: Processing post: ${post['id']} (type: ${post['id']?.runtimeType})');
+
                 final dynamic rawPostId = post['id'];
                 final String? postId = rawPostId?.toString();
 
@@ -101,9 +108,8 @@ class MissingPetAlertService {
                   print('🔔 MissingPetAlertService: Showing alert for post $postId');
                   _shownAlerts.add(postId);
 
-                  // Get pet name from post content
                   final petName = post['content'] ?? 'A pet';
-                  final ownerName = post['users']?['name'] ?? 'Someone';
+                  final ownerName = post['user']?['name'] ?? 'Someone';
 
                   print('🔔 MissingPetAlertService: Pet: $petName, Owner: $ownerName');
 
@@ -113,12 +119,12 @@ class MissingPetAlertService {
                   } else {
                     print('🔔 MissingPetAlertService: ❌ No context available for dialog');
                   }
-                  return; // Only show one alert at a time
+                  return;
                 }
               } catch (e, stackTrace) {
                 print('🔔 MissingPetAlertService: ❌ Error processing individual post: $e');
                 print('🔔 MissingPetAlertService: Stack trace: $stackTrace');
-                continue; // Continue with next post
+                continue;
               }
             }
           }
@@ -180,7 +186,7 @@ class MissingPetAlertService {
     try {
       final content = post['content']?.toString() ?? '';
       final imageUrl = post['image_url']?.toString();
-      final posterName = post['users']?['name']?.toString() ?? 'Someone';
+      final posterName = post['user']?['name']?.toString() ?? 'Someone';
       final createdAt = DateTime.tryParse(post['created_at']?.toString() ?? '');
       final timeAgo = createdAt != null 
           ? _formatTimeAgo(createdAt)
@@ -240,7 +246,7 @@ class MissingPetAlertService {
 
   void _showBasicAlert(Map<String, dynamic> post, String postId) {
     final content = post['content']?.toString() ?? '';
-    final posterName = post['users']?['name']?.toString() ?? 'Someone';
+    final posterName = post['user']?['name']?.toString() ?? 'Someone';
     final petNameMatch = RegExp(r'"([^"]+)"').firstMatch(content);
     final petName = petNameMatch?.group(1) ?? 'Pet';
     
@@ -574,7 +580,7 @@ class MissingPetAlertService {
       'image_url': null,
       'created_at': DateTime.now().toIso8601String(),
       'user_id': 'test-user',
-      'users': {'name': 'Test User'}
+      'user': {'name': 'Test User'}
     };
     
     print('🔔 MissingPetAlertService: Showing test alert');

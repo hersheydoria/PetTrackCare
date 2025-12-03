@@ -21,6 +21,8 @@ class SittingJobUpdate(BaseModel):
 class SittingJobDetail(BaseModel):
     id: UUID
     sitter_id: UUID | None
+    sitter_name: str | None = None
+    sitter_profile_picture: str | None = None
     pet_id: UUID
     pet_name: str | None
     pet_type: str | None

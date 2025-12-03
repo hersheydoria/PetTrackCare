@@ -420,12 +420,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       List<Map<String, dynamic>> list = [];
       if (_getUserRole() == 'Pet Sitter') {
         final assignedJobs = await _apiClient.fetchAssignedPetsForSitter(userId);
-        final petIds = assignedJobs
+        final activePetIds = assignedJobs
+            .where((job) => (job['status'] ?? '').toString().toLowerCase() == 'active')
             .map((job) => job['pet_id']?.toString())
             .whereType<String>()
             .toList();
-        if (petIds.isNotEmpty) {
-          list = await _apiClient.fetchPets(petIds: petIds);
+        if (activePetIds.isNotEmpty) {
+          list = await _apiClient.fetchPets(petIds: activePetIds);
         }
       } else {
         list = await _apiClient.fetchPets(ownerId: userId);

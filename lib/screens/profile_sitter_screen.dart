@@ -3170,6 +3170,14 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
     super.initState();
     _loadJobs();
   }
+  
+  @override
+  void didUpdateWidget(covariant AssignedPetsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sitterId != widget.sitterId && widget.sitterId.isNotEmpty) {
+      _loadJobs();
+    }
+  }
 
   Future<void> _loadJobs() async {
     if (widget.sitterId.isEmpty) {
@@ -3188,8 +3196,11 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
 
     try {
       final jobs = await widget.fastApi.fetchAssignedPetsForSitter(widget.sitterId);
+      final activeJobs = jobs
+          .where((job) => (job['status'] ?? '').toString().toLowerCase() == 'active')
+          .toList();
       setState(() {
-        _assignedJobs = jobs;
+        _assignedJobs = activeJobs;
         _isLoading = false;
       });
     } catch (error, stack) {

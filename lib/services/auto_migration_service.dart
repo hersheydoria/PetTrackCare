@@ -1,15 +1,17 @@
 import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'fastapi_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'location_sync_service.dart';
 
-/// Service for automatic Firebase to Supabase migration on app startup
+/// Service for automatic Firebase to FastAPI + Postgre migration on app startup
 /// Migration runs every time conditions are met (no time limits)
 class AutoMigrationService {
   static const String _lastMigrationKey = 'last_firebase_migration';
   static const String _migrationEnabledKey = 'firebase_migration_enabled';
   
   final LocationSyncService _locationSyncService = LocationSyncService();
+  final FastApiService _fastApi = FastApiService.instance;
+  Map<String, dynamic>? _cachedUser;
   
   // Callback function to notify when migration completes with location data
   VoidCallback? _onLocationDataMigrated;
@@ -73,15 +75,14 @@ class AutoMigrationService {
       final prefs = await SharedPreferences.getInstance();
       final lastMigration = prefs.getString(_lastMigrationKey);
       final migrationEnabled = prefs.getBool(_migrationEnabledKey) ?? true;
-      final user = Supabase.instance.client.auth.currentUser;
+      final user = await _getAuthenticatedUser();
       
       print('📊 Migration Enabled: $migrationEnabled');
       print('📊 User Logged In: ${user != null}');
       if (user != null) {
-        final metadata = user.userMetadata ?? {};
-        final role = metadata['role']?.toString() ?? 'Pet Owner';
+        final role = _extractUserRole(user);
         print('📊 User Role: $role');
-        print('📊 User ID: ${user.id}');
+        print('📊 User ID: ${user['id'] ?? user['user_id'] ?? 'Unknown'}');
       }
       
       if (lastMigration != null) {
@@ -179,11 +180,11 @@ class AutoMigrationService {
       }
       
       // Check if user is logged in
-      final user = Supabase.instance.client.auth.currentUser;
+      final user = await _getAuthenticatedUser();
       print('🔄 Current user check: ${user != null ? "Authenticated" : "Not authenticated"}');
       if (user != null) {
-        print('🔄 User ID: ${user.id}');
-        print('🔄 User email: ${user.email ?? "No email"}');
+        print('🔄 User ID: ${user['id'] ?? user['user_id'] ?? 'Unknown'}');
+        print('🔄 User email: ${(user['email'] ?? 'No email')}');
       }
       if (user == null) {
         print('🔄 Auto-migration skipped: No authenticated user');
@@ -191,10 +192,8 @@ class AutoMigrationService {
       }
       
       // Check user role (allow Pet Owner and Pet Sitter)
-      final metadata = user.userMetadata ?? {};
-      final role = metadata['role']?.toString() ?? 'Pet Owner';
+      final role = _extractUserRole(user);
       if (kDebugMode) {
-        print('🔄 User metadata: $metadata');
         print('🔄 Detected role: $role');
       }
       if (role != 'Pet Owner' && role != 'Pet Sitter') {
@@ -222,7 +221,7 @@ class AutoMigrationService {
         }
       }
       
-      print('✅ All conditions met - Auto-migration should run for user: ${user.id} ($role)');
+      print('✅ All conditions met - Auto-migration should run for user: ${user['id'] ?? user['user_id'] ?? 'Unknown'} ($role)');
       print('🔄 ==========================================');
       return true;
       
@@ -239,7 +238,8 @@ class AutoMigrationService {
       print('🚀 STARTING AUTOMATIC MIGRATION');
       print('🚀 ==========================================');
       print('🚀 Timestamp: ${DateTime.now().toIso8601String()}');
-      print('🚀 User: ${Supabase.instance.client.auth.currentUser?.id ?? "Unknown"}');
+      final user = await _getAuthenticatedUser();
+      print('🚀 User: ${user?['id'] ?? 'Unknown'}');
       print('🚀 Service: AutoMigrationService.runAutoMigration()');
       
       // Check if migration should actually run
@@ -320,35 +320,15 @@ class AutoMigrationService {
     }
   }
   
-  /// Log migration results to Supabase for monitoring
+  /// Log migration results for auditing (currently prints only)
   Future<void> _logMigrationResult(Map<String, dynamic> results) async {
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) return;
-      
-      final logData = {
-        'user_id': user.id,
-        'migration_type': 'auto_firebase_sync',
-        'success_count': results['success'] ?? 0,
-        'failed_count': results['failed'] ?? 0,
-        'error_details': (results['errors'] as List).isNotEmpty ? results['errors'].toString() : null,
-        'timestamp': DateTime.now().toIso8601String(),
-      };
-      
-      // Try to insert into migration_logs table if it exists
-      await Supabase.instance.client
-          .from('migration_logs')
-          .insert(logData);
-          
-      if (kDebugMode) {
-        print('📊 Migration result logged successfully');
-      }
-      
-    } catch (e) {
-      // Ignore logging errors - don't fail migration because of this
-      if (kDebugMode) {
-        print('⚠️ Could not log migration result (this is OK): $e');
-      }
+    final user = await _getAuthenticatedUser();
+    final userId = user?['id'] ?? user?['user_id'] ?? 'Unknown';
+    if (kDebugMode) {
+      print('📊 Logging migration result for user: $userId');
+      print('    success_count: ${results['success'] ?? 0}');
+      print('    failed_count: ${results['failed'] ?? 0}');
+      print('    errors: ${(results['errors'] as List).join(', ')}');
     }
   }
   
@@ -428,5 +408,36 @@ class AutoMigrationService {
         'errors': ['Force migration error: $e'],
       };
     }
+  }
+
+  Future<Map<String, dynamic>?> _getAuthenticatedUser() async {
+    if (_cachedUser != null) {
+      return _cachedUser;
+    }
+    try {
+      final user = await _fastApi.fetchCurrentUser();
+      _cachedUser = user;
+      return user;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to fetch authenticated user: $e');
+      }
+      return null;
+    }
+  }
+
+  String _extractUserRole(Map<String, dynamic> user) {
+    final explicitRole = user['role'];
+    if (explicitRole != null && explicitRole.toString().isNotEmpty) {
+      return explicitRole.toString();
+    }
+    final metadata = user['metadata'];
+    if (metadata is Map<String, dynamic>) {
+      final metadataRole = metadata['role'];
+      if (metadataRole != null && metadataRole.toString().isNotEmpty) {
+        return metadataRole.toString();
+      }
+    }
+    return 'Pet Owner';
   }
 }

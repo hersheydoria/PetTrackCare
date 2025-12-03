@@ -1968,14 +1968,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // Enhanced owner job card
   Widget _buildEnhancedOwnerJobCard(Map<String, dynamic> job) {
-    final petName = (job['pets']?['name'] ?? job['pet_id'] ?? 'Pet').toString();
-    final petProfilePicture = job['pets']?['profile_picture']?.toString();
+    final petName = (job['pet_name'] ?? 'Pet').toString();
+    final petProfilePicture = job['pet_profile_picture']?.toString() ?? '';
     final startDate = (job['start_date'] ?? '').toString();
     
     // Get sitter information
-    final sitterData = job['users'] as Map<String, dynamic>?;
-    final sitterName = sitterData?['name']?.toString() ?? 'Sitter';
-    final sitterProfilePicture = sitterData?['profile_picture']?.toString();
+    final sitterName = (job['sitter_name'] ?? 'Sitter').toString();
+    final sitterProfilePicture = job['sitter_profile_picture']?.toString() ?? '';
     
     return Container(
       margin: EdgeInsets.only(bottom: 12),

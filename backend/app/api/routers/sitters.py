@@ -9,7 +9,7 @@ from ...api.utils.sitter import get_or_create_sitter_profile
 from ...db import models
 from ...db.session import get_db
 from ...schemas.sitter import SitterRead, SitterUpdate
-from ...schemas.sitter_review import SitterReviewBase, SitterReviewRead
+from ...schemas.sitter_review import SitterReviewCreate, SitterReviewRead
 
 router = APIRouter(prefix="/sitters", tags=["sitters"])
 
@@ -116,7 +116,7 @@ async def list_sitter_reviews(user_id: str, db: Session = Depends(get_db)) -> Li
 @router.post("/{user_id}/reviews", response_model=SitterReviewRead, status_code=status.HTTP_201_CREATED)
 async def create_sitter_review(
     user_id: str,
-    payload: SitterReviewBase,
+    payload: SitterReviewCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ) -> SitterReviewRead:

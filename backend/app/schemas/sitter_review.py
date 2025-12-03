@@ -4,16 +4,19 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
-class SitterReviewBase(BaseModel):
-    sitter_id: UUID
-    reviewer_id: UUID
-    rating: int | None = None
+class SitterReviewCreate(BaseModel):
+    rating: int
     comment: str | None = None
     owner_name: str | None = None
 
 
-class SitterReviewRead(SitterReviewBase):
+class SitterReviewRead(BaseModel):
     id: UUID
+    sitter_id: UUID
+    reviewer_id: UUID | None
+    rating: int
+    comment: str | None = None
+    owner_name: str
     reviewer_name: str | None = None
     created_at: datetime
 

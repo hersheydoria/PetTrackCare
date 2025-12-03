@@ -23,9 +23,14 @@ def _resolve_sitter_user(db: Session, identifier: str) -> Optional[models.User]:
 def _serialize_job(job: models.SittingJob, db: Session) -> SittingJobDetail:
     pet = job.pet
     owner = pet.owner if pet else None
+    sitter = job.sitter
+    sitter_name = sitter.display_name if sitter else None
+    sitter_picture = sitter.profile_picture if sitter else None
     return SittingJobDetail(
         id=job.id,
         sitter_id=job.sitter_id,
+        sitter_name=sitter_name,
+        sitter_profile_picture=sitter_picture,
         pet_id=job.pet_id,
         pet_name=pet.name if pet else None,
         pet_type=pet.type if pet else None,
@@ -42,7 +47,10 @@ def _serialize_job(job: models.SittingJob, db: Session) -> SittingJobDetail:
 def _query_owner_jobs(db: Session, owner_id: str, status: Optional[str]) -> List[models.SittingJob]:
     query = (
         db.query(models.SittingJob)
-        .options(joinedload(models.SittingJob.pet).joinedload(models.Pet.owner))
+        .options(
+            joinedload(models.SittingJob.pet).joinedload(models.Pet.owner),
+            joinedload(models.SittingJob.sitter),
+        )
         .join(models.Pet)
         .filter(models.Pet.owner_id == owner_id)
     )
@@ -55,10 +63,13 @@ def _query_owner_jobs(db: Session, owner_id: str, status: Optional[str]) -> List
 async def list_jobs_for_sitter(sitter_id: str, db: Session = Depends(get_db)) -> List[SittingJobDetail]:
     sitter_user = _resolve_sitter_user(db, sitter_id)
     if not sitter_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sitter profile not found")
+        return []
     jobs = (
         db.query(models.SittingJob)
-        .options(joinedload(models.SittingJob.pet).joinedload(models.Pet.owner))
+        .options(
+            joinedload(models.SittingJob.pet).joinedload(models.Pet.owner),
+            joinedload(models.SittingJob.sitter),
+        )
         .filter(models.SittingJob.sitter_id == sitter_user.id)
         .order_by(models.SittingJob.created_at.desc())
         .all()
