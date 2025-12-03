@@ -112,10 +112,16 @@ class FastApiService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchPets({String? ownerId}) async {
+  Future<List<Map<String, dynamic>>> fetchPets({
+    String? ownerId,
+    List<String>? petIds,
+  }) async {
     final queryParams = <String, String>{};
     if (ownerId != null && ownerId.isNotEmpty) {
       queryParams['owner_id'] = ownerId;
+    }
+    if (petIds != null && petIds.isNotEmpty) {
+      queryParams['pet_ids'] = petIds.join(',');
     }
     final uri = Uri.parse(
       '$_baseUrl/pets/',
@@ -165,6 +171,128 @@ class FastApiService {
       throw Exception(
         'FastAPI delete pet failed (${response.statusCode}): ${response.body}',
       );
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchBehaviorLogs({
+    String? petId,
+    String? userId,
+    DateTime? startDate,
+    DateTime? endDate,
+    int limit = 100,
+  }) async {
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      if (petId != null && petId.isNotEmpty) 'pet_id': petId,
+      if (userId != null && userId.isNotEmpty) 'user_id': userId,
+      if (startDate != null) 'start_date': startDate.toIso8601String(),
+      if (endDate != null) 'end_date': endDate.toIso8601String(),
+    };
+    final uri = Uri.parse('$_baseUrl/behavior_logs/').replace(
+      queryParameters: queryParams.isEmpty ? null : queryParams,
+    );
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch behavior logs failed (${response.statusCode})');
+    }
+    final data = jsonDecode(response.body) as List<dynamic>;
+    return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<void> deleteBehaviorLog(String logId) async {
+    final uri = Uri.parse('$_baseUrl/behavior_logs/$logId');
+    final response = await _client.delete(uri, headers: await _jsonHeaders);
+    if (response.statusCode >= 400) {
+      throw Exception('FastAPI delete behavior log failed (${response.statusCode}): ${response.body}');
+    }
+  }
+
+  Future<Map<String, dynamic>> createBehaviorLog(Map<String, dynamic> payload) async {
+    final uri = Uri.parse('$_baseUrl/behavior_logs/');
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode >= 400) {
+      throw Exception('FastAPI create behavior log failed (${response.statusCode}): ${response.body}');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>> updateBehaviorLog(String logId, Map<String, dynamic> payload) async {
+    final uri = Uri.parse('$_baseUrl/behavior_logs/$logId');
+    final response = await _client.patch(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode >= 400) {
+      throw Exception('FastAPI update behavior log failed (${response.statusCode}): ${response.body}');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchLocationHistory(
+    String petId, {
+    int limit = 8,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/location/pet/$petId').replace(
+      queryParameters: {'limit': limit.toString()},
+    );
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch location history failed (${response.statusCode})');
+    }
+    final data = jsonDecode(response.body) as List<dynamic>;
+    return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<Map<String, dynamic>> fetchLatestLocationForPet(String petId) async {
+    final uri = Uri.parse('$_baseUrl/location/pet/$petId/latest');
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch latest location failed (${response.statusCode})');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>?> fetchDeviceForPet(String petId) async {
+    final uri = Uri.parse('$_baseUrl/device-map/pet/$petId');
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode == 404) {
+      return null;
+    }
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch device map failed (${response.statusCode})');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>> assignDeviceToPet({
+    required String petId,
+    required String deviceId,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/device-map/');
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode({
+        'pet_id': petId,
+        'device_id': deviceId,
+      }),
+    );
+    if (response.statusCode >= 400) {
+      throw Exception('FastAPI assign device failed (${response.statusCode}): ${response.body}');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<void> removeDeviceFromPet(String petId) async {
+    final uri = Uri.parse('$_baseUrl/device-map/pet/$petId');
+    final response = await _client.delete(uri, headers: await _jsonHeaders);
+    if (response.statusCode >= 400) {
+      throw Exception('FastAPI remove device failed (${response.statusCode}): ${response.body}');
     }
   }
 

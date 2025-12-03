@@ -3267,7 +3267,10 @@ class _AssignedPetsTabState extends State<AssignedPetsTab> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => PetProfileScreen(initialPet: petData),
+                builder: (_) => PetProfileScreen(
+                  initialPet: petData,
+                  initialUserId: widget.sitterId,
+                ),
               ),
             );
           },

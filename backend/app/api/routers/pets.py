@@ -26,10 +26,18 @@ async def create_pet(
 
 
 @router.get("/", response_model=List[PetRead])
-async def list_pets(owner_id: str | None = None, db: Session = Depends(get_db)) -> List[models.Pet]:
+async def list_pets(
+    owner_id: str | None = None,
+    pet_ids: str | None = None,
+    db: Session = Depends(get_db),
+) -> List[models.Pet]:
     query = db.query(models.Pet)
     if owner_id:
         query = query.filter(models.Pet.owner_id == owner_id)
+    if pet_ids:
+        parsed_ids = [pet_id.strip() for pet_id in pet_ids.split(",") if pet_id.strip()]
+        if parsed_ids:
+            query = query.filter(models.Pet.id.in_(parsed_ids))
     return query.all()
 
 

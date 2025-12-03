@@ -16,6 +16,7 @@ from .api.routers import (
     behavior_logs,
     community,
     media,
+    device_map,
 )
 from .db.base import Base
 from .db.session import engine
@@ -36,6 +37,7 @@ router_modules = [
     behavior_logs.router,
     community.router,
     media.router,
+    device_map.router,
 ]
 
 for router in router_modules:

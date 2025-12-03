@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart'; // For date formatting
 import 'package:flutter/foundation.dart'; // For kDebugMode
 import 'notification_screen.dart';
@@ -12,6 +11,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/fastapi_service.dart';
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
 import '../services/auto_migration_service.dart';
@@ -24,7 +24,9 @@ const lightBlush = Color(0xFFF6DED8);
 
 class PetProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? initialPet;
-  PetProfileScreen({Key? key, this.initialPet}) : super(key: key);
+  final Map<String, dynamic>? initialUser;
+  final String? initialUserId;
+  PetProfileScreen({Key? key, this.initialPet, this.initialUser, this.initialUserId}) : super(key: key);
 
   @override
   _PetProfileScreenState createState() => _PetProfileScreenState();
@@ -33,14 +35,13 @@ class PetProfileScreen extends StatefulWidget {
 class _PetProfileScreenState extends State<PetProfileScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final user = Supabase.instance.client.auth.currentUser;
+  final FastApiService _apiClient = FastApiService.instance;
+  Map<String, dynamic>? _currentUser;
 
   // Helper method to get user role
   String _getUserRole() {
-    final metadata = user?.userMetadata ?? {};
-    final role = metadata['role']?.toString() ?? 'Pet Owner';
-  // debug prints removed
-    return role;
+    final role = _currentUser?['role']?.toString();
+    return role ?? 'Pet Owner';
   }
 
   // Helper method to get formatted age for pet display
@@ -96,9 +97,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
-  RealtimeChannel? _selectedPetChannel; // Realtime listener for selected pet updates
-  RealtimeChannel? _locationHistoryChannel; // Realtime listener for location history updates
-  
   // Auto-migration service
   final AutoMigrationService _autoMigrationService = AutoMigrationService();
   
@@ -357,8 +355,61 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
+  Future<void> _fetchCurrentUser() async {
+    try {
+      final user = await _apiClient.fetchCurrentUser();
+      if (mounted) {
+        setState(() {
+          _currentUser = user;
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) print('Failed to load user: $e');
+      if (mounted) {
+        setState(() {
+          _currentUser = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _ensureCurrentUser() async {
+    if (_currentUser != null) {
+      return;
+    }
+
+    final initialId = widget.initialUserId;
+    if (initialId != null && initialId.isNotEmpty) {
+      try {
+        final user = await _apiClient.fetchUserById(initialId);
+        if (mounted) {
+          setState(() {
+            _currentUser = user;
+          });
+        } else {
+          _currentUser = user;
+        }
+        return;
+      } catch (e) {
+        if (kDebugMode) print('Failed to load user by id: $e');
+      }
+    }
+
+    await _fetchCurrentUser();
+  }
+
+  Future<void> _initializeScreen() async {
+    try {
+      await _apiClient.initialize();
+    } catch (e) {
+      if (kDebugMode) print('FastAPI initialization failed: $e');
+    }
+    await _ensureCurrentUser();
+    await _fetchPets();
+  }
+
   Future<void> _fetchPets() async {
-    final userId = user?.id;
+    final userId = _currentUser?['id']?.toString();
     if (userId == null) {
       setState(() => _loadingPets = false);
       return;
@@ -367,48 +418,17 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   setState(() => _loadingPets = true);
     try {
       List<Map<String, dynamic>> list = [];
-      
       if (_getUserRole() == 'Pet Sitter') {
-        // First, get the sitting_jobs with status 'Active' for this sitter
-        final sittingJobsResponse = await Supabase.instance.client
-            .from('sitting_jobs')
-            .select('pet_id, status')
-            .eq('sitter_id', userId)
-            .eq('status', 'Active');
-            
-        final sittingJobsData = sittingJobsResponse as List?;
-        
-        if (sittingJobsData != null && sittingJobsData.isNotEmpty) {
-          final petIds = sittingJobsData
-              .map((job) => job['pet_id'])
-              .where((id) => id != null)
-              .toList();
-
-          if (petIds.isNotEmpty) {
-            // Now fetch the actual pets using these IDs
-            final petsResponse = await Supabase.instance.client
-                .from('pets')
-                .select()
-                .inFilter('id', petIds)
-                .order('id', ascending: false);
-                
-            final petsData = petsResponse as List?;
-            if (petsData != null && petsData.isNotEmpty) {
-              list = List<Map<String, dynamic>>.from(petsData);
-            } 
-          } 
-        } 
-      } else {
-        // For Pet Owners: fetch pets they own
-        final response = await Supabase.instance.client
-            .from('pets')
-            .select()
-            .eq('owner_id', userId)
-            .order('id', ascending: false);
-        final data = response as List?;
-        if (data != null && data.isNotEmpty) {
-          list = List<Map<String, dynamic>>.from(data);
+        final assignedJobs = await _apiClient.fetchAssignedPetsForSitter(userId);
+        final petIds = assignedJobs
+            .map((job) => job['pet_id']?.toString())
+            .whereType<String>()
+            .toList();
+        if (petIds.isNotEmpty) {
+          list = await _apiClient.fetchPets(petIds: petIds);
         }
+      } else {
+        list = await _apiClient.fetchPets(ownerId: userId);
       }
       
       if (list.isNotEmpty) {
@@ -460,12 +480,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           _loadingPets = false;
         });
         
-        // Setup realtime listener for pet updates (e.g., is_missing status changes)
-        _setupSelectedPetListener();
-        
-        // Setup realtime listener for location history updates
-        _setupLocationHistoryListener();
-        
         // Save the selected pet ID for future sessions
         if (selected != null) {
           _saveSelectedPetId(selected['id']);
@@ -503,18 +517,13 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     final petId = _selectedPet!['id'];
     
     try {
-      // OPTIMIZATION: Only fetch last 30 days of logs and limit to 100 records
-      final thirtyDaysAgo = DateTime.now().subtract(Duration(days: 30)).toIso8601String();
-      final response = await Supabase.instance.client
-          .from('behavior_logs')
-          .select()
-          .eq('pet_id', petId)
-          .gte('log_date', thirtyDaysAgo)
-          .order('log_date', ascending: false)
-          .limit(100); // OPTIMIZATION: Limit to 100 records max
-
-      final data = response as List?;
-      print('DEBUG: _fetchLatestHealthInsights - Got ${data?.length ?? 0} behavior logs for pet $petId');
+      final thirtyDaysAgo = DateTime.now().subtract(Duration(days: 30));
+      final data = await _apiClient.fetchBehaviorLogs(
+        petId: petId,
+        startDate: thirtyDaysAgo,
+        limit: 100,
+      );
+      print('DEBUG: _fetchLatestHealthInsights - Got ${data.length} behavior logs for pet $petId');
       
       // Determine if backend flagged a persistent illness
       final bool persistentFromNotice = _illnessRiskNotice?['is_persistent'] == true;
@@ -526,7 +535,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       // Generate insights based on backend's trained model prediction (_isUnhealthy flag)
       List<Widget> insights = [];
       
-      if (data != null && data.isNotEmpty) {
+      if (data.isNotEmpty) {
         // Filter logs to last 7 days only
         final sevenDaysAgo = DateTime.now().subtract(Duration(days: 7));
         final logsInLast7Days = data.where((log) {
@@ -724,15 +733,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     if (_selectedPet == null) return;
     try {
       final petId = _selectedPet!['id'];
-      // OPTIMIZATION: Only fetch last 120 days for calendar display instead of all logs
-      final cutoffDate = DateTime.now().subtract(Duration(days: 120)).toIso8601String();
-      final response = await Supabase.instance.client
-          .from('behavior_logs')
-          .select('log_date')
-          .eq('pet_id', petId)
-          .gte('log_date', cutoffDate) // Only fetch last 120 days
-          .order('log_date', ascending: true);
-      final data = response as List? ?? [];
+      final cutoffDate = DateTime.now().subtract(Duration(days: 120));
+      final data = await _apiClient.fetchBehaviorLogs(
+        petId: petId,
+        startDate: cutoffDate,
+        limit: 200,
+      );
       final Map<DateTime, List<String>> map = {};
       for (final row in data) {
         try {
@@ -828,10 +834,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         // Persist health status to database after UI update
         final healthStatus = _isUnhealthy ? 'Bad' : 'Good';
         try {
-          await Supabase.instance.client
-              .from('pets')
-              .update({'health': healthStatus})
-              .eq('id', petId);
+          await _apiClient.updatePet(petId, {'health': healthStatus});
           print('DEBUG: Updated pet health status to: $healthStatus');
         } catch (e) {
           print('Error updating pet health status: $e');
@@ -849,8 +852,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     }
   }
 
+
   Future<void> _fetchLatestLocationForPet() async {
-    // Fetch the latest location for the device mapped to the selected pet (if any)
     if (_selectedPet == null) {
       setState(() {
         _latestDeviceLocation = null;
@@ -861,55 +864,68 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       return;
     }
 
+    final petId = _selectedPet!['id']?.toString();
+    if (petId == null) {
+      return;
+    }
+
     try {
-      final petId = _selectedPet!['id'];
-      // OPTIMIZATION: Skip location fetch if no device was previously mapped and still isn't
-      if (_latestDeviceId == null && _latestDeviceLocation == null) {
-        // Quick check to see if device was recently added
-        final devResp = await Supabase.instance.client
-            .from('device_pet_map')
-            .select('device_id')
-            .eq('pet_id', petId)
-            .limit(1);
-        final devList = devResp as List? ?? [];
-        final deviceId = devList.isNotEmpty ? devList.first['device_id']?.toString() : null;
-        if (deviceId == null || deviceId.isEmpty) {
-          // No device mapped for this pet
-          return;
-        }
-      }
-      
-      // 1) find device_id in device_pet_map
-      final devResp = await Supabase.instance.client
-          .from('device_pet_map')
-          .select('device_id')
-          .eq('pet_id', petId)
-          .limit(1);
-      final devList = devResp as List? ?? [];
-      final deviceId = devList.isNotEmpty ? devList.first['device_id']?.toString() : null;
-      if (deviceId == null || deviceId.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _latestDeviceLocation = null;
-            _latestDeviceTimestamp = null;
-            _latestDeviceId = null;
-            _locationHistory = [];
-          });
-        }
-        return;
+      final assignedDeviceId = await _getStoredDeviceId();
+      final latest = await _apiClient.fetchLatestLocationForPet(petId);
+      final lat = double.tryParse(latest['latitude']?.toString() ?? '');
+      final lng = double.tryParse(latest['longitude']?.toString() ?? '');
+      final deviceId = latest['device_mac']?.toString() ?? assignedDeviceId;
+      DateTime? ts;
+      final rawTs = latest['timestamp'];
+      if (rawTs is String) {
+        ts = DateTime.tryParse(rawTs);
+      } else if (rawTs is DateTime) {
+        ts = rawTs;
       }
 
-    // 2) query latest entry in location_history for that device_mac and this pet_id
-    final locResp = await Supabase.instance.client
-      .from('location_history')
-      .select()
-      .eq('device_mac', deviceId)
-      .eq('pet_id', petId)
-      .order('timestamp', ascending: false)
-      .limit(1);
-      final locList = locResp as List? ?? [];
-      if (locList.isNotEmpty) {
-        final row = locList.first as Map<String, dynamic>;
+      await _fetchLocationHistoryForPet(petId);
+
+      if (mounted) {
+        setState(() {
+          _latestDeviceId = deviceId;
+          _latestDeviceTimestamp = ts;
+          _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
+
+          if (_latestDeviceLocation != null) {
+            _currentMapLocation = _latestDeviceLocation;
+            if (_locationHistory.isNotEmpty) {
+              final latestHistory = _locationHistory.first;
+              final address = latestHistory['address'] as String?;
+              _currentMapLabel = (address != null && address.isNotEmpty)
+                  ? address
+                  : 'Live GPS Location';
+            } else {
+              _currentMapLabel = 'Live GPS Location';
+            }
+            _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
+          }
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) print('Error fetching latest location: $e');
+      await _fetchLocationHistoryForPet(petId);
+      final storedDeviceId = await _getStoredDeviceId();
+      if (mounted) {
+        setState(() {
+          _latestDeviceLocation = null;
+          _latestDeviceTimestamp = null;
+          _latestDeviceId = storedDeviceId;
+        });
+      }
+    }
+  }
+
+  // Fetch recent location_history rows (limit 8) for the pet and reverse-geocode addresses.
+  Future<void> _fetchLocationHistoryForPet(String petId, {int limit = 8}) async {
+    try {
+      final resp = await _apiClient.fetchLocationHistory(petId, limit: limit);
+      final records = <Map<String, dynamic>>[];
+      for (final row in resp) {
         final lat = double.tryParse(row['latitude']?.toString() ?? '');
         final lng = double.tryParse(row['longitude']?.toString() ?? '');
         DateTime? ts;
@@ -919,115 +935,22 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         } else if (rawTs is DateTime) {
           ts = rawTs;
         }
-        
-        // Fetch location history first to get address
-        await _fetchLocationHistoryForDevice(deviceId, petId: petId);
-        
-        if (mounted) {
-          setState(() {
-            _latestDeviceId = deviceId;
-            _latestDeviceTimestamp = ts;
-            _latestDeviceLocation = (lat != null && lng != null) ? LatLng(lat, lng) : null;
-            
-            // Automatically set the map to show the latest location
-            // Always reset to latest location when fetching (e.g., when switching pets or refreshing)
-            if (_latestDeviceLocation != null) {
-              _currentMapLocation = _latestDeviceLocation;
-              // Get address from location history if available
-              if (_locationHistory.isNotEmpty) {
-                final latestHistory = _locationHistory.first;
-                final address = latestHistory['address']?.toString();
-                if (address != null && address.isNotEmpty) {
-                  _currentMapLabel = address;
-                } else {
-                  _currentMapLabel = 'Live GPS Location';
-                }
-                _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
-              } else {
-                _currentMapLabel = 'Live GPS Location';
-                _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
-              }
-            }
-          });
-        }
-  
-      } else {
-        // device exists but no location rows yet
-        setState(() {
-          _latestDeviceId = deviceId;
-          _latestDeviceTimestamp = null;
-          _latestDeviceLocation = null;
-        _locationHistory = [];
+        records.add({
+          'latitude': lat,
+          'longitude': lng,
+          'timestamp': ts,
+          'device_mac': row['device_mac'],
+          'firebase_entry_id': row['firebase_entry_id'],
+          'address': null,
         });
-        // still attempt to fetch history (will be empty) so UI stays consistent
-  await _fetchLocationHistoryForDevice(deviceId, petId: petId);
       }
-    } catch (e) {
-      // ignore but clear device location on error
-      setState(() {
-        _latestDeviceLocation = null;
-        _latestDeviceTimestamp = null;
-        _latestDeviceId = null;
-        _locationHistory = [];
-      });
-    }
-  }
 
-   // Fetch recent location_history rows (limit 8) for device and reverse-geocode addresses.
-  Future<void> _fetchLocationHistoryForDevice(String deviceId, {required String petId, int limit = 8}) async {
-    try {
-      final resp = await Supabase.instance.client
-          .from('location_history')
-          .select('id,latitude,longitude,timestamp,device_mac,pet_id,firebase_entry_id') // Include firebase_entry_id to check if migrated from Firebase
-          .eq('device_mac', deviceId)
-          .eq('pet_id', petId)
-          .order('timestamp', ascending: false)
-          .limit(limit);
-      final list = resp as List? ?? [];
-      final records = <Map<String, dynamic>>[];
-      
-      for (final row in list) {
-        try {
-          final lat = double.tryParse(row['latitude']?.toString() ?? '');
-          final lng = double.tryParse(row['longitude']?.toString() ?? '');
-          final firebaseEntryId = row['firebase_entry_id'] as String?;
-          DateTime? ts;
-          final rawTs = row['timestamp'];
-          if (rawTs is String) {
-            ts = DateTime.tryParse(rawTs);
-            // If timestamp includes timezone info (e.g., "2025-11-18T14:30:00+08:00"), parse it correctly
-            if (ts != null && rawTs.contains('+')) {
-              // Already timezone-aware from database, use as-is
-              ts = DateTime.tryParse(rawTs);
-            }
-          } else if (rawTs is DateTime) {
-            ts = rawTs;
-          }
-          
-          // Note: Supabase already stores the correct local time with timezone info
-          // No need to add any timezone offset
-          
-          records.add({
-            'latitude': lat,
-            'longitude': lng,
-            'timestamp': ts,
-            'device_mac': row['device_mac'],
-            'firebase_entry_id': firebaseEntryId,
-            'address': null, // Will be resolved asynchronously
-          });
-        } catch (e) {
-          // skip malformed row
-          if (kDebugMode) print('Error parsing location record: $e');
-        }
-      }
-      
       if (mounted) {
         setState(() {
           _locationHistory = records;
         });
       }
-      
-      // Resolve addresses in parallel for all locations after a short delay to allow UI to render first
+
       if (records.isNotEmpty) {
         Future.delayed(Duration(milliseconds: 100), () {
           if (mounted) {
@@ -1214,7 +1137,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _fetchPets();
+    if (widget.initialUser != null) {
+      _currentUser = widget.initialUser;
+    }
+    _initializeScreen();
     // Register callback for when location data is migrated from Firebase
     _autoMigrationService.setOnLocationDataMigrated(() {
       print('🔄 Location data migration callback triggered - refreshing location display');
@@ -1236,8 +1162,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     print('=== AUTO-MIGRATION TRIGGER FROM PETS_SCREEN ===');
     debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM PetProfileScreen.initState()');
     print('Timestamp: ${DateTime.now().toIso8601String()}');
-    print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
-    print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
+    final userId = _currentUser?['id']?.toString() ?? 'No user';
+    final userEmail = _currentUser?['email']?.toString() ?? 'No email';
+    print('User: $userId');
+    print('User Email: $userEmail');
     
     Future.microtask(() async {
       try {
@@ -1271,88 +1199,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     });
   }
 
-  // Setup realtime listener for selected pet changes
-  void _setupSelectedPetListener() {
-    if (_selectedPet == null) return;
-    
-    // Unsubscribe from previous pet channel if exists
-    if (_selectedPetChannel != null) {
-      _selectedPetChannel!.unsubscribe();
-    }
-    
-    final petId = _selectedPet!['id'];
-    
-    try {
-      _selectedPetChannel = Supabase.instance.client
-          .channel('selected_pet_$petId')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.update,
-            schema: 'public',
-            table: 'pets',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'id',
-              value: petId,
-            ),
-            callback: (payload) {
-              print('🔄 Real-time update for pet $petId');
-              final updated = Map<String, dynamic>.from(payload.newRecord);
-              // Update the selected pet with new data
-              if (mounted) {
-                setState(() {
-                  _selectedPet!.addAll(updated);
-                });
-              }
-            },
-          )
-          .subscribe();
-    } catch (e) {
-      print('Error setting up pet realtime listener: $e');
-    }
-  }
-
-  // Setup realtime listener for location history changes
-  void _setupLocationHistoryListener() {
-    if (_selectedPet == null) return;
-    
-    // Unsubscribe from previous location history channel if exists
-    if (_locationHistoryChannel != null) {
-      _locationHistoryChannel!.unsubscribe();
-    }
-    
-    final petId = _selectedPet!['id'];
-    
-    try {
-      _locationHistoryChannel = Supabase.instance.client
-          .channel('location_history_$petId')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
-            schema: 'public',
-            table: 'location_history',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'pet_id',
-              value: petId,
-            ),
-            callback: (payload) {
-              print('📍 Real-time location update for pet $petId');
-              // Refresh location data when new location is inserted
-              if (mounted) {
-                _fetchLatestLocationForPet();
-                // Refetch location history to get the new entry
-                final deviceId = _selectedPet?['device_id']?.toString();
-                if (deviceId != null && deviceId.isNotEmpty) {
-                  _fetchLocationHistoryForDevice(deviceId, petId: petId);
-                }
-              }
-            },
-          )
-          .subscribe();
-    } catch (e) {
-      print('Error setting up location history realtime listener: $e');
-    }
-  }
-
   @override
   void dispose() {
     _emergencyContactController.dispose();
@@ -1360,13 +1206,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     _customMessageController.dispose();
     _specialNotesController.dispose();
     _tabController.dispose();
-    // Unsubscribe from realtime listeners
-    if (_selectedPetChannel != null) {
-      _selectedPetChannel!.unsubscribe();
-    }
-    if (_locationHistoryChannel != null) {
-      _locationHistoryChannel!.unsubscribe();
-    }
     super.dispose();
   }
 
@@ -1606,27 +1445,12 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 Future<void> _connectToDeviceByMac(String macAddress) async {
   if (_selectedPet == null) return;
 
+  final petId = _selectedPet!['id']?.toString();
+  if (petId == null) return;
+
   try {
-    final petId = _selectedPet!['id'];
-    // Try updating existing mapping for this pet first
-    final updateResp = await Supabase.instance.client
-        .from('device_pet_map')
-        .update({'device_id': macAddress})
-        .eq('pet_id', petId)
-        .select();
-
-    if (updateResp == null || (updateResp is List && updateResp.isEmpty)) {
-      // No existing mapping updated — insert a new mapping
-      await Supabase.instance.client.from('device_pet_map').insert({
-        'device_id': macAddress,
-        'pet_id': petId,
-      });
-    }
-
-    // fetch latest location after associating the device
+    await _apiClient.assignDeviceToPet(petId: petId, deviceId: macAddress);
     await _fetchLatestLocationForPet();
-
-  // debugPrint removed
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('GPS device connected successfully! MAC: $macAddress'),
@@ -1634,7 +1458,6 @@ Future<void> _connectToDeviceByMac(String macAddress) async {
       ),
     );
   } catch (e) {
-  // debugPrint removed
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Failed to connect device: $e'),
@@ -1646,23 +1469,23 @@ Future<void> _connectToDeviceByMac(String macAddress) async {
 
 // Helper method to fetch stored device ID from DB
 Future<String?> _getStoredDeviceId() async {
+  if (_selectedPet == null) return null;
+  final petId = _selectedPet!['id']?.toString();
+  if (petId == null) return null;
+
   try {
-    final response = await Supabase.instance.client
-        .from('device_pet_map')
-        .select('device_id')
-        .eq('pet_id', _selectedPet!['id'])
-        .limit(1);
-    final data = response as List?;
-    if (data != null && data.isNotEmpty) {
-      return data.first['device_id']?.toString();
-    }
-  } catch (e) {}
-  return null;
+    final map = await _apiClient.fetchDeviceForPet(petId);
+    return map?['device_id']?.toString();
+  } catch (e) {
+    return null;
+  }
 }
 
 // Method to manually disconnect/remove the device
 void _disconnectDevice() async {
   if (_selectedPet == null) return;
+  final petId = _selectedPet!['id']?.toString();
+  if (petId == null) return;
   
   // Show confirmation dialog
   final confirm = await showDialog<bool>(
@@ -1673,13 +1496,6 @@ void _disconnectDevice() async {
           Icon(Icons.warning, color: Colors.orange),
           SizedBox(width: 8),
           Text('Disconnect GPS Device'),
-        ],
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Are you sure you want to disconnect the GPS device?'),
           SizedBox(height: 8),
           Container(
             padding: EdgeInsets.all(8),
@@ -1721,10 +1537,10 @@ void _disconnectDevice() async {
 
   try {
     // Remove device mapping from database
-    await Supabase.instance.client
-        .from('device_pet_map')
-        .delete()
-        .eq('pet_id', _selectedPet!['id']);
+    final petId = _selectedPet!['id']?.toString();
+    if (petId != null) {
+      await _apiClient.removeDeviceFromPet(petId);
+    }
         
     // Clear local state
     setState(() {
@@ -1810,7 +1626,7 @@ void _disconnectDevice() async {
     final profilePicture = _selectedPet!['profile_picture'];
 
     // Check if current user is the owner or a sitter
-    final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
+    final userId = _currentUser?['id']?.toString() ?? '';
     final userRole = _getUserRole();
     final isOwner = userRole == 'Pet Owner' && _selectedPet!['owner_id'] == userId;
     
@@ -1839,13 +1655,13 @@ void _disconnectDevice() async {
     if (confirmed == true) {
       try {
         // Mark pet as missing
-        await Supabase.instance.client
-            .from('pets')
-            .update({'is_missing': true})
-            .eq('id', _selectedPet!['id']);
-        setState(() {
-          _selectedPet!['is_missing'] = true;
-        });
+        final petId = _selectedPet!['id']?.toString();
+        if (petId != null) {
+          await _apiClient.updatePet(petId, {'is_missing': true});
+          setState(() {
+            _selectedPet!['is_missing'] = true;
+          });
+        }
 
         // Create enhanced content for community post
         String content = _buildMissingPostContent(
@@ -1856,24 +1672,17 @@ void _disconnectDevice() async {
           isOwner: isOwner,
         );
         
-        final postResponse = await Supabase.instance.client
-            .from('community_posts')
-            .insert({
-              'type': 'missing',
-              'user_id': userId,
-              'content': content,
-              'latitude': lat,
-              'longitude': lng,
-              'address': resolvedAddress,
-              'image_url': profilePicture,
-              'created_at': DateTime.now().toUtc().toIso8601String(),
-            }).select('id');
-            
-         // Get the post ID from the response
-         String? postId;
-         if (postResponse.isNotEmpty) {
-           postId = postResponse.first['id']?.toString();
-         }
+        final postPayload = {
+          'type': 'missing',
+          'user_id': userId,
+          'content': content,
+          if (lat != null) 'latitude': lat,
+          if (lng != null) 'longitude': lng,
+          if (resolvedAddress != null) 'address': resolvedAddress,
+          if (profilePicture != null) 'image_url': profilePicture,
+        };
+        final postResponse = await _apiClient.createCommunityPost(postPayload);
+        final String? postId = postResponse['id']?.toString();
          
          // Send pet alert notification to all users with post ID
          await sendPetAlertToAllUsers(
@@ -3315,37 +3124,42 @@ void _disconnectDevice() async {
                               onPressed: () async {
                                 try {
                                   // Update pet status
-                                  await Supabase.instance.client
-                                      .from('pets')
-                                      .update({'is_missing': false})
-                                      .eq('id', _selectedPet!['id']);
-                                  setState(() {
-                                    _selectedPet!['is_missing'] = false;
-                                  });
+                                  final petId = _selectedPet!['id']?.toString();
+                                  if (petId != null) {
+                                    await _apiClient.updatePet(petId, {'is_missing': false});
+                                    setState(() {
+                                      _selectedPet!['is_missing'] = false;
+                                    });
+                                  }
 
                                   // Move lost post to found type in community_posts and update content
-                                  final userId = Supabase.instance.client.auth.currentUser?.id ?? '';
+                                  final userId = _currentUser?['id']?.toString() ?? '';
                                   final petName = _selectedPet!['name'] ?? 'Unnamed';
                                   // Find the latest missing post for this pet and user
-                                  final posts = await Supabase.instance.client
-                                      .from('community_posts')
-                                      .select()
-                                      .eq('type', 'missing')
-                                      .eq('user_id', userId)
-                                      .ilike('content', '%$petName%');
-                                  if (posts is List && posts.isNotEmpty) {
-                                    final post = posts.first;
-                                    final currentContent = post['content']?.toString() ?? '';
+                                  final posts = await _apiClient.fetchCommunityPosts(
+                                    postType: 'missing',
+                                    userId: userId.isNotEmpty ? userId : null,
+                                  );
+                                  Map<String, dynamic>? targetPost;
+                                  final normalizedPetName = petName.toLowerCase();
+                                  for (final post in posts) {
+                                    final content = post['content']?.toString().toLowerCase() ?? '';
+                                    if (normalizedPetName.isNotEmpty && content.contains(normalizedPetName)) {
+                                      targetPost = post;
+                                      break;
+                                    }
+                                  }
+                                  if (targetPost != null) {
+                                    final currentContent = targetPost['content']?.toString() ?? '';
                                     final foundDate = DateFormat('MMM d, yyyy • hh:mm a').format(DateTime.now());
                                     final updatedContent = '$currentContent\n\nUPDATE: Pet is found at $foundDate';
-                                    
-                                    await Supabase.instance.client
-                                        .from('community_posts')
-                                        .update({
-                                          'type': 'found',
-                                          'content': updatedContent,
-                                        })
-                                        .eq('id', post['id']);
+                                    final postId = targetPost['id']?.toString();
+                                    if (postId != null) {
+                                      await _apiClient.updateCommunityPost(postId, {
+                                        'type': 'found',
+                                        'content': updatedContent,
+                                      });
+                                    }
                                   }
 
                                   // Clear any active missing pet alerts for this pet
@@ -4721,16 +4535,15 @@ void _disconnectDevice() async {
     try {
       final petId = _selectedPet!['id'];
       final ymd = DateFormat('yyyy-MM-dd').format(day);
-      final response = await Supabase.instance.client
-          .from('behavior_logs')
-          .select()
-          .eq('pet_id', petId)
-          .eq('log_date', ymd)
-          .order('id', ascending: false) // pick latest if multiple
-          .limit(1);
-      final data = response as List?;
-      if (data != null && data.isNotEmpty) {
-        return Map<String, dynamic>.from(data.first as Map);
+      final logDate = DateTime.parse(ymd);
+      final data = await _apiClient.fetchBehaviorLogs(
+        petId: petId,
+        startDate: logDate,
+        endDate: logDate.add(Duration(days: 1)),
+        limit: 1,
+      );
+      if (data.isNotEmpty) {
+        return data.first;
       }
     } catch (_) {}
     return null;
@@ -5429,10 +5242,10 @@ void _disconnectDevice() async {
 
     if (confirm == true) {
       try {
-        await Supabase.instance.client
-            .from('behavior_logs')
-            .delete()
-            .eq('id', log['id']);
+        final logId = log['id']?.toString();
+        if (logId != null) {
+          await _apiClient.deleteBehaviorLog(logId);
+        }
         
         if (mounted) Navigator.pop(context); // close bottom sheet
         
@@ -7220,27 +7033,22 @@ void _disconnectDevice() async {
                               setModalState(() {});
                               
                               final payload = {
-                                'pet_id': _selectedPet!['id'],
-                                'user_id': user?.id ?? '',
+                                'pet_id': _selectedPet!['id']?.toString(),
+                                'user_id': _currentUser?['id']?.toString() ?? '',
                                 'log_date': DateFormat('yyyy-MM-dd').format(selectedDate),
                                 'activity_level': _activityLevel,
-                                // Health tracking fields - ONLY include columns that exist in the database schema
                                 'food_intake': _foodIntake,
                                 'water_intake': _waterIntake,
                                 'bathroom_habits': _bathroomHabits,
-                                'symptoms': json.encode(_selectedSymptoms), // Store as JSON string
-                                // NOTE: 'notes', 'mood', 'body_temperature', 'appetite_behavior' columns do not exist in Supabase
+                                'symptoms': json.encode(_selectedSymptoms),
                               };
-                              
                               if (isEdit) {
-                                await Supabase.instance.client
-                                    .from('behavior_logs')
-                                    .update(payload)
-                                    .eq('id', existing['id']);
+                                final logId = existing['id']?.toString();
+                                if (logId != null) {
+                                  await _apiClient.updateBehaviorLog(logId, payload);
+                                }
                               } else {
-                                await Supabase.instance.client
-                                    .from('behavior_logs')
-                                    .insert(payload);
+                                await _apiClient.createBehaviorLog(payload);
                               }
 
                               // Close the modal

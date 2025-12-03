@@ -31,6 +31,7 @@ class _MainNavigationState extends State<MainNavigation> {
   bool _isLoading = true;
   String userName = '';
   String userRole = '';
+  Map<String, dynamic>? _currentUserData;
 
   final FastApiService _fastApi = FastApiService.instance;
 
@@ -44,6 +45,7 @@ class _MainNavigationState extends State<MainNavigation> {
     try {
       final user = await _fastApi.fetchUserById(widget.userId);
       setState(() {
+        _currentUserData = user;
         userName = (user['name'] as String?) ?? user['email'] ?? 'User';
         userRole = (user['role'] as String?) ?? 'Pet Owner';
         _isLoading = false;
@@ -85,7 +87,7 @@ class _MainNavigationState extends State<MainNavigation> {
     print('🚀 MainNavigation: getScreens called, creating PetProfileScreen');
     return [
       HomeScreen(userId: widget.userId),
-      PetProfileScreen(), 
+      PetProfileScreen(initialUser: _currentUserData, initialUserId: widget.userId), 
       CommunityScreen(userId: widget.userId),
       ChatListScreen(),
       userRole == 'Pet Owner' ? OwnerProfileScreen(openSavedPosts: false) : SitterProfileScreen(openSavedPosts: false),

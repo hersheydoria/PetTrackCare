@@ -713,7 +713,11 @@ Widget _buildImageSourceOption({
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => PetProfileScreen(initialPet: pet),
+                builder: (_) => PetProfileScreen(
+                  initialPet: pet,
+                  initialUser: _currentUser,
+                  initialUserId: _currentUser?['id']?.toString(),
+                ),
               ),
             );
           },

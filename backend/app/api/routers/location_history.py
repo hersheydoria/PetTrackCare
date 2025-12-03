@@ -25,12 +25,17 @@ async def create_location(
 
 
 @router.get("/pet/{pet_id}", response_model=List[LocationRead])
-async def get_pet_locations(pet_id: str, db: Session = Depends(get_db)) -> List[models.LocationHistory]:
+async def get_pet_locations(
+    pet_id: str,
+    limit: int | None = 100,
+    db: Session = Depends(get_db),
+) -> List[models.LocationHistory]:
+    limit_count = limit if (limit and limit > 0) else 100
     return (
         db.query(models.LocationHistory)
         .filter(models.LocationHistory.pet_id == pet_id)
         .order_by(models.LocationHistory.timestamp.desc())
-        .limit(100)
+        .limit(limit_count)
         .all()
     )
 
