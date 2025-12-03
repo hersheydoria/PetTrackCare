@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
@@ -24,32 +23,40 @@ class SitterProfileScreen extends StatefulWidget {
 }
 
 class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTickerProviderStateMixin {
-  final user = Supabase.instance.client.auth.currentUser;
-  final metadata = Supabase.instance.client.auth.currentUser?.userMetadata ?? {};
-  Map<String, dynamic> userData = {}; // Store user data from public.users table
+  final FastApiService _fastApi = FastApiService.instance;
+  Map<String, dynamic> _currentUser = {};
 
   late TabController _tabController;
 
-  String get name => userData['name'] ?? metadata['name'] ?? 'Pet Sitter';
-  String get role => metadata['role'] ?? 'Pet Sitter';
-  String get email => user?.email ?? 'No email';
-  String get address => userData['address'] ?? metadata['address'] ?? metadata['location'] ?? 'No address provided';
+  String get _userId => _currentUser['id']?.toString() ?? '';
+
+  Map<String, dynamic> get _metadata => (_currentUser['metadata'] as Map<String, dynamic>?) ?? {};
+
+  String get name => (_currentUser['name'] as String?)?.trim() ?? _metadata['name'] ?? 'Pet Sitter';
+  String get role => (_currentUser['role'] as String?) ?? _metadata['role'] ?? 'Pet Sitter';
+  String get email => (_currentUser['email'] as String?) ?? 'No email';
+  String get address {
+    final stored = (_currentUser['address'] as String?)?.trim();
+    if (stored != null && stored.isNotEmpty) {
+      return stored;
+    }
+    final fallback = _metadata['address'] ?? _metadata['location'];
+    if (fallback is String && fallback.isNotEmpty) {
+      return fallback;
+    }
+    return 'No address provided';
+  }
+  String get profilePicture => (_currentUser['profile_picture'] as String?) ?? '';
 
   File? _profileImage;
   final ImagePicker _picker = ImagePicker();
   
   // Helper to refresh user and metadata after update
-  Future<void> _refreshUserMetadata() async {
-    // Load user data from public.users table (name, profile_picture, and address)
+  Future<void> _refreshUserData() async {
     try {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('name, profile_picture, address')
-          .eq('id', user?.id ?? '')
-          .single();
-      
+      final response = await _fastApi.fetchCurrentUser();
       setState(() {
-        userData = response;
+        _currentUser = response;
       });
     } catch (e) {
       print('Error loading user data: $e');
@@ -60,7 +67,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _refreshUserMetadata(); // Load user data from database
+    _refreshUserData(); // Load user data from backend
     
     // If openSavedPosts is true, switch to settings tab and open saved posts
     if (widget.openSavedPosts) {
@@ -74,7 +81,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
   }
 
   void _logout(BuildContext context) async {
-    await Supabase.instance.client.auth.signOut();
+    await _fastApi.logout();
     Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
   }
 
@@ -319,24 +326,11 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                   }
                                   setSt(() => isLoading = true);
                                   try {
-                                    final supabase = Supabase.instance.client;
-                                    
-                                    // Update public.users table (name and address)
-                                    await supabase
-                                        .from('users')
-                                        .update({
-                                          'name': newName.trim(),
-                                          'address': newAddress.trim().isEmpty ? null : newAddress.trim(),
-                                        })
-                                        .eq('id', user!.id);
-                                    
-                                    // Update auth metadata (name and address for backward compatibility)
-                                    await supabase.auth.updateUser(UserAttributes(data: {
+                                    await _fastApi.updateCurrentUser({
                                       'name': newName.trim(),
                                       'address': newAddress.trim().isEmpty ? null : newAddress.trim(),
-                                    }));
-                                    
-                                    await _refreshUserMetadata();
+                                    });
+                                    await _refreshUserData();
                                     Navigator.pop(ctx);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -429,8 +423,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                   
                                   if (confirm == true) {
                                     try {
-                                      await Supabase.instance.client.auth.signOut();
-                                      await Supabase.instance.client.from('users').delete().eq('id', user!.id);
+                                      await _fastApi.deleteCurrentUser();
+                                      await _fastApi.logout();
                                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account deleted.')));
                                       Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
                                     } catch (e) {
@@ -471,7 +465,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
 
   // Open dialog for notification preferences
   void _openNotificationPreferences() async {
-    final currentPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+    final currentPrefs = (_metadata['notification_preferences'] as Map<String, dynamic>?) ?? {'enabled': true};
 
     await showModalBottomSheet(
       context: context,
@@ -643,12 +637,13 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                 onPressed: isLoading ? null : () async {
                                   setSt(() => isLoading = true);
                                   try {
-                                    await Supabase.instance.client.auth.updateUser(
-                                      UserAttributes(data: {
-                                        'notification_preferences': {'enabled': enabled}
-                                      })
-                                    );
-                                    await _refreshUserMetadata();
+                                    await _fastApi.updateCurrentUser({
+                                      'metadata': {
+                                        ..._metadata,
+                                        'notification_preferences': {'enabled': enabled},
+                                      }
+                                    });
+                                    await _refreshUserData();
                                     Navigator.pop(ctx);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -960,9 +955,9 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
 
                                   setSt(() => _isLoading = true);
                                   try {
-                                    await Supabase.instance.client.auth.updateUser(
-                                      UserAttributes(password: _newPasswordController.text.trim()),
-                                    );
+                                    await _fastApi.updateCurrentUser({
+                                      'password': _newPasswordController.text.trim(),
+                                    });
                                     Navigator.pop(ctx);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
@@ -1551,13 +1546,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                             }
                             setState(() => isLoading = true);
                             try {
-                              await Supabase.instance.client
-                                  .from('feedback')
-                                  .insert({
-                                'user_id': user?.id,
-                                'message': text,
-                                'created_at': DateTime.now().toIso8601String(),
-                              });
+                              await _fastApi.submitFeedback(text);
                               Navigator.pop(context);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -2273,7 +2262,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => SavedPostsModal(userId: user?.id ?? ''),
+      builder: (context) => SavedPostsModal(userId: _userId),
     );
   }
 
@@ -2326,9 +2315,6 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     if (confirm != true) return;
 
     final file = File(pickedFile.path);
-    final fileBytes = await file.readAsBytes();
-    final fileName =
-        'profile_images/${user!.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
     // Show loading dialog
     showDialog(
@@ -2361,28 +2347,15 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
     );
 
     try {
-      final supabase = Supabase.instance.client;
-      final bucket = supabase.storage.from('profile-pictures');
-
-      await bucket.uploadBinary(
-        fileName,
-        fileBytes,
-        fileOptions: const FileOptions(contentType: 'image/jpeg'),
-      );
-
-      final publicUrl = bucket.getPublicUrl(fileName);
-
-      // Store profile_picture in public.users table, not auth.users
-      await supabase
-        .from('users')
-        .update({'profile_picture': publicUrl})
-        .eq('id', user!.id);
+      final uploadedUrl = await _fastApi.uploadProfileImage(file, type: 'images');
+      await _fastApi.updateCurrentUser({'profile_picture': uploadedUrl});
 
       setState(() {
         _profileImage = file;
-        userData['profile_picture'] = publicUrl;
-        metadata['profile_picture'] = publicUrl;
+        _currentUser['profile_picture'] = uploadedUrl;
       });
+
+      await _refreshUserData();
 
       // Close loading dialog
       Navigator.of(context).pop();
@@ -2403,7 +2376,6 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
         ),
       );
 
-      print('✅ Profile picture updated!');
     } catch (e) {
       // Close loading dialog
       Navigator.of(context).pop();
@@ -2893,11 +2865,9 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                                 radius: 58,
                                 backgroundColor: lightBlush.withOpacity(0.3),
                                 backgroundImage: _profileImage != null
-                                    ? FileImage(_profileImage!)
-                                    : (userData['profile_picture'] != null && userData['profile_picture'].toString().isNotEmpty
-                                        ? NetworkImage(userData['profile_picture'])
-                                        : null),
-                                child: (_profileImage == null && (userData['profile_picture'] == null || userData['profile_picture'].toString().isEmpty))
+                                  ? FileImage(_profileImage!)
+                                  : (profilePicture.isNotEmpty ? NetworkImage(profilePicture) : null),
+                                child: (_profileImage == null && profilePicture.isEmpty)
                                     ? Container(
                                         decoration: BoxDecoration(
                                           shape: BoxShape.circle,
@@ -3064,8 +3034,8 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
                 controller: _tabController,
                 children: [
                   AssignedPetsTab(
-                    fastApi: FastApiService.instance,
-                    sitterId: user?.id ?? '',
+                    fastApi: _fastApi,
+                    sitterId: _userId,
                   ),
                   ListView(
                     padding: EdgeInsets.all(16),
@@ -3105,7 +3075,7 @@ class _SitterProfileScreenState extends State<SitterProfileScreen> with SingleTi
   }
 
   Widget _notificationSettingsTile() {
-    final currentPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+    final currentPrefs = (_metadata['notification_preferences'] as Map<String, dynamic>?) ?? {'enabled': true};
     final enabled = currentPrefs['enabled'] ?? true;
     
     return Container(

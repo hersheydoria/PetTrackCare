@@ -223,9 +223,9 @@ class FastApiService {
     return data['is_typing'] as bool? ?? false;
   }
 
-  Future<Map<String, dynamic>> uploadChatMedia({
+  Future<Map<String, dynamic>> _uploadMedia({
     required File file,
-    required String type,
+    String type = 'images',
     String? contentType,
   }) async {
     final uri = Uri.parse('$_baseUrl/media/upload');
@@ -248,6 +248,27 @@ class FastApiService {
       throw Exception('FastAPI upload media failed (${response.statusCode}): ${response.body}');
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>> uploadChatMedia({
+    required File file,
+    required String type,
+    String? contentType,
+  }) async {
+    return _uploadMedia(file: file, type: type, contentType: contentType);
+  }
+
+  Future<String> uploadProfileImage(File file, {String type = 'images', String? contentType}) async {
+    final uploaded = await _uploadMedia(
+      file: file,
+      type: type,
+      contentType: contentType ?? 'image/jpeg',
+    );
+    final url = uploaded['url'];
+    if (url is! String || url.isEmpty) {
+      throw Exception('FastAPI upload profile image failed: missing URL');
+    }
+    return url;
   }
 
   String resolveMediaUrl(String path) {
