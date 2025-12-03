@@ -13,11 +13,16 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 MEDIA_ROOT = BASE_DIR / "media"
 IMAGE_DIR = MEDIA_ROOT / "images"
 VOICE_DIR = MEDIA_ROOT / "voice"
+COMMUNITY_DIR = MEDIA_ROOT / "community"
 
-for folder in (MEDIA_ROOT, IMAGE_DIR, VOICE_DIR):
+for folder in (MEDIA_ROOT, IMAGE_DIR, VOICE_DIR, COMMUNITY_DIR):
     folder.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_TYPES = {"images": IMAGE_DIR, "voice": VOICE_DIR}
+ALLOWED_TYPES = {
+    "images": IMAGE_DIR,
+    "voice": VOICE_DIR,
+    "community": COMMUNITY_DIR,
+}
 
 
 @router.post("/upload", response_model=MediaUploadResponse)

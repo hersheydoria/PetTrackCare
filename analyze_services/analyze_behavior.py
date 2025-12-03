@@ -9,7 +9,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import cross_val_score, StratifiedKFold
-from supabase import create_client
+import requests
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import json
@@ -22,12 +22,45 @@ import threading
 
 # Load environment variables
 load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL") or f"http://localhost:{os.getenv('FASTAPI_PORT', '8000')}"
+FASTAPI_TIMEOUT = float(os.getenv("FASTAPI_TIMEOUT", "15"))
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+http_session = requests.Session()
+http_session.headers.update({"Accept": "application/json"})
 app = Flask(__name__)
+
+def _fastapi_url(path: str) -> str:
+    base = FASTAPI_BASE_URL.rstrip("/")
+    return f"{base}/{path.lstrip('/')}" if path else base
+
+def _fastapi_get(path: str, params: dict | None = None, timeout: float | None = None):
+    url = _fastapi_url(path)
+    response = http_session.get(url, params=params, timeout=timeout or FASTAPI_TIMEOUT)
+    response.raise_for_status()
+    return response.json()
+
+def _fastapi_get_optional(path: str, params: dict | None = None, timeout: float | None = None):
+    try:
+        return _fastapi_get(path, params=params, timeout=timeout)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            return None
+        raise
+
+def fetch_pet_record(pet_id: str) -> dict | None:
+    try:
+        return _fastapi_get_optional(f"/pets/{pet_id}")
+    except Exception as exc:
+        print(f"[DEBUG] Failed to fetch pet {pet_id}: {exc}")
+        return None
+
+def fetch_user_profile(user_id: str) -> dict | None:
+    try:
+        return _fastapi_get_optional(f"/users/{user_id}")
+    except Exception as exc:
+        print(f"[DEBUG] Failed to fetch user {user_id}: {exc}")
+        return None
 
 # Track last training time per pet to avoid re-training on every request
 MODEL_TRAIN_HISTORY = {}
@@ -349,35 +382,41 @@ cleanup_incompatible_models()
 
 def fetch_logs_df(pet_id, limit=200, days_back=30):
     """Fetch recent behavior logs for a pet (within last N days)"""
-    resp = supabase.table("behavior_logs").select("*").eq("pet_id", pet_id).order("log_date", desc=False).limit(limit).execute()
-    data = resp.data or []
+    params = {"pet_id": pet_id, "limit": limit}
+    if days_back is not None:
+        start_date = (datetime.utcnow().date() - timedelta(days=days_back)).isoformat()
+        params["start_date"] = start_date
+    try:
+        data = _fastapi_get("/behavior_logs", params=params)
+    except Exception as exc:
+        print(f"[WARN] Failed to fetch logs for pet {pet_id}: {exc}")
+        return pd.DataFrame()
+    data = data or []
     if not data:
         return pd.DataFrame()
     df = pd.DataFrame(data)
-    df['log_date'] = pd.to_datetime(df['log_date']).dt.date
-    
-    # Filter to only include logs from last N days
-    cutoff_date = (datetime.now() - timedelta(days=days_back)).date()
-    df = df[df['log_date'] >= cutoff_date]
-    
+    if 'log_date' in df:
+        df['log_date'] = pd.to_datetime(df['log_date']).dt.date
+    else:
+        df['log_date'] = pd.Series([], dtype='datetime64[ns]').dt.date
+
+    cutoff_date = (datetime.utcnow() - timedelta(days=days_back)).date() if days_back is not None else None
+    if cutoff_date is not None:
+        df = df[df['log_date'] >= cutoff_date]
+
     df['activity_level'] = df.get('activity_level', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
-    
-    # Core health tracking columns
     df['food_intake'] = df.get('food_intake', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     df['water_intake'] = df.get('water_intake', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     df['bathroom_habits'] = df.get('bathroom_habits', pd.Series(['Unknown'] * len(df))).fillna('Unknown').astype(str)
     df['symptoms'] = df.get('symptoms', pd.Series(['[]'] * len(df))).fillna('[]').astype(str)
-    
+
     return df
 
 def fetch_pet_breed(pet_id):
     """Fetch pet breed from database"""
-    try:
-        pet_resp = supabase.table("pets").select("breed").eq("id", pet_id).limit(1).execute()
-        if pet_resp.data:
-            return pet_resp.data[0].get("breed")
-    except Exception as e:
-        print(f"[WARN] Failed to fetch breed for pet {pet_id}: {e}")
+    pet = _fastapi_get_optional(f"/pets/{pet_id}")
+    if pet:
+        return pet.get("breed")
     return None
 
 def train_illness_model(df, model_path=os.path.join(MODELS_DIR, "illness_model.pkl"), min_auc_threshold: float = 0.6):
@@ -895,8 +934,7 @@ def _match_missing_alert_post(posts: list[dict], pet_id: str | None, owner_id: s
 
 def get_latest_missing_alert_details(pet_id: str | None, pet_name: str | None, owner_id: str | None) -> dict | None:
     try:
-        resp = supabase.table("community_posts").select("*").eq("type", "missing").order("created_at", desc=True).limit(12).execute()
-        posts = resp.data or []
+        posts = _fastapi_get("/community/posts", params={"type": "missing", "limit": 12}) or []
     except Exception as exc:
         print(f"[DEBUG] Failed to load missing alert posts for pet {pet_id}: {exc}")
         return None
@@ -1455,80 +1493,16 @@ def predict_endpoint():
 @app.route("/pet/<pet_id>", methods=["GET"])
 def public_pet_page(pet_id):
     try:
-        # fetch pet with owner information joined from public.users table
-        # Note: email is in auth.users, not public.users, so we only fetch name and role
-        resp = supabase.table("pets").select("*, users!owner_id(name, role)").eq("id", pet_id).limit(1).execute()
-        pet_rows = resp.data or []
-        if not pet_rows:
+        pet = fetch_pet_record(pet_id)
+        if not pet:
             return make_response("<h3>Pet not found</h3>", 404)
-        pet = pet_rows[0]
-
-        # resolve owner using the app USERS table (public.users has: id, name, role)
-        owner_name = None
-        owner_email = None
-        owner_role = None
         owner_id = pet.get("owner_id")
-        
-        # Try to get owner info from the joined data first
-        owner_data = pet.get("users")
-        if owner_data and isinstance(owner_data, dict):
-            owner_name = owner_data.get("name")
-            owner_role = owner_data.get("role")
-            print(f"DEBUG: Got owner from join - name: {owner_name}, role: {owner_role}")
+        owner = fetch_user_profile(owner_id) if owner_id else None
+        owner_name = owner.get("name") if owner else None
+        owner_email = owner.get("email") if owner else None
+        owner_role = owner.get("role") if owner else None
+        owner_profile_picture = owner.get("profile_picture") if owner else ""
 
-        # Fallback: if join didn't work, try direct query to users table
-        if not owner_name and owner_id:
-            try:
-                # public.users has: id, name, role (email is in auth.users)
-                uresp = supabase.table("users").select("name, role").eq("id", owner_id).limit(1).execute()
-                urows = uresp.data or []
-                if urows:
-                    u0 = urows[0]
-                    owner_name = u0.get("name")
-                    owner_role = u0.get("role") or owner_role
-                    print(f"DEBUG: Found owner in users table - name: {owner_name}, role: {owner_role}")
-                else:
-                    print(f"DEBUG: No user found in users table for owner_id: {owner_id}")
-            except Exception as e:
-                # ignore errors and continue to fallback attempts
-                print(f"DEBUG: Error fetching from users table: {e}")
-                owner_name = owner_name or None
-
-            # best-effort: if name missing, try to fetch auth users metadata (if available in your Supabase instance)
-            if not owner_name:
-                try:
-                    # supabase.auth.api.get_user may be available in your client; wrapped in try/except
-                    auth_user = None
-                    if hasattr(supabase.auth, "api") and hasattr(supabase.auth.api, "get_user"):
-                        auth_user = supabase.auth.api.get_user(owner_id)
-                    elif hasattr(supabase.auth, "get_user"):
-                        # alternative method name
-                        auth_user = supabase.auth.get_user(owner_id)
-                    if auth_user:
-                        # Get email from auth.users (it's stored there, not in public.users)
-                        if not owner_email:
-                            owner_email = auth_user.get("email") if isinstance(auth_user, dict) else getattr(auth_user, "email", None)
-                        
-                        # auth_user may be dict-like or object; handle both
-                        meta = {}
-                        try:
-                            # attempt multiple possible attribute / key names
-                            meta = (auth_user.get("user_metadata") if isinstance(auth_user, dict) else getattr(auth_user, "user_metadata", None)) or \
-                                   (auth_user.get("raw_user_meta_data") if isinstance(auth_user, dict) else getattr(auth_user, "raw_user_meta_data", None)) or {}
-                        except Exception:
-                            meta = {}
-                        if isinstance(meta, str):
-                            try:
-                                meta = json.loads(meta)
-                            except Exception:
-                                meta = {}
-                        if isinstance(meta, dict):
-                            # prefer common keys
-                            owner_name = owner_name or (meta.get("name") or meta.get("full_name") or meta.get("display_name"))
-                except Exception:
-                    pass
-
-        # fallback: use email local-part or owner id or generic label
         if not owner_name:
             if owner_email:
                 try:
@@ -1584,17 +1558,6 @@ def public_pet_page(pet_id):
         pet_health = pet.get("health") or "Unknown"
         pet_profile_picture = pet.get("profile_picture") or ""
         
-        # Fetch owner profile picture
-        owner_profile_picture = ""
-        if owner_id:
-            try:
-                uresp = supabase.table("users").select("profile_picture").eq("id", owner_id).limit(1).execute()
-                urows = uresp.data or []
-                if urows:
-                    owner_profile_picture = urows[0].get("profile_picture") or ""
-            except Exception as e:
-                print(f"DEBUG: Failed to fetch owner profile picture: {e}")
-
         # Get current illness risk from fresh analysis (predictions table deprecated)
         # Fetch fresh analysis from /analyze endpoint to get latest prediction
         latest_prediction_text = ""
@@ -1604,7 +1567,6 @@ def public_pet_page(pet_id):
         
         try:
             # Call /analyze endpoint internally to get current analysis
-            import requests
             analysis_url = f"http://pettrackcare.onrender.com/analyze"
             analysis_resp = requests.post(analysis_url, json={"pet_id": pet_id}, timeout=10)
             if analysis_resp.status_code == 200:
@@ -1871,12 +1833,19 @@ def root():
 
 def daily_analysis_job():
     print(f"🔄 Running daily pet behavior analysis at {datetime.now()}")
-    pets_resp = supabase.table("pets").select("id").execute()
-    for pet in pets_resp.data or []:
-        df = fetch_logs_df(pet["id"])
+    try:
+        pets = _fastapi_get("/pets") or []
+    except Exception as exc:
+        print(f"[ANALYZE] Failed to load pets for daily job: {exc}")
+        pets = []
+    for pet in pets:
+        pet_id = pet.get("id")
+        if not pet_id:
+            continue
+        df = fetch_logs_df(pet_id)
         if not df.empty:
             train_illness_model(df)  # retrain and persist illness model
-        result = analyze_pet(pet["id"])
+        result = analyze_pet(pet_id)
         print(f"[INFO] Pet {pet['id']} analysis stored:", result)
 
 
@@ -2611,8 +2580,11 @@ def train_endpoint():
             train_illness_model(df)  # saves models/models.pkl
         else:
             # train on all pets combined
-            resp = supabase.table("behavior_logs").select("*").order("log_date", desc=False).limit(100000).execute()
-            logs = resp.data or []
+            try:
+                logs = _fastapi_get("/behavior_logs", params={"limit": 100000}) or []
+            except Exception as exc:
+                print(f"[TRAIN] Failed to fetch behavior logs: {exc}")
+                return jsonify({"status": "error", "message": "Failed to load behavior logs"}), 500
             if not logs:
                 return jsonify({"status":"no_data","message":"No behavior_logs found"}), 200
             df_all = pd.DataFrame(logs)
@@ -2663,8 +2635,11 @@ def test_model_accuracy():
         if pet_id:
             pet_ids = [pet_id]
         else:
-            pets_resp = supabase.table("pets").select("id").limit(1).execute()
-            pet_ids = [p["id"] for p in (pets_resp.data or [])]
+            try:
+                pets = _fastapi_get("/pets", params={"limit": 1}) or []
+                pet_ids = [p.get("id") for p in pets if p.get("id")]
+            except Exception:
+                return jsonify({"warning": "Could not fetch pets"}), 400
 
         if not pet_ids:
             return jsonify({"warning": "No pets found"}), 200
@@ -2796,8 +2771,8 @@ def test_model_accuracy_quick():
             pet_ids = [pet_id]
         else:
             try:
-                pets_resp = supabase.table("pets").select("id").limit(1).execute()
-                pet_ids = [p["id"] for p in (pets_resp.data or [])]
+                pets = _fastapi_get("/pets", params={"limit": 1}) or []
+                pet_ids = [p.get("id") for p in pets if p.get("id")]
             except:
                 return jsonify({"error": "Could not fetch pets", "note": "Please provide pet_id parameter"}), 400
         
@@ -2928,18 +2903,19 @@ def test_accuracy_summary():
         # Get counts with timeout protection
         pets_count = 0
         logs_count = 0
-        
+
         try:
-            pets_resp = supabase.table("pets").select("id", count="exact").execute()
-            pets_count = len(pets_resp.data or [])
-        except:
+            pets_list = _fastapi_get("/pets") or []
+            pets_count = len(pets_list)
+        except Exception as exc:
+            print(f"[SUMMARY] Failed to fetch pets count: {exc}")
             pets_count = 0
-        
+
         try:
-            logs_resp = supabase.table("behavior_logs").select("id", count="exact").limit(1).execute()
-            # Try to get count from response
-            logs_count = getattr(logs_resp, 'count', None) or len(logs_resp.data or [])
-        except:
+            logs_list = _fastapi_get("/behavior_logs", params={"limit": 100000}) or []
+            logs_count = len(logs_list)
+        except Exception as exc:
+            print(f"[SUMMARY] Failed to fetch behavior logs count: {exc}")
             logs_count = 0
         
         # Load illness model metadata if available

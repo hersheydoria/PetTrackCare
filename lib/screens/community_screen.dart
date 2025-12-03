@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'notification_screen.dart';
@@ -795,32 +794,15 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     }
   }
 
-  Future<String?> uploadImage(File imageFile) async {
-    final fileName = p.basename(imageFile.path);
-    final filePath = 'uploads/$fileName';
-
+  Future<Map<String, dynamic>?> uploadImage(File imageFile) async {
     try {
-      final bytes = await imageFile.readAsBytes();
-      final storageResponse = await Supabase.instance.client.storage
-          .from('community-posts')
-          .uploadBinary(
-            filePath,
-            bytes,
-            fileOptions: const FileOptions(upsert: true),
-          );
-
-      print('Upload response: $storageResponse'); // should be path
-
-      final publicUrl = Supabase.instance.client.storage
-          .from('community-posts')
-          .getPublicUrl(filePath);
-
-      // Do NOT update users.profile_picture here!
-      // Only return the image URL for use in community_posts.image_url
-
-      print('✅ Community post image uploaded!');
-
-      return publicUrl;
+      final upload = await FastApiService.instance.uploadCommunityMedia(
+        file: imageFile,
+        type: 'community',
+        contentType: 'image/jpeg',
+      );
+      print('✅ Community post image uploaded: $upload');
+      return upload;
     } catch (e) {
       print('Upload failed: $e');
       return null;
@@ -979,20 +961,11 @@ class _CommunityScreenState extends State<CommunityScreen> with RouteAware {
     
     String? imageUrl;
     if (imageFile != null) {
-      // Upload image to Supabase Storage and get public URL
-      final fileName = p.basename(imageFile.path);
-      final filePath = 'uploads/$fileName';
-      final bytes = await imageFile.readAsBytes();
-      await Supabase.instance.client.storage
-          .from('community-posts')
-          .uploadBinary(
-            filePath,
-            bytes,
-            fileOptions: const FileOptions(upsert: true),
-          );
-      imageUrl = Supabase.instance.client.storage
-          .from('community-posts')
-          .getPublicUrl(filePath);
+      final upload = await uploadImage(imageFile);
+      imageUrl = upload?['url'] as String?;
+      if (imageUrl == null || imageUrl.isEmpty) {
+        throw Exception('Failed to upload community image');
+      }
     }
 
     final newPost = await FastApiService.instance.createCommunityPost({
@@ -1961,7 +1934,15 @@ void showEditPostModal(Map post) {
 
                 String? newImageUrl = originalImageUrl;
                 if (imageChanged) {
-                  newImageUrl = await uploadImage(selectedImage!);
+                  final upload = await uploadImage(selectedImage!);
+                  final uploadedUrl = upload?['url'] as String?;
+                  if (uploadedUrl == null || uploadedUrl.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to upload new image. Please try again.')),
+                    );
+                    return;
+                  }
+                  newImageUrl = uploadedUrl;
                 }
 
                 // Build update map dynamically

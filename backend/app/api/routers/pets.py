@@ -11,6 +11,19 @@ from ...schemas.pet import PetCreate, PetRead, PetUpdate
 router = APIRouter(prefix="/pets", tags=["pets"])
 
 
+def _is_user_sitter_for_pet(db: Session, pet: models.Pet, sitter: models.User) -> bool:
+    if sitter.role != "Pet Sitter":
+        return False
+    job = (
+        db.query(models.SittingJob)
+        .filter(models.SittingJob.pet_id == pet.id)
+        .filter(models.SittingJob.sitter_id == sitter.id)
+        .filter(models.SittingJob.status != "Cancelled")
+        .first()
+    )
+    return job is not None
+
+
 @router.post("/", response_model=PetRead)
 async def create_pet(
     payload: PetCreate,
@@ -59,8 +72,10 @@ async def update_pet(
     pet = db.get(models.Pet, pet_id)
     if not pet:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pet not found")
-    if str(pet.owner_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not the pet owner")
+    allowed_owner = str(pet.owner_id) == str(current_user.id)
+    allowed_sitter = _is_user_sitter_for_pet(db, pet, current_user)
+    if not allowed_owner and not allowed_sitter:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to modify this pet")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(pet, field, value)
     db.add(pet)

@@ -185,8 +185,8 @@ class FastApiService {
       'limit': limit.toString(),
       if (petId != null && petId.isNotEmpty) 'pet_id': petId,
       if (userId != null && userId.isNotEmpty) 'user_id': userId,
-      if (startDate != null) 'start_date': startDate.toIso8601String(),
-      if (endDate != null) 'end_date': endDate.toIso8601String(),
+      if (startDate != null) 'start_date': _dateOnly(startDate),
+      if (endDate != null) 'end_date': _dateOnly(endDate),
     };
     final uri = Uri.parse('$_baseUrl/behavior_logs/').replace(
       queryParameters: queryParams.isEmpty ? null : queryParams,
@@ -417,6 +417,18 @@ class FastApiService {
     String? contentType,
   }) async {
     return _uploadMedia(file: file, type: type, contentType: contentType);
+  }
+
+  Future<Map<String, dynamic>> uploadCommunityMedia({
+    required File file,
+    String type = 'community',
+    String? contentType,
+  }) async {
+    return _uploadMedia(
+      file: file,
+      type: type,
+      contentType: contentType ?? 'image/jpeg',
+    );
   }
 
   Future<String> uploadProfileImage(
@@ -1078,6 +1090,8 @@ class FastApiService {
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
+
+  String _dateOnly(DateTime value) => value.toIso8601String().split('T').first;
 
   Future<void> _persistToken(String token) async {
     _accessToken = token;
