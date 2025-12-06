@@ -7,7 +7,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/notification_service.dart';
@@ -38,7 +37,6 @@ class ChatDetailScreen extends StatefulWidget {
 
 class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final TextEditingController _messageController = TextEditingController();
-  final SupabaseClient supabase = Supabase.instance.client;
   final FastApiService _fastApi = FastApiService.instance;
   List<dynamic> messages = [];
   bool isTyping = false;
@@ -49,7 +47,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   DateTime? _recordingStartTime;
   Duration _recordingDuration = Duration.zero;
   final FocusNode _messageFocusNode = FocusNode();
-  late final VoidCallback _messageTextListener;
 
   // NEW: player state for voice playback
   FlutterSoundPlayer? _player;
@@ -67,12 +64,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   bool _isIncomingRingtonePlaying = false;
   bool _incomingDialogOpen = false;
 
-  // NEW: realtime signaling channels cache
-  RealtimeChannel? _callRx;
-  final Map<String, RealtimeChannel> _sigChans = {};
-
   final ScrollController _scrollController = ScrollController();
   Timer? _typingStatusTimer;
+  Timer? _messagePollTimer;
   final List<_ConversationHighlight> _conversationHighlights = const [
     _ConversationHighlight(
       icon: Icons.pets_outlined,
@@ -100,6 +94,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // Receiver profile picture
   String? _receiverProfilePicture;
 
+  @override
+  void initState() {
+    super.initState();
+    _loadReceiverProfile();
+    _loadThread().whenComplete(_startMessagePolling);
+    subscribeToTyping();
+    listenToTyping();
+  }
+
   void _playIncomingCallTone() {
     if (_isIncomingRingtonePlaying) return;
     try {
@@ -121,68 +124,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       FlutterRingtonePlayer().stop();
     } catch (e) {
       print('📞 Error stopping incoming ringtone: $e');
-    } finally {
-      _isIncomingRingtonePlaying = false;
     }
-  }
-
-  void _dismissIncomingCallPrompt({BuildContext? dialogContext}) {
-    if (_incomingDialogOpen) {
-      final ctx = dialogContext ?? (mounted ? context : null);
-      if (ctx != null) {
-        try {
-          Navigator.of(ctx, rootNavigator: true).pop();
-        } catch (e) {
-          print('📞 Error dismissing incoming dialog: $e');
-        }
-      }
-    }
-    _incomingDialogOpen = false;
-    _incomingPromptedCallId = null;
-    _stopIncomingCallTone();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _messageTextListener = () {
-      if (mounted) setState(() {});
-    };
-    _messageController.addListener(_messageTextListener);
-    _recorder = FlutterSoundRecorder();
-    _initAudio(); // ask mic permission, open recorder & player
-    _loadThread().then((_) => _scrollToBottom());
-    _markSeen();
-    subscribeToMessages();
-    subscribeToTyping();
-    listenToTyping();
-    _loadSelfName(); // load my display name for calls
-    _loadReceiverProfile(); // load receiver's profile picture
-    _initCallSignals(); // NEW: subscribe to my signaling channel
-  }
-
-  // Initialize recorder/player with permission
-  Future<void> _initAudio() async {
-    await Permission.microphone.request();
-    try {
-      await _recorder!.openRecorder();
-    } catch (_) {}
-    _player = FlutterSoundPlayer();
-    try {
-      await _player!.openPlayer();
-    } catch (_) {}
-  }
-
-  Future<void> _loadSelfName() async {
-    try {
-      final profile = await _fastApi.fetchUserById(widget.userId);
-      if (!mounted) return;
-      setState(() {
-        _myDisplayName = (profile['name'] as String?)?.trim() ?? profile['email'] ?? widget.userId;
-      });
-    } catch (e) {
-      print('⚠️ FastAPI load self name failed: $e');
-    }
+    _isIncomingRingtonePlaying = false;
   }
 
   Future<void> _loadReceiverProfile() async {
@@ -260,160 +203,30 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     } catch (_) {}
   }
 
-  // NEW: setup realtime signaling
-  // NOTE: call_invite is now handled globally by CallInviteService
-  void _initCallSignals() {
-    final myKey = _sanitizeId(widget.userId);
-    _callRx = supabase.channel('call_sig:$myKey');
-    _callRx!
-        // DISABLED: call_invite is now handled globally by CallInviteService
-        .onBroadcast(
-          event: 'call_accept',
-          callback: (payload, [ref]) async {
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
-            if (body == null) return;
-            final to = (body['to'] ?? '').toString();
-            final callId = (body['call_id'] ?? '').toString();
-            final mode = (body['mode'] ?? 'voice').toString();
-            
-            print('🔴 CALLER received broadcast call_accept:');
-            print('   To: $to (my ID: ${widget.userId})');
-            print('   CallID from broadcast: $callId');
-            print('   My outgoing CallID: $_outgoingCallId');
-            print('   Awaiting accept: $_awaitingAccept');
-            print('   Match: ${to == widget.userId && callId == _outgoingCallId}');
-            
-            if (to != widget.userId || callId.isEmpty) return;
-            if (_awaitingAccept && _outgoingCallId == callId) {
-              print('🔴 CALLER JOINING via broadcast with callID: $callId');
-              _dismissCallingDialog();
-              _awaitingAccept = false;
-              await _joinZegoCall(callId: callId, video: mode == 'video');
-            }
-          },
-        )
-        .onBroadcast(
-          event: 'call_decline',
-          callback: (payload, [ref]) {
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
-            if (body == null) return;
-            final to = (body['to'] ?? '').toString();
-            final callId = (body['call_id'] ?? '').toString();
-            if (to != widget.userId || callId.isEmpty) return;
-            if (_awaitingAccept && _outgoingCallId == callId) {
-              _dismissCallingDialog();
-              _awaitingAccept = false;
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Call declined')));
-              }
-            }
-          },
-        )
-        .onBroadcast(
-          event: 'call_cancel',
-          callback: (payload, [ref]) {
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
-            if (body == null) return;
-            final to = (body['to'] ?? '').toString();
-            final callId = (body['call_id'] ?? '').toString();
-            if (to != widget.userId || callId.isEmpty) return;
-            // If the caller canceled before accept, just clear prompt (if any)
-            if (_incomingPromptedCallId == callId) {
-              _dismissIncomingCallPrompt();
-            }
-          },
-        )
-        .onBroadcast(
-          event: 'call_hangup',
-          callback: (payload, [ref]) {
-            final body = payload is Map ? Map<String, dynamic>.from(payload as Map) : null;
-            if (body == null) return;
-            final to = (body['to'] ?? '').toString();
-            final from = (body['from'] ?? '').toString();
-            final callId = (body['call_id'] ?? '').toString();
-            
-            print('📞 Received call_hangup event:');
-            print('   From: $from');
-            print('   To: $to');
-            print('   CallID: $callId');
-            print('   My active call: $_activeCallId');
-            print('   In active call: $_inActiveCall');
-            
-            if (to != widget.userId || callId.isEmpty) return;
-            
-            // If I'm currently in this call, end it
-            if (_inActiveCall && _activeCallId == callId) {
-              print('📞 Other user ended call - forcing navigation back');
-              
-              // Reset state
-              if (mounted) {
-                setState(() {
-                  _inActiveCall = false;
-                  _activeCallId = null;
-                  _awaitingAccept = false;
-                });
-                
-                // Pop the Zego call screen if it's currently displayed
-                Navigator.of(context).popUntil((route) => route.isFirst);
-                
-                // Show notification
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Call ended by other user')),
-                );
-              }
-            }
-          },
-        )
-        .subscribe();
-  }
-
-  // NEW: send a broadcast signal to a user's channel
   Future<void> _sendSignal(String userId, String event, Map<String, dynamic> payload) async {
-    final key = _sanitizeId(userId);
-    print('📞 _sendSignal: Sending $event to $key');
-    
-    var ch = _sigChans[key];
-    if (ch == null) {
-      print('📞 _sendSignal: Creating new channel call_sig:$key');
-      ch = supabase.channel(
-        'call_sig:$key',
-        opts: const RealtimeChannelConfig(
-          self: true, // Receive broadcasts from self
-          ack: true,  // Request acknowledgments
-        ),
-      );
-      print('📞 _sendSignal: Subscribing to channel...');
-      ch.subscribe((status, [error]) {
-        print('📞 _sendSignal: 📡 Channel subscription status: $status');
-        if (error != null) {
-          print('📞 _sendSignal: ❌ Subscription error: $error');
-        }
-      });
-      
-      // Wait for subscription to be fully established
-      print('📞 _sendSignal: ⏳ Waiting for channel to be ready...');
-      await Future.delayed(Duration(milliseconds: 1500));
-      
-      _sigChans[key] = ch;
-      print('📞 _sendSignal: ✅ Channel ready for broadcasting');
-    }
-    
+    final callId = payload['call_id']?.toString();
+    final callMode = payload['mode']?.toString() ?? payload['call_mode']?.toString();
+    final message = payload['content']?.toString() ?? '[signal:$event]';
+    final metadata = payload['metadata'] is Map<String, dynamic>
+        ? Map<String, dynamic>.from(payload['metadata'] as Map)
+        : null;
     try {
-      print('📞 _sendSignal: 📤 Sending broadcast event $event with payload: $payload');
-      await ch.sendBroadcastMessage(
-        event: event,
-        payload: payload,
+      await _fastApi.sendCallSignal(
+        recipientId: userId,
+        senderId: widget.userId,
+        type: event,
+        message: message,
+        callId: callId,
+        callMode: callMode,
+        metadata: metadata,
       );
-      print('📞 _sendSignal: ✅ Broadcast sent successfully');
     } catch (e) {
-      print('📞 _sendSignal: ❌ Error sending broadcast: $e');
-      // ignore; DB insert path still delivers signaling via onPostgresChanges
+      print('⚠️ FastAPI call signal failed: $e');
     }
   }
 
   @override
   void dispose() {
-    _messageController.removeListener(_messageTextListener);
     _messageController.dispose();
     _messageFocusNode.dispose();
     _recorder?.closeRecorder();
@@ -423,8 +236,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     } catch (_) {}
     _stopIncomingCallTone();
     _typingStatusTimer?.cancel();
-    supabase.removeAllChannels();
-    // No-op: removeAllChannels() already cleans up _callRx/_sigChans
+    _stopMessagePolling();
     super.dispose();
   }
 
@@ -464,6 +276,23 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     await _markSeen();
   }
 
+  void _startMessagePolling() {
+    _messagePollTimer?.cancel();
+    _messagePollTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!mounted) return;
+      try {
+        await _refreshConversation();
+      } catch (e) {
+        print('⚠️ FastAPI message poll failed: $e');
+      }
+    });
+  }
+
+  void _stopMessagePolling() {
+    _messagePollTimer?.cancel();
+    _messagePollTimer = null;
+  }
+
   Future<void> _postMessage({
     required String content,
     required String type,
@@ -489,141 +318,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     };
 
     await _fastApi.sendMessage(payload);
-  }
-
-  void subscribeToMessages() {
-    supabase
-        .channel('public:messages')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'messages',
-          callback: (payload, [ref]) async {
-            final msg = payload.newRecord;
-            final from = msg['sender_id'];
-            final to = msg['receiver_id'];
-
-            // Refresh chat list
-            if ((from == widget.userId && to == widget.receiverId) ||
-                (from == widget.receiverId && to == widget.userId)) {
-              await _refreshConversation();
-            }
-
-            // Handle call invite when I am the receiver
-            if (to == widget.userId && msg['type'] == 'call') {
-              final callId = (msg['call_id'] ?? '').toString().trim();
-              final mode = (msg['call_mode'] ?? 'voice').toString();
-              if (callId.isEmpty) return;
-              if (_incomingPromptedCallId == callId) return;
-              _incomingPromptedCallId = callId;
-
-              if (!mounted) return;
-              final callerId = from?.toString();
-              if (callerId == null || callerId.isEmpty) {
-                _incomingPromptedCallId = null;
-                return;
-              }
-              final callerName = callerId == widget.receiverId ? widget.userName : 'Incoming caller';
-              _playIncomingCallTone();
-              _incomingDialogOpen = true;
-
-              await showDialog<void>(
-                context: context,
-                barrierDismissible: false,
-                useRootNavigator: true,
-                builder: (dialogContext) => IncomingCallDialog(
-                  callerName: callerName,
-                  isVideo: mode == 'video',
-                  subtitle: 'wants to start a ${mode == 'video' ? 'video' : 'voice'} call',
-                  onAccept: (ctx) async {
-                    _dismissIncomingCallPrompt(dialogContext: ctx);
-
-                    if (!mounted) return;
-                    await _postMessage(
-                      content: '[call_accept]',
-                      receiverId: callerId,
-                      type: 'call_accept',
-                      callId: callId,
-                      callMode: mode,
-                    );
-                    await _refreshConversation();
-                    await _sendSignal(callerId, 'call_accept', {
-                      'from': widget.userId,
-                      'to': callerId,
-                      'call_id': callId,
-                      'mode': mode,
-                    });
-                    await _joinZegoCall(callId: callId, video: mode == 'video');
-                  },
-                  onDecline: (ctx) async {
-                    _dismissIncomingCallPrompt(dialogContext: ctx);
-
-                    await _postMessage(
-                      content: '[call_decline]',
-                      receiverId: callerId,
-                      type: 'call_decline',
-                      callId: callId,
-                      callMode: mode,
-                    );
-                    await _refreshConversation();
-                    await _sendSignal(callerId, 'call_decline', {
-                      'from': widget.userId,
-                      'to': callerId,
-                      'call_id': callId,
-                      'mode': mode,
-                    });
-                  },
-                ),
-              ).whenComplete(() {
-                _incomingDialogOpen = false;
-                _stopIncomingCallTone();
-                _incomingPromptedCallId = null;
-              });
-            }
-
-            if (to == widget.userId && from == widget.receiverId && msg['type'] == 'call_cancel') {
-              final callId = (msg['call_id'] ?? '').toString().trim();
-              if (_incomingPromptedCallId == callId) {
-                _dismissIncomingCallPrompt();
-              }
-            }
-
-            // Caller side: callee accepted -> join now
-            if (from == widget.receiverId && to == widget.userId && msg['type'] == 'call_accept') {
-              final callId = (msg['call_id'] ?? '').toString().trim();
-              final mode = (msg['call_mode'] ?? 'voice').toString();
-              if (callId.isEmpty) return;
-              if (_awaitingAccept && _outgoingCallId == callId) {
-                print('🔴 CALLER received acceptance:');
-                print('   CallID to join: $callId');
-                print('   Outgoing CallID was: $_outgoingCallId');
-                print('   Mode: $mode');
-                
-                _dismissCallingDialog();
-                _awaitingAccept = false;
-                
-                print('🔴 CALLER joining Zego with callID: $callId');
-                await _joinZegoCall(callId: callId, video: mode == 'video');
-              }
-            }
-
-            // Caller side: callee canceled/declined -> dismiss dialog
-            if (from == widget.receiverId && to == widget.userId &&
-                (msg['type'] == 'call_cancel' || msg['type'] == 'call_decline')) {
-              final callId = (msg['call_id'] ?? '').toString().trim();
-              if (_awaitingAccept && _outgoingCallId == callId) {
-                _dismissCallingDialog();
-                _awaitingAccept = false;
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(msg['type'] == 'call_decline' ? 'Call declined' : 'Call canceled')),
-                  );
-                }
-              }
-            }
-          },
-        )
-        .subscribe();
   }
 
   void _dismissCallingDialog() {

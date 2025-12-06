@@ -134,6 +134,30 @@ async def get_thread(
     return [MessageRead(**_serialize_message(msg)) for msg in records]
 
 
+@router.get("/latest/{peer_id}", response_model=MessageRead)
+async def get_latest_message(
+    peer_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.Message:
+    peer_uuid = _parse_uuid(peer_id, "peer_id")
+    peer_user = _resolve_user_or_404(db, str(peer_uuid))
+    record = (
+        db.query(models.Message)
+        .filter(
+            or_(
+                and_(models.Message.sender_id == current_user.id, models.Message.receiver_id == peer_user.id),
+                and_(models.Message.receiver_id == current_user.id, models.Message.sender_id == peer_user.id),
+            )
+        )
+        .order_by(models.Message.sent_at.desc())
+        .first()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="No messages found")
+    return MessageRead(**_serialize_message(record))
+
+
 @router.post("/", response_model=MessageRead)
 async def send_message(
     payload: MessageCreate,

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/fastapi_service.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   @override
@@ -22,9 +22,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     setState(() => isLoading = true);
 
     try {
-      await Supabase.instance.client.auth.updateUser(
-        UserAttributes(password: passwordController.text.trim()),
-      );
+      await FastApiService.instance.updateCurrentUser({
+        'password': passwordController.text.trim(),
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Password updated successfully')),
       );

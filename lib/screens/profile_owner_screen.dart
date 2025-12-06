@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
@@ -282,20 +281,11 @@ Future<void> _pickProfileImage() async {
     ),
   );
 
-  try {
-    final supabase = Supabase.instance.client;
-    final bucket = supabase.storage.from('profile-pictures');
+    try {
+      final publicUrl = await _fastApi.uploadProfileImage(file);
 
-    await bucket.uploadBinary(
-      fileName,
-      fileBytes,
-      fileOptions: const FileOptions(contentType: 'image/jpeg'),
-    );
-
-    final publicUrl = bucket.getPublicUrl(fileName);
-
-    // Update FastAPI backend record as well
-    await _fastApi.updateCurrentUser({'profile_picture': publicUrl});
+      // Update FastAPI backend record as well
+      await _fastApi.updateCurrentUser({'profile_picture': publicUrl});
 
     setState(() {
       _profileImage = file;
@@ -3657,6 +3647,7 @@ class _AddPetFormState extends State<_AddPetForm> {
   bool _isLoading = false;
 
   final ImagePicker _picker = ImagePicker();
+  final FastApiService _fastApi = FastApiService.instance;
 
   // Helper method to calculate age from date of birth
   Map<String, int> _calculateAge(DateTime birthDate) {
@@ -4617,19 +4608,8 @@ class _AddPetFormState extends State<_AddPetForm> {
     if (_petImage == null) return null;
 
     try {
-      final bytes = await _petImage!.readAsBytes();
-      final fileName =
-          'pet_images/${userId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final bucket = Supabase.instance.client.storage.from('pets-profile-pictures');
-
-      await bucket.uploadBinary(
-        fileName,
-        bytes,
-        fileOptions: const FileOptions(contentType: 'image/jpeg'),
-      );
-
-      final publicUrl = bucket.getPublicUrl(fileName);
-      return publicUrl;
+      final url = await _fastApi.uploadProfileImage(_petImage!);
+      return url;
     } catch (e) {
       print('❌ Error uploading pet image: $e');
       return null;

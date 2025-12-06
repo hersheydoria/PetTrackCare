@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
@@ -26,12 +25,6 @@ void main() async {
   await dotenv.load(fileName: ".env");
 
   await FastApiService.instance.initialize();
-
-  // Initialize Supabase for the features that still rely on the client SDK
-  await Supabase.initialize(
-    url: dotenv.env['SUPABASE_URL'] ?? '',
-    anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
-  );
   
   // Initialize system notifications
   await initializeSystemNotifications();
@@ -50,6 +43,7 @@ class PetTrackCareApp extends StatefulWidget {
 class _PetTrackCareAppState extends State<PetTrackCareApp> {
   final AutoMigrationService _autoMigrationService = AutoMigrationService();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  bool _autoMigrationTriggered = false;
 
   /// Run auto-migration in background without blocking the UI
   void _runAutoMigrationInBackground() {
@@ -58,22 +52,32 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
     debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM MAIN.DART');
     print('Timestamp: ${DateTime.now().toIso8601String()}');
     print('Route: /home (triggering auto-migration)');
-    print('User: ${Supabase.instance.client.auth.currentUser?.id ?? "No user"}');
-    print('User Email: ${Supabase.instance.client.auth.currentUser?.email ?? "No email"}');
-    
     Future.microtask(() async {
       try {
-        print('=== CHECKING MIGRATION CONDITIONS ===');
-        debugPrint('Starting auto-migration check...');
+        final user = await FastApiService.instance.fetchCurrentUser();
+        print('User: ${user['id'] ?? "No user"}');
+        print('User Email: ${user['email'] ?? "No email"}');
+        await _evaluateAutoMigration();
+      } catch (error) {
+        print('Unable to resolve FastAPI user for migration logging: $error');
+        await _evaluateAutoMigration();
+      }
+    });
+  }
+
+  Future<void> _evaluateAutoMigration() async {
+    try {
+      print('=== CHECKING MIGRATION CONDITIONS ===');
+      debugPrint('Starting auto-migration check...');
         
-        final shouldRun = await _autoMigrationService.shouldRunMigration();
+      final shouldRun = await _autoMigrationService.shouldRunMigration();
         print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
         debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
         
         if (shouldRun) {
           print('=== STARTING MIGRATION PROCESS ===');
           debugPrint('INITIATING BACKGROUND MIGRATION...');
-          await _autoMigrationService.runAutoMigration();
+        await _autoMigrationService.runAutoMigration();
           print('=== MIGRATION COMPLETED ===');
           debugPrint('Background migration process completed');
         } else {
@@ -85,13 +89,39 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
           await _autoMigrationService.forceRunMigration();
           print('=== FORCE MIGRATION COMPLETED ===');
         }
-      } catch (e) {
-        print('=== MIGRATION ERROR ===');
-        print('Error type: ${e.runtimeType}');
-        print('Error details: $e');
-        debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
-      }
-    });
+    } catch (e) {
+      print('=== MIGRATION ERROR ===');
+      print('Error type: ${e.runtimeType}');
+      print('Error details: $e');
+      debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
+    }
+  }
+
+  Widget _buildAuthenticatedScreen({
+    required Widget Function(String userId) builder,
+    bool triggerAutoMigration = false,
+  }) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: FastApiService.instance.fetchCurrentUser(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final userId = snapshot.data?['id']?.toString();
+        if (userId == null || userId.isEmpty) {
+          return const Scaffold(
+            body: Center(child: Text('Unable to resolve authenticated user.')),
+          );
+        }
+        if (triggerAutoMigration && !_autoMigrationTriggered) {
+          _autoMigrationTriggered = true;
+          _runAutoMigrationInBackground();
+        }
+        return builder(userId);
+      },
+    );
   }
 
   @override
@@ -153,13 +183,11 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
         },
         '/home': (_) {
             print('🚀 Route: /home accessed - initializing MissingPetAlertWrapper');
-            final user = Supabase.instance.client.auth.currentUser;
-            
-            // Run auto-migration in background when user enters home
-            _runAutoMigrationInBackground();
-            
             return MissingPetAlertWrapper(
-              child: MainNavigation(userId: user!.id),
+              child: _buildAuthenticatedScreen(
+                triggerAutoMigration: true,
+                builder: (userId) => MainNavigation(userId: userId),
+              ),
             );
           },
         '/location_picker': (_) {
@@ -204,9 +232,10 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
         },
         '/community': (context) {
           print('🚀 Route: /community accessed - initializing MissingPetAlertWrapper');
-          final user = Supabase.instance.client.auth.currentUser;
           return MissingPetAlertWrapper(
-            child: CommunityScreen(userId: user?.id ?? ''),
+            child: _buildAuthenticatedScreen(
+              builder: (userId) => CommunityScreen(userId: userId),
+            ),
           );
         },
       },

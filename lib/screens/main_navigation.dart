@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'chat_list_screen.dart';
 import 'community_screen.dart';
 import 'home_screen.dart';
@@ -54,27 +53,11 @@ class _MainNavigationState extends State<MainNavigation> {
     } catch (fastApiError) {
       print('⚠️ FastAPI user fetch failed: $fastApiError');
     }
-
-    try {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('name, role')
-          .eq('id', widget.userId)
-          .single();
-
-      setState(() {
-        userName = response['name'] ?? 'User';
-        userRole = response['role'] ?? 'Pet Owner';
-        _isLoading = false;
-      });
-    } catch (supabaseError) {
-      print('⚠️ Supabase fallback user fetch failed: $supabaseError');
-      setState(() {
-        userName = 'User';
-        userRole = 'Pet Owner';
-        _isLoading = false;
-      });
-    }
+    setState(() {
+      userName = 'User';
+      userRole = 'Pet Owner';
+      _isLoading = false;
+    });
   }
 
   void _onItemTapped(int index) {

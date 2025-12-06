@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/fastapi_service.dart';
 import 'main_navigation.dart';
 
 const deepRed = Color(0xFFB82132);
@@ -21,6 +21,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _userRole;
   bool _isLoading = true;
   List<Map<String, dynamic>> _pages = [];
+  final FastApiService _fastApi = FastApiService.instance;
 
   // Pet Owner specific pages
   final List<Map<String, dynamic>> _petOwnerPages = [
@@ -94,14 +95,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _getUserRole() async {
     try {
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('role')
-          .eq('id', widget.userId)
-          .single();
-      
+      final user = await _fastApi.fetchUserById(widget.userId);
+      final roleValue = user['role'];
+      final role = roleValue is String && roleValue.isNotEmpty ? roleValue : 'Pet Owner';
       setState(() {
-        _userRole = response['role'];
+        _userRole = role;
         _pages = _userRole == 'Pet Sitter' ? _petSitterPages : _petOwnerPages;
         _isLoading = false;
       });

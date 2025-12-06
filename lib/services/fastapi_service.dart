@@ -248,6 +248,19 @@ class FastApiService {
     return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  Future<Map<String, dynamic>> createLocation(Map<String, dynamic> payload) async {
+    final uri = Uri.parse('$_baseUrl/location/');
+    final response = await _client.post(
+      uri,
+      headers: await _jsonHeaders,
+      body: jsonEncode(payload),
+    );
+    if (response.statusCode >= 400) {
+      throw Exception('FastAPI create location failed (${response.statusCode}): ${response.body}');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
   Future<Map<String, dynamic>> fetchLatestLocationForPet(String petId) async {
     final uri = Uri.parse('$_baseUrl/location/pet/$petId/latest');
     final response = await _client.get(uri, headers: await _jsonHeaders);
@@ -354,6 +367,57 @@ class FastApiService {
         'FastAPI mark messages seen failed (${response.statusCode}): ${response.body}',
       );
     }
+  }
+
+  Future<List<Map<String, dynamic>>> pollConversationUpdates(
+    String peerId, {
+    DateTime? since,
+    int limit = 150,
+  }) async {
+    final thread = await fetchConversationThread(peerId, limit: limit);
+    if (since == null) {
+      return thread;
+    }
+    return thread.where((message) {
+      final sentAt = message['sent_at']?.toString();
+      if (sentAt == null || sentAt.isEmpty) return true;
+      final parsed = DateTime.tryParse(sentAt);
+      return parsed != null && parsed.isAfter(since);
+    }).toList();
+  }
+
+  Future<Map<String, dynamic>?> fetchLatestMessage(String peerId) async {
+    final uri = Uri.parse('$_baseUrl/messages/latest/$peerId');
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode == 404) {
+      return null;
+    }
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch latest message failed (${response.statusCode}): ${response.body}');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>> sendCallSignal({
+    required String recipientId,
+    required String senderId,
+    required String type,
+    required String message,
+    String? callId,
+    String? callMode,
+    Map<String, dynamic>? metadata,
+  }) async {
+    final payload = <String, dynamic>{
+      'sender_id': senderId,
+      'receiver_id': recipientId,
+      'content': message,
+      'type': type,
+      'is_seen': false,
+      if (callId != null) 'call_id': callId,
+      if (callMode != null) 'call_mode': callMode,
+      if (metadata != null && metadata.isNotEmpty) 'metadata': metadata,
+    };
+    return sendMessage(payload);
   }
 
   Future<void> updateTypingStatus(String chatWithId, bool isTyping) async {
@@ -874,6 +938,45 @@ class FastApiService {
       throw Exception('FastAPI fetch user failed (${response.statusCode})');
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchUsers({
+    int limit = 20,
+    int offset = 0,
+    String? query,
+  }) async {
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+      if (query != null && query.isNotEmpty) 'query': query,
+    };
+    final uri = Uri.parse('$_baseUrl/users/').replace(
+      queryParameters: queryParams.isEmpty ? null : queryParams,
+    );
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch users failed (${response.statusCode})');
+    }
+    final data = jsonDecode(response.body) as List<dynamic>;
+    return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<List<String>> fetchAllUserIds({int pageSize = 200}) async {
+    final ids = <String>[];
+    int offset = 0;
+    while (true) {
+      final batch = await fetchUsers(limit: pageSize, offset: offset);
+      if (batch.isEmpty) {
+        break;
+      }
+      ids.addAll(batch
+          .map((user) => user['id']?.toString())
+          .where((id) => id != null)
+          .cast<String>());
+      if (batch.length < pageSize) break;
+      offset += batch.length;
+    }
+    return ids;
   }
 
   Future<Map<String, dynamic>> fetchCurrentUser() async {

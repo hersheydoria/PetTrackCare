@@ -1,397 +1,215 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'dart:async';
 import 'dart:convert';
 
-// Initialize local notifications plugin
+import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+import 'fastapi_service.dart';
+
 final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
-
-// Global realtime channel for notifications
-RealtimeChannel? _globalNotificationChannel;
-
-// Track recently shown notifications to prevent duplicates
 final Set<String> _recentNotifications = {};
 final Map<String, DateTime> _notificationTimestamps = {};
+final Set<String> _deliveredNotificationIds = {};
+Timer? _notificationPollTimer;
+const Duration _notificationPollInterval = Duration(seconds: 20);
+bool _lifecycleObserverRegistered = false;
+Map<String, dynamic>? _cachedUserData;
 
-/// Initialize system notifications (Android only)
 Future<void> initializeSystemNotifications() async {
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-  // iOS notifications disabled - only Android notifications will work
-  const initSettings = InitializationSettings(
-    android: androidSettings,
-    iOS: null, // Disable iOS notifications
-  );
-  
+  const initSettings = InitializationSettings(android: androidSettings, iOS: null);
+
   final initialized = await _localNotifications.initialize(
     initSettings,
     onDidReceiveNotificationResponse: _onNotificationTapped,
   );
-  
+
   print('System notifications initialized: $initialized');
-  
-  // Check and request notification permissions (Android 13+)
-  if (initialized != null && initialized) {
-    final permissionGranted = await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
-    print('Notification permission granted: $permissionGranted');
-    
-    // Setup global realtime subscription for system notifications
-    await _setupGlobalNotificationSubscription();
-    
-    // Setup app lifecycle monitoring for background notifications
+
+  if (initialized == true) {
+    await _refreshCurrentUser();
+    await _pollNotifications();
+    _startNotificationPolling();
     _setupAppLifecycleMonitoring();
   }
 }
 
-/// Setup app lifecycle monitoring for background notification handling
-void _setupAppLifecycleMonitoring() {
-  print('📱 Setting up app lifecycle monitoring for background notifications');
-  
-  // Listen to app lifecycle changes
-  WidgetsBinding.instance.addObserver(_AppLifecycleObserver());
+Future<void> _refreshCurrentUser() async {
+  try {
+    _cachedUserData = await FastApiService.instance.fetchCurrentUser();
+  } catch (e) {
+    print('Unable to refresh current user data: $e');
+  }
 }
 
-/// App lifecycle observer for background notification handling
+String? get _currentUserId => _cachedUserData?['id']?.toString();
+Map<String, dynamic> get _currentUserMetadata {
+  final metadata = _cachedUserData?['metadata'];
+  if (metadata is Map<String, dynamic>) {
+    return metadata;
+  }
+  if (metadata is String && metadata.isNotEmpty) {
+    try {
+      return Map<String, dynamic>.from(jsonDecode(metadata) as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+  return {};
+}
+
+void _setupAppLifecycleMonitoring() {
+  if (_lifecycleObserverRegistered) return;
+  WidgetsBinding.instance.addObserver(_AppLifecycleObserver());
+  _lifecycleObserverRegistered = true;
+}
+
 class _AppLifecycleObserver extends WidgetsBindingObserver {
   DateTime? _lastBackgroundTime;
-  
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     print('📱 App lifecycle state changed: $state');
-    
+
     switch (state) {
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        // App going to background or being closed
         _lastBackgroundTime = DateTime.now();
         print('📱 App went to background at: $_lastBackgroundTime');
+        _stopNotificationPolling();
         break;
-        
       case AppLifecycleState.resumed:
-        // App coming back to foreground
         print('📱 App resumed from background');
+        _refreshCurrentUser();
+        _pollNotifications(since: _lastBackgroundTime);
+        _startNotificationPolling();
         if (_lastBackgroundTime != null) {
-          final backgroundDuration = DateTime.now().difference(_lastBackgroundTime!);
-          print('📱 App was in background for: ${backgroundDuration.inSeconds} seconds');
-          
-          // Check for missed notifications if app was in background for more than 5 seconds
-          if (backgroundDuration.inSeconds > 5) {
-            _checkMissedNotifications(_lastBackgroundTime!);
-          }
+          _checkMissedNotifications(_lastBackgroundTime!);
         }
-        
-        // Reconnect realtime subscription in case it was dropped
-        _reconnectRealtimeSubscription();
         break;
-        
       case AppLifecycleState.inactive:
-        // App is inactive but still visible (e.g., phone call overlay)
-        print('📱 App became inactive');
-        break;
-        
       case AppLifecycleState.hidden:
-        // App is hidden but still running
-        print('📱 App is hidden');
         break;
     }
   }
 }
 
-/// Check for notifications that might have been missed while app was in background
 Future<void> _checkMissedNotifications(DateTime since) async {
-  final currentUser = Supabase.instance.client.auth.currentUser;
-  if (currentUser == null) return;
-  
-  print('🔍 Checking for missed notifications since: $since');
-  
+  await _pollNotifications(since: since);
+}
+
+void _startNotificationPolling() {
+  _notificationPollTimer?.cancel();
+  _notificationPollTimer = Timer.periodic(_notificationPollInterval, (_) {
+    _pollNotifications();
+  });
+}
+
+void _stopNotificationPolling() {
+  _notificationPollTimer?.cancel();
+  _notificationPollTimer = null;
+}
+
+Future<void> _pollNotifications({DateTime? since}) async {
   try {
-    final response = await Supabase.instance.client
-        .from('notifications')
-        .select()
-        .eq('user_id', currentUser.id)
-        .eq('is_read', false)
-        .gte('created_at', since.toIso8601String())
-        .order('created_at', ascending: false);
-    
-    final missedNotifications = List<Map<String, dynamic>>.from(response);
-    print('📬 Found ${missedNotifications.length} missed notifications');
-    
-    // Show system notifications for missed notifications
-    for (final notification in missedNotifications) {
-      await _showMissedNotification(notification);
-      
-      // Add small delay between notifications to avoid overwhelming
-      await Future.delayed(Duration(milliseconds: 500));
+    final notifications = await FastApiService.instance.fetchNotifications();
+    final entries = notifications.where((notification) {
+      final id = notification['id']?.toString();
+      if (id == null || id.isEmpty) return false;
+      if (_deliveredNotificationIds.contains(id)) return false;
+      if (since != null) {
+        final timestamp = _parseTimestamp(notification['created_at']);
+        if (timestamp == null || !timestamp.isAfter(since)) return false;
+      }
+      return true;
+    }).toList();
+
+    if (entries.isEmpty) return;
+
+    entries.sort((a, b) {
+      final aTime = _parseTimestamp(a['created_at']) ?? DateTime.now();
+      final bTime = _parseTimestamp(b['created_at']) ?? DateTime.now();
+      return aTime.compareTo(bTime);
+    });
+
+    for (final notification in entries) {
+      await _handleIncomingNotification(notification);
     }
   } catch (e) {
-    print('❌ Error checking missed notifications: $e');
+    print('❌ Failed to poll notifications: $e');
   }
 }
 
-/// Show system notification for a missed notification
-Future<void> _showMissedNotification(Map<String, dynamic> notification) async {
-  String title = '🔔 Missed Notification';
-  String body = notification['message']?.toString() ?? '';
-  String? type = notification['type']?.toString();
-  
-  // Customize title based on type
-  switch (type) {
-    case 'like':
-      title = '❤️ New Like (while away)';
-      break;
-    case 'comment':
-      title = '💬 New Comment (while away)';
-      break;
-    case 'message':
-      title = '💬 New Message (while away)';
-      break;
-    case 'job_request':
-      title = '🐕 Job Request (while away)';
-      break;
-    case 'job_accepted':
-      title = '✅ Job Accepted (while away)';
-      break;
-    case 'missing_pet':
-      title = '🚨 Missing Pet Alert (while away)';
-      break;
-    case 'found_pet':
-      title = '✅ Pet Found (while away)';
-      break;
-    default:
-      title = '🔔 Missed Notification';
-      break;
+Future<void> _handleIncomingNotification(Map<String, dynamic> notification) async {
+  final id = notification['id']?.toString();
+  if (id == null || id.isEmpty) return;
+  if (_deliveredNotificationIds.contains(id)) return;
+  _deliveredNotificationIds.add(id);
+  if (_deliveredNotificationIds.length > 250) {
+    _deliveredNotificationIds.remove(_deliveredNotificationIds.first);
   }
-  
-  // Prepare payload
-  final payloadMap = <String, dynamic>{};
-  if (notification['id'] != null) payloadMap['notificationId'] = notification['id'].toString();
-  if (notification['post_id'] != null) payloadMap['postId'] = notification['post_id'].toString();
-  if (notification['job_id'] != null) payloadMap['jobId'] = notification['job_id'].toString();
-  if (notification['type'] != null) payloadMap['type'] = notification['type'].toString();
-  if (notification['actor_id'] != null) payloadMap['senderId'] = notification['actor_id'].toString();
-  
-  final payloadJson = json.encode(payloadMap);
-  
-  print('📬 Showing missed notification: $title');
-  
-  // Show the notification
+
+  final title = _titleForNotification(notification['type']?.toString(), missed: true);
+  await _showNotificationFromRecord(notification, title);
+}
+
+Future<void> _showNotificationFromRecord(Map<String, dynamic> notification, String title) async {
+  final message = notification['message']?.toString() ?? 'You have a new notification';
+  final type = notification['type']?.toString();
+  final payload = _buildPayloadFromNotification(notification);
   await showSystemNotification(
     title: title,
-    body: body.isNotEmpty ? body : title,
+    body: message,
     type: type,
-    recipientId: Supabase.instance.client.auth.currentUser?.id,
-    payload: payloadJson,
+    recipientId: notification['user_id']?.toString(),
+    payload: payload.isNotEmpty ? json.encode(payload) : null,
   );
 }
 
-/// Reconnect realtime subscription (in case it was dropped while in background)
-Future<void> _reconnectRealtimeSubscription() async {
-  print('🔄 Reconnecting realtime subscription after resuming from background');
-  await _setupGlobalNotificationSubscription();
-}
-
-/// Setup global realtime subscription for system notifications
-Future<void> _setupGlobalNotificationSubscription() async {
-  final currentUser = Supabase.instance.client.auth.currentUser;
-  if (currentUser == null) {
-    print('❌ No current user - skipping global notification subscription');
-    return;
-  }
-  
-  final userId = currentUser.id;
-  print('🌐 Setting up global notification subscription for user: $userId');
-  
-  // Dispose existing channel if any
-  if (_globalNotificationChannel != null) {
-    await _globalNotificationChannel!.unsubscribe();
-  }
-  
-  _globalNotificationChannel = Supabase.instance.client.channel('global_notifications_$userId');
-  
-  _globalNotificationChannel!.onPostgresChanges(
-    event: PostgresChangeEvent.insert,
-    schema: 'public',
-    table: 'notifications',
-    filter: PostgresChangeFilter(
-      type: PostgresChangeFilterType.eq,
-      column: 'user_id',
-      value: userId,
-    ),
-    callback: (payload) async {
-      print('🌐 *** REALTIME EVENT RECEIVED ***');
-      print('   Event: ${payload.eventType}');
-      print('   Table: ${payload.table}');
-      print('   Schema: ${payload.schema}');
-      print('   User ID filter: $userId');
-      print('   Full payload: $payload');
-      print('   New record: ${payload.newRecord}');
-      print('   Old record: ${payload.oldRecord}');
-      
-      final newRow = payload.newRecord;
-      
-      // Build notification title and body
-      String title = '🔔 New Notification';
-      String body = newRow['message']?.toString() ?? '';
-      String? type = newRow['type']?.toString();
-      
-      // Customize title based on type
-      switch (type) {
-        case 'like':
-          title = '❤️ New Like';
-          break;
-        case 'comment':
-          title = '💬 New Comment';
-          break;
-        case 'message':
-          title = '💬 New Message';
-          print('🔔 Processing MESSAGE notification in global subscription');
-          break;
-        case 'job_request':
-          title = '🐕 Job Request';
-          break;
-        case 'job_accepted':
-          title = '✅ Job Accepted';
-          break;
-        case 'missing_pet':
-          title = '🚨 Missing Pet Alert';
-          break;
-        case 'found_pet':
-          title = '✅ Pet Found';
-          break;
-        default:
-          title = '🔔 New Notification';
-          break;
-      }
-      
-      // Prepare payload for navigation
-      final payloadMap = <String, dynamic>{};
-      if (newRow['id'] != null) payloadMap['notificationId'] = newRow['id'].toString();
-      if (newRow['post_id'] != null) payloadMap['postId'] = newRow['post_id'].toString();
-      if (newRow['job_id'] != null) payloadMap['jobId'] = newRow['job_id'].toString();
-      if (newRow['type'] != null) payloadMap['type'] = newRow['type'].toString();
-      if (newRow['actor_id'] != null) {
-        payloadMap['senderId'] = newRow['actor_id'].toString();
-        // For message notifications, try to get sender name
-        if (type == 'message') {
-          try {
-            final actorResponse = await Supabase.instance.client
-                .from('users')
-                .select('name')
-                .eq('id', newRow['actor_id'])
-                .single();
-            payloadMap['senderName'] = actorResponse['name'] ?? 'Someone';
-          } catch (e) {
-            payloadMap['senderName'] = 'Someone';
-          }
-        }
-      }
-      final payloadJson = json.encode(payloadMap);
-      
-      print('🔔 Showing global system notification: $title');
-      print('   Type: $type');
-      print('   Body: ${body.isNotEmpty ? body : title}');
-      print('   Recipient: $userId');
-      print('   Payload: $payloadJson');
-      
-      if (type == 'message') {
-        print('🔔 *** ABOUT TO SHOW MESSAGE SYSTEM NOTIFICATION ***');
-        print('   Title: $title');
-        print('   Body: ${body.isNotEmpty ? body : title}');
-        print('   Type: $type');
-        print('   Recipient ID: $userId');
-      }
-      
-      // Show system notification directly
-      await showSystemNotification(
-        title: title,
-        body: body.isNotEmpty ? body : title,
-        type: type,
-        recipientId: userId, // Current user should receive this notification
-        payload: payloadJson,
-      );
-      
-      if (type == 'message') {
-        print('🔔 *** MESSAGE SYSTEM NOTIFICATION CALL COMPLETED ***');
-      }
-    },
-  );
-  
-  print('🔗 Subscribing to global notification channel...');
-  
+DateTime? _parseTimestamp(dynamic value) {
   try {
-    await _globalNotificationChannel!.subscribe();
-    print('✅ Successfully subscribed to global notifications for user: $userId');
-  } catch (e) {
-    print('❌ Failed to subscribe to global notifications. Error: $e');
+    final str = value?.toString();
+    if (str == null || str.isEmpty) return null;
+    return DateTime.parse(str);
+  } catch (_) {
+    return null;
   }
 }
 
-/// Reinitialize global notification subscription (call after user login)
-Future<void> reinitializeNotificationSubscription() async {
-  print('🔄 Reinitializing global notification subscription...');
-  await _setupGlobalNotificationSubscription();
+Map<String, dynamic> _buildPayloadFromNotification(Map<String, dynamic> notification) {
+  final payload = <String, dynamic>{};
+  payload['notificationId'] = notification['id']?.toString();
+  if (notification['post_id'] != null) payload['postId'] = notification['post_id'].toString();
+  if (notification['job_id'] != null) payload['jobId'] = notification['job_id'].toString();
+  if (notification['actor_id'] != null) payload['senderId'] = notification['actor_id'].toString();
+  if (notification['type'] != null) payload['type'] = notification['type'].toString();
+  final metadata = notification['metadata'];
+  if (metadata is Map<String, dynamic>) {
+    payload.addAll(metadata);
+  }
+  return payload;
 }
 
-Future<void> testCommunityNotification() async {
-  final user = Supabase.instance.client.auth.currentUser;
-  if (user == null) {
-    print('❌ No user logged in for test');
-    return;
+String _titleForNotification(String? type, {bool missed = false}) {
+  switch (type) {
+    case 'like':
+      return missed ? '❤️ New Like (while away)' : '❤️ New Like';
+    case 'comment':
+      return missed ? '💬 New Comment (while away)' : '💬 New Comment';
+    case 'message':
+      return missed ? '💬 New Message (while away)' : '💬 New Message';
+    case 'job_request':
+      return missed ? '🐕 Job Request (while away)' : '🐕 Job Request';
+    case 'job_accepted':
+      return missed ? '✅ Job Accepted (while away)' : '✅ Job Accepted';
+    case 'missing_pet':
+      return missed ? '🚨 Missing Pet Alert (while away)' : '🚨 Missing Pet Alert';
+    case 'found_pet':
+      return missed ? '✅ Pet Found (while away)' : '✅ Pet Found';
+    default:
+      return missed ? '🔔 Missed Notification' : '🔔 New Notification';
   }
-  
-  print('🧪 Testing community notification flow...');
-  await sendCommunityNotification(
-    recipientId: user.id, // Send to self for testing
-    actorId: user.id,
-    type: 'like',
-    message: 'Test User liked your post',
-    postId: 'test-post-123',
-    actorName: 'Test User',
-  );
-}
-
-/// PUBLIC: Test message notification flow
-Future<void> testMessageNotification() async {
-  final user = Supabase.instance.client.auth.currentUser;
-  if (user == null) {
-    print('❌ No user logged in for test');
-    return;
-  }
-  
-  print('🧪 Testing message notification flow...');
-  
-  // Test 1: Direct database insert to test realtime subscription
-  print('🧪 Step 1: Testing direct database insert...');
-  try {
-    final directInsertData = {
-      'user_id': user.id,
-      'actor_id': user.id,
-      'message': 'Test direct insert message notification',
-      'type': 'message',
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    };
-    print('   Direct insert data: $directInsertData');
-    
-    final directResult = await Supabase.instance.client
-        .from('notifications')
-        .insert(directInsertData);
-    print('✅ Direct insert result: $directResult');
-  } catch (e) {
-    print('❌ Direct insert failed: $e');
-  }
-  
-  // Test 2: Using sendMessageNotification function
-  print('🧪 Step 2: Testing sendMessageNotification function...');
-  await sendMessageNotification(
-    recipientId: user.id, // Send to self for testing
-    senderId: user.id,
-    senderName: 'Test User',
-    messagePreview: 'This is a test message notification via function',
-  );
 }
 
 /// Handle notification tap
@@ -401,61 +219,47 @@ void _onNotificationTapped(NotificationResponse response) {
     try {
       final Map<String, dynamic> data = json.decode(payload);
       print('System notification tapped: $data');
-      // The main app will handle navigation based on the payload
     } catch (e) {
       print('Error parsing notification payload: $e');
     }
   }
 }
 
-/// Show system notification (Android only) - Public function for use across the app
 Future<void> showSystemNotification({
   required String title,
   required String body,
   String? payload,
   String? type,
-  String? recipientId, // Added recipient ID to check if current user should receive notification
+  String? recipientId,
 }) async {
-  print('\n🔔 ========== showSystemNotification CALLED ==========');
-  print('   Title: $title');
-  print('   Body: $body');
-  print('   Type: $type');
-  print('   Recipient ID: $recipientId');
-  
-  // Only show notification if the current user is the intended recipient
-  final currentUser = Supabase.instance.client.auth.currentUser;
-  if (currentUser == null) {
-    print('⚠️ No user logged in - cannot show notification');
+  if (_currentUserId == null) {
+    await _refreshCurrentUser();
+  }
+
+  final currentUserId = _currentUserId;
+  if (currentUserId == null) {
+    print('⚠️ No user context available - skipping notification');
     return;
   }
 
-  // If recipientId is specified, only show notification to that user
-  if (recipientId != null && currentUser.id != recipientId) {
-    // Skip silently - notification not for this user (this is normal behavior)
-    print('⏭️  Skipping notification - intended for $recipientId, current user is ${currentUser.id}');
+  if (recipientId != null && currentUserId != recipientId) {
+    print('⏭️ Skipping notification for $recipientId (current user $currentUserId)');
     return;
   }
-  
-  print('✅ Recipient match confirmed - will show notification to ${currentUser.id}');
 
-  // Deduplication: Create a unique key for this notification
-  final notificationKey = '${recipientId ?? currentUser.id}:$type:$title:$body';
+  final notificationKey = '${recipientId ?? currentUserId}:$type:$title:$body';
   final now = DateTime.now();
-  
-  // Check if we've shown this notification recently (within last 5 seconds)
+
   if (_recentNotifications.contains(notificationKey)) {
     final lastShown = _notificationTimestamps[notificationKey];
     if (lastShown != null && now.difference(lastShown).inSeconds < 5) {
-      print('⏭️  DUPLICATE NOTIFICATION BLOCKED - shown ${now.difference(lastShown).inSeconds}s ago');
+      print('⏭️ Duplicate notification suppressed: $title');
       return;
     }
   }
-  
-  // Add to recent notifications
+
   _recentNotifications.add(notificationKey);
   _notificationTimestamps[notificationKey] = now;
-  
-  // Clean up old entries (older than 10 seconds)
   _notificationTimestamps.removeWhere((key, timestamp) {
     final shouldRemove = now.difference(timestamp).inSeconds > 10;
     if (shouldRemove) {
@@ -463,24 +267,20 @@ Future<void> showSystemNotification({
     }
     return shouldRemove;
   });
-  
-  print('✅ New notification - will show (key: $notificationKey)');
 
-  // Check if user has enabled notifications
-  final metadata = currentUser.userMetadata ?? {};
-  final notificationPrefs = metadata['notification_preferences'] ?? {'enabled': true};
+  final notificationPrefs =
+      (_currentUserMetadata['notification_preferences'] as Map<String, dynamic>?) ?? {'enabled': true};
   final notificationsEnabled = notificationPrefs['enabled'] ?? true;
-  
-  if (!notificationsEnabled) {
-    print('⚠️ Notifications disabled by user in preferences');
+
+  if (notificationsEnabled != true) {
+    print('⚠️ Notifications disabled by user preferences');
     return;
   }
-  
-  print('✓ User check passed, preparing notification...');  // Configure notification based on type
+
   String channelId = 'general_notifications';
   String channelName = 'General Notifications';
   String channelDescription = 'General app notifications';
-  
+
   switch (type) {
     case 'job_request':
     case 'job_accepted':
@@ -526,104 +326,88 @@ Future<void> showSystemNotification({
     styleInformation: BigTextStyleInformation(body),
   );
 
-  // iOS notifications disabled - only Android notifications will work
-  final notificationDetails = NotificationDetails(
-    android: androidDetails,
-    iOS: null, // Disable iOS notifications
-  );
+  final notificationDetails = NotificationDetails(android: androidDetails, iOS: null);
 
   final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
-  
   try {
-    // Debug: Show notification attempt (only for important info, not spam)
     print('📱 Showing notification: $title');
-    
-    await _localNotifications.show(
-      id,
-      title,
-      body,
-      notificationDetails,
-      payload: payload,
-    );
-    
+    await _localNotifications.show(id, title, body, notificationDetails, payload: payload);
     print('✅ Notification displayed successfully');
   } catch (e) {
-    // Important: Log errors to help debug notification issues
     print('❌ Failed to display notification: $e');
   }
 }
 
-/// Sends a notification to all users when a pet is marked missing or found.
-/// [petName] - The name of the pet.
-/// [type] - 'missing' or 'found'.
-/// [postId] - Optional post ID to link the notification to a community post.
+Future<void> reinitializeNotificationSubscription() async {
+  print('🔄 Reinitializing notification polling...');
+  await _refreshCurrentUser();
+  _startNotificationPolling();
+  await _pollNotifications();
+}
+
+Future<void> _createNotificationForUser({
+  required String recipientId,
+  required String message,
+  required String type,
+  String? actorId,
+  String? postId,
+  String? jobId,
+  Map<String, dynamic>? metadata,
+}) async {
+  final payload = {
+    'user_id': recipientId,
+    if (actorId != null) 'actor_id': actorId,
+    'message': message,
+    'type': type,
+    if (postId != null) 'post_id': postId,
+    if (jobId != null) 'job_id': jobId,
+    'metadata': metadata ?? {},
+  };
+  await FastApiService.instance.createNotification(payload);
+}
+
 Future<void> sendPetAlertToAllUsers({
   required String petName,
   required String type,
   required String actorId,
   String? postId,
 }) async {
-  final supabase = Supabase.instance.client;
-  final message = type == 'missing'
-      ? 'Alert: $petName has been marked as missing.'
-      : 'Update: $petName has been found!';
-
   try {
-    // Fetch all user IDs
-    final users = await supabase.from('users').select('id');
-    final userIds = List<String>.from(users.map((u) => u['id'].toString()));
-    if (userIds.isEmpty) {
-      print('No user IDs found.');
-      return;
+    final recipients = await FastApiService.instance.fetchAllUserIds(pageSize: 200);
+    final message = type == 'missing'
+        ? 'Alert: $petName has been marked as missing.'
+        : 'Update: $petName has been found!';
+
+    for (final recipientId in recipients) {
+      await _createNotificationForUser(
+        recipientId: recipientId,
+        message: message,
+        type: type == 'missing' ? 'missing_pet' : 'found_pet',
+        actorId: actorId,
+        postId: postId,
+        metadata: {
+          'petName': petName,
+          if (postId != null) 'postId': postId,
+        },
+      );
     }
 
-    // Prepare notification rows
-    final notifications = userIds.map((uid) => {
-      'user_id': uid, // recipient
-      'actor_id': actorId, // user who performed the action
-      'message': message,
-      'type': type == 'missing' ? 'missing_pet' : 'found_pet',
-      'post_id': postId, // link to community post
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    }).toList();
-
-    // Insert notifications in batch and print response
-    final response = await supabase.from('notifications').insert(notifications);
-    print('Insert response: $response');
-    if (response == null || (response is Map && response['error'] != null)) {
-      print('Error inserting notifications: ${response?['error'] ?? response}');
-    }
-    
-    // Show system notification for pet alerts (to all users - will be filtered per user)
     await showSystemNotification(
       title: type == 'missing' ? '🚨 Missing Pet Alert' : '✅ Pet Found',
       body: message,
       type: type == 'missing' ? 'missing_pet' : 'found_pet',
-      recipientId: null, // Pet alerts go to all users, so no specific recipient filtering
       payload: json.encode({
         'type': type == 'missing' ? 'missing_pet' : 'found_pet',
         'postId': postId,
         'petName': petName,
       }),
     );
-    
-    // Note: Local notifications are automatically shown when users receive the database
-    // notifications via realtime subscriptions in NotificationScreen. Each user's 
-    // notification screen will show a system notification when new rows are inserted.
-    print('Pet alert notifications sent to ${userIds.length} users: $message');
+    print('Pet alert notifications sent to ${recipients.length} users: $message');
   } catch (e) {
     print('Failed to send pet alert notifications: $e');
   }
 }
 
-/// Sends a job-related notification to a specific user.
-/// [recipientId] - The user ID who will receive the notification.
-/// [actorId] - The user ID who performed the action.
-/// [jobId] - The ID of the sitting job.
-/// [type] - The type of job notification ('job_request', 'job_accepted', 'job_declined', 'job_completed').
-/// [petName] - The name of the pet involved in the job.
-/// [actorName] - The name of the user who performed the action.
 Future<void> sendJobNotification({
   required String recipientId,
   required String actorId,
@@ -632,9 +416,6 @@ Future<void> sendJobNotification({
   required String petName,
   String actorName = '',
 }) async {
-  final supabase = Supabase.instance.client;
-  
-  // Generate message based on notification type
   String message;
   switch (type) {
     case 'job_request':
@@ -655,44 +436,22 @@ Future<void> sendJobNotification({
   }
 
   try {
-    // Insert notification
-    await supabase.from('notifications').insert({
-      'user_id': recipientId,
-      'actor_id': actorId,
-      'message': message,
-      'type': type,
-      'job_id': jobId.isNotEmpty ? jobId : null, // Only set if jobId is not empty
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    });
-    
-    // Show system notification for job updates
-    String notificationTitle;
-    switch (type) {
-      case 'job_request':
-        notificationTitle = '💼 New Job Request';
-        break;
-      case 'job_accepted':
-        notificationTitle = '✅ Job Accepted';
-        break;
-      case 'job_declined':
-        notificationTitle = '❌ Job Declined';
-        break;
-      case 'job_completed':
-        notificationTitle = '🎉 Job Completed';
-        break;
-      default:
-        notificationTitle = '📋 Job Update';
-        break;
-    }
-    
-    print('📤 Attempting to send system notification: $notificationTitle to user $recipientId');
-    
+    await _createNotificationForUser(
+      recipientId: recipientId,
+      message: message,
+      type: type,
+      actorId: actorId,
+      jobId: jobId.isNotEmpty ? jobId : null,
+      metadata: {
+        'petName': petName,
+        if (actorName.isNotEmpty) 'actorName': actorName,
+      },
+    );
     await showSystemNotification(
-      title: notificationTitle,
+      title: _titleForNotification(type),
       body: message,
       type: type,
-      recipientId: recipientId, // Only show to the intended recipient
+      recipientId: recipientId,
       payload: json.encode({
         'type': type,
         'jobId': jobId,
@@ -700,21 +459,11 @@ Future<void> sendJobNotification({
         'actorName': actorName,
       }),
     );
-    
-    print('✅ Job notification sent successfully');
   } catch (e) {
     print('❌ Error sending job notification: $e');
   }
 }
 
-/// Sends a community-related notification (like, comment, mention, etc.)
-/// [recipientId] - The user ID who will receive the notification.
-/// [actorId] - The user ID who performed the action.
-/// [type] - The type of community notification ('like', 'comment', 'mention', 'follow').
-/// [message] - The notification message.
-/// [postId] - Optional post ID for post-related notifications.
-/// [commentId] - Optional comment ID for comment-related notifications.
-/// [actorName] - The name of the user who performed the action.
 Future<void> sendCommunityNotification({
   required String recipientId,
   required String actorId,
@@ -724,77 +473,24 @@ Future<void> sendCommunityNotification({
   String? commentId,
   String actorName = '',
 }) async {
-  final supabase = Supabase.instance.client;
-  
-  print('🏘️ sendCommunityNotification called:');
-  print('   Recipient ID: $recipientId');
-  print('   Actor ID: $actorId');
-  print('   Type: $type');
-  print('   Message: $message');
-  print('   Post ID: $postId');
-  print('   Actor Name: $actorName');
-  
   try {
-    // Insert notification
-    final notificationData = {
-      'user_id': recipientId,
-      'actor_id': actorId,
-      'message': message,
-      'type': type,
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    };
-    
-    if (postId != null) notificationData['post_id'] = postId;
-    if (commentId != null) notificationData['comment_id'] = commentId;
-    
-    print('💾 Inserting notification into database...');
-    print('   Data: $notificationData');
-    
-    final insertResult = await supabase.from('notifications').insert(notificationData);
-    print('✅ Community notification inserted - Response: $insertResult');
-    
-    // Verify the insert by querying the database
-    try {
-      final verifyQuery = await supabase
-        .from('notifications')
-        .select()
-        .eq('user_id', recipientId)
-        .eq('type', type)
-        .order('created_at', ascending: false)
-        .limit(1);
-      print('🔍 Verification query result: $verifyQuery');
-    } catch (e) {
-      print('⚠️ Failed to verify notification insert: $e');
-    }
-    
-    
-    // Show system notification for community interactions
-    String notificationTitle;
-    switch (type) {
-      case 'like':
-        notificationTitle = '❤️ New Like';
-        break;
-      case 'comment':
-        notificationTitle = '💬 New Comment';
-        break;
-      case 'mention':
-        notificationTitle = '👋 You were mentioned';
-        break;
-      case 'follow':
-        notificationTitle = '👥 New Follower';
-        break;
-      default:
-        notificationTitle = '🔔 Community Update';
-        break;
-    }
-    
-    print('📱 Calling showSystemNotification...');
+    await _createNotificationForUser(
+      recipientId: recipientId,
+      message: message,
+      type: type,
+      actorId: actorId,
+      metadata: {
+        if (postId != null) 'postId': postId,
+        if (commentId != null) 'commentId': commentId,
+        if (actorName.isNotEmpty) 'actorName': actorName,
+      },
+    );
+    final notificationTitle = _titleForNotification(type);
     await showSystemNotification(
       title: notificationTitle,
       body: message,
       type: type,
-      recipientId: recipientId, // Only show to the intended recipient
+      recipientId: recipientId,
       payload: json.encode({
         'type': type,
         'postId': postId,
@@ -802,78 +498,76 @@ Future<void> sendCommunityNotification({
         'actorName': actorName,
       }),
     );
-    
-    print('✅ Community notification process completed: $message to user $recipientId');
   } catch (e) {
     print('❌ Failed to send community notification: $e');
   }
 }
 
-/// Sends a message notification
-/// [recipientId] - The user ID who will receive the notification.
-/// [senderId] - The user ID who sent the message.
-/// [senderName] - The name of the sender.
-/// [messagePreview] - Preview of the message content.
 Future<void> sendMessageNotification({
   required String recipientId,
   required String senderId,
   required String senderName,
   required String messagePreview,
 }) async {
-  final supabase = Supabase.instance.client;
-  
-  print('📨 sendMessageNotification called:');
-  print('   Recipient ID: $recipientId');
-  print('   Sender ID: $senderId');
-  print('   Sender Name: $senderName');
-  print('   Message Preview: $messagePreview');
-  
   try {
-    // Store message notification in database
-    print('💾 Storing message notification in database...');
-    final notificationData = {
-      'user_id': recipientId,
-      'actor_id': senderId,
-      'message': 'sent you a message: $messagePreview',
-      'type': 'message',
-      'is_read': false,
-      'created_at': DateTime.now().toIso8601String(),
-    };
-    print('   Notification data: $notificationData');
-    
-    final insertResult = await supabase.from('notifications').insert(notificationData);
-    print('✅ Message notification inserted - Response: $insertResult');
-    
-    // Verify the insert by querying the database
-    try {
-      final verifyQuery = await supabase
-        .from('notifications')
-        .select()
-        .eq('user_id', recipientId)
-        .eq('type', 'message')
-        .order('created_at', ascending: false)
-        .limit(1);
-      print('🔍 Message notification verification query result: $verifyQuery');
-    } catch (e) {
-      print('⚠️ Failed to verify message notification insert: $e');
-    }
-    
-    // Show system notification
-    print('🔔 Calling showSystemNotification...');
+    await _createNotificationForUser(
+      recipientId: recipientId,
+      message: 'sent you a message: $messagePreview',
+      type: 'message',
+      actorId: senderId,
+      metadata: {
+        'senderName': senderName,
+      },
+    );
     await showSystemNotification(
       title: '💬 $senderName',
       body: messagePreview,
       type: 'message',
-      recipientId: recipientId, // Only show to the message recipient
+      recipientId: recipientId,
       payload: json.encode({
         'type': 'message',
         'senderId': senderId,
         'senderName': senderName,
       }),
     );
-    
-    print('✅ Message notification process completed: $messagePreview from $senderName to user $recipientId');
   } catch (e) {
     print('❌ Failed to send message notification: $e');
   }
+}
+
+Future<void> testCommunityNotification() async {
+  if (_currentUserId == null) {
+    await _refreshCurrentUser();
+  }
+  final userId = _currentUserId;
+  if (userId == null) {
+    print('❌ No user logged in for community notification test');
+    return;
+  }
+  print('🧪 Testing community notification flow...');
+  await sendCommunityNotification(
+    recipientId: userId,
+    actorId: userId,
+    type: 'like',
+    message: 'Test User liked your post',
+    actorName: 'Test User',
+  );
+}
+
+Future<void> testMessageNotification() async {
+  if (_currentUserId == null) {
+    await _refreshCurrentUser();
+  }
+  final userId = _currentUserId;
+  if (userId == null) {
+    print('❌ No user logged in for message notification test');
+    return;
+  }
+  print('🧪 Testing message notification flow...');
+  await sendMessageNotification(
+    recipientId: userId,
+    senderId: userId,
+    senderName: 'Test User',
+    messagePreview: 'This is a test message notification via function',
+  );
 }
