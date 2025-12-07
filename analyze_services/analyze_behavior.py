@@ -20,11 +20,16 @@ import argparse
 import traceback
 import threading
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+PARENT_DIR = os.path.dirname(BASE_DIR)
+load_dotenv(os.path.join(PARENT_DIR, ".env"), override=True)
+
 # Load environment variables
-load_dotenv()
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
-FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL") or f"http://localhost:{os.getenv('FASTAPI_PORT', '8000')}"
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL") or f"http://192.168.100.23:{os.getenv('FASTAPI_PORT', '8000')}"
 FASTAPI_TIMEOUT = float(os.getenv("FASTAPI_TIMEOUT", "15"))
+BACKEND_ANALYZE_URL = (os.getenv("BACKEND_ANALYZE_URL") or f"http://192.168.100.23:{BACKEND_PORT}/analyze").strip()
 
 http_session = requests.Session()
 http_session.headers.update({"Accept": "application/json"})
@@ -354,7 +359,6 @@ HEALTH_REFERENCE_SYNONYMS = {
 }
 
 # Ensure a stable models directory
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
@@ -1567,8 +1571,7 @@ def public_pet_page(pet_id):
         
         try:
             # Call /analyze endpoint internally to get current analysis
-            analysis_url = f"http://pettrackcare.onrender.com/analyze"
-            analysis_resp = requests.post(analysis_url, json={"pet_id": pet_id}, timeout=10)
+            analysis_resp = requests.post(BACKEND_ANALYZE_URL, json={"pet_id": pet_id}, timeout=10)
             if analysis_resp.status_code == 200:
                 analysis_data = analysis_resp.json()
                 latest_risk = analysis_data.get("illness_risk_blended") or analysis_data.get("illness_risk") or "low"

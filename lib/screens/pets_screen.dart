@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart'; // For date formatting
 import 'package:flutter/foundation.dart'; // For kDebugMode
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'notification_screen.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -116,7 +117,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   // Request tracking to prevent stale responses from overwriting current pet's analysis
   String? _currentAnalysisRequestId;
 
-  String backendUrl = "https://pettrackcare.onrender.com/analyze";
+  late final String backendUrl;
   Map<String, double> _moodProb = {};
   Map<String, double> _activityProb = {};
 
@@ -287,6 +288,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
         _currentMapSub = null;
       });
     }
+  }
+
+  String _resolveBackendAnalyzeUrl() {
+    final envUrl = dotenv.env['BACKEND_ANALYZE_URL']?.trim();
+    if (envUrl != null && envUrl.isNotEmpty) {
+      return envUrl;
+    }
+    return 'http://192.168.100.23:5000/analyze';
   }
 
   // Background data fetching with caching
@@ -1137,6 +1146,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   @override
   void initState() {
     super.initState();
+    backendUrl = _resolveBackendAnalyzeUrl();
     _tabController = TabController(length: 3, vsync: this);
     if (widget.initialUser != null) {
       _currentUser = widget.initialUser;
@@ -4540,7 +4550,7 @@ void _disconnectDevice() async {
       final data = await _apiClient.fetchBehaviorLogs(
         petId: petId,
         startDate: logDate,
-        endDate: logDate.add(Duration(days: 1)),
+        endDate: logDate,
         limit: 1,
       );
       if (data.isNotEmpty) {

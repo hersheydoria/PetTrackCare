@@ -119,7 +119,11 @@ async def delete_behavior_log(
     log = db.get(models.BehaviorLog, log_id)
     if not log:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Behavior log not found")
-    if str(log.user_id) != str(current_user.id):
+    is_owner = False
+    pet = db.get(models.Pet, log.pet_id)
+    if pet and str(pet.owner_id) == str(current_user.id):
+        is_owner = True
+    if str(log.user_id) != str(current_user.id) and not is_owner:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this log")
     db.delete(log)
     db.commit()
