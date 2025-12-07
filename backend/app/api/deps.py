@@ -10,6 +10,7 @@ from ..schemas.token import TokenPayload
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
+oauth2_scheme_admin = OAuth2PasswordBearer(tokenUrl="admin/login")
 
 
 def _get_user_from_token(token: str | None, db: Session) -> models.User | None:
@@ -49,6 +50,18 @@ def get_current_user(
     return user
 
 
+def get_current_admin(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+) -> models.User:
+    user = get_current_user(token=token, db=db)
+    if not user or (user.role or "").lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return user
+
+
 def get_current_user_optional(
     token: str | None = Depends(oauth2_scheme_optional), db: Session = Depends(get_db)
 ) -> models.User | None:
@@ -56,3 +69,18 @@ def get_current_user_optional(
         return _get_user_from_token(token, db)
     except HTTPException:
         return None
+
+
+    def get_current_admin(
+        token: str = Depends(oauth2_scheme_admin), db: Session = Depends(get_db)
+    ) -> models.User:
+        try:
+            user = _get_user_from_token(token, db)
+        except HTTPException:
+            raise
+        if user is None or (user.role or '').lower() != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin credentials required",
+            )
+        return user
