@@ -117,12 +117,12 @@ class LocationHistory(Base):
     __tablename__ = "location_history"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    pet_id = Column(UUID(as_uuid=True), ForeignKey("pets.id"), nullable=False)
+    pet_id = Column(UUID(as_uuid=True), ForeignKey("pets.id"), nullable=True)
     device_mac = Column(String(64), nullable=True, index=True)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
-    firebase_entry_id = Column(String(255))
+    timestamp = Column(DateTime(timezone=True), nullable=True, server_default=func.now())
+    firebase_entry_id = Column(String(255), index=True)
 
     pet = relationship("Pet", back_populates="locations")
 

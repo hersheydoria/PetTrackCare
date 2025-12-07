@@ -1,7 +1,9 @@
 services:
   - type: web
-    name: pettrackcare
+    name: pettrackcare-backend
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python analyze_services/analyze_behavior.py
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 10000
     pythonVersion: 3.11.8
+    healthCheckPath: /health

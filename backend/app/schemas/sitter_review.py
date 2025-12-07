@@ -18,6 +18,7 @@ class SitterReviewRead(BaseModel):
     comment: str | None = None
     owner_name: str
     reviewer_name: str | None = None
+    reviewer_profile_picture: str | None = None
     created_at: datetime
 
     class Config:

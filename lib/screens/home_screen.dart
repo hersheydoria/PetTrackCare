@@ -614,13 +614,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
 
     String? selectedPetId = availablePets.isNotEmpty ? availablePets.first['id'] as String? : null;
+    Map<String, dynamic>? findPetById(String? id) {
+      if (id == null) return null;
+      for (final pet in availablePets) {
+        if (pet['id'] == id) {
+          return pet;
+        }
+      }
+      return null;
+    }
+    Map<String, dynamic>? selectedPet = findPetById(selectedPetId);
+    final sitterProfilePicture = sitter['profile_picture']?.toString();
+    final sitterName = sitter['name']?.toString() ?? 'Sitter';
 
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return StatefulBuilder(
+          return StatefulBuilder(
           builder: (context, setModalState) {
             return Container(
               height: MediaQuery.of(context).size.height * 0.6,
@@ -657,17 +669,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         // Header content
                         Row(
                           children: [
-                            Container(
-                              padding: EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Icon(
-                                Icons.pets,
-                                color: Colors.white,
-                                size: 24,
-                              ),
+                            _buildCircularAvatar(
+                              name: sitterName,
+                              imageUrl: sitterProfilePicture,
+                              size: 52,
+                              borderColor: Colors.white70,
                             ),
                             SizedBox(width: 12),
                             Expanded(
@@ -683,7 +689,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     ),
                                   ),
                                   Text(
-                                    sitter['name'] ?? 'Sitter',
+                                    sitterName,
                                     style: TextStyle(
                                       fontSize: 22,
                                       fontWeight: FontWeight.bold,
@@ -724,28 +730,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               ),
                               child: Row(
                                 children: [
-                                  Container(
-                                    width: 50,
-                                    height: 50,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [coral, peach],
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                      ),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        (sitter['name'] ?? 'S')[0].toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white,
-                                          fontFamily: 'Roboto',
-                                        ),
-                                      ),
-                                    ),
+                                  _buildCircularAvatar(
+                                    name: sitterName,
+                                    imageUrl: sitterProfilePicture,
+                                    size: 50,
+                                    borderColor: Colors.grey.withOpacity(0.3),
                                   ),
                                   SizedBox(width: 12),
                                   Expanded(
@@ -753,7 +742,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          sitter['name'] ?? 'Sitter',
+                                          sitterName,
                                           style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.bold,
@@ -790,6 +779,45 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               ),
                             ),
                             SizedBox(height: 8),
+                            if (selectedPet != null) ...[ 
+                              () {
+                                final petPreview = selectedPet!;
+                                return Row(
+                                  children: [
+                                    _buildPetProfileAvatar(
+                                      profilePicture: petPreview['profile_picture']?.toString(),
+                                      size: 36,
+                                    ),
+                                    SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            petPreview['name']?.toString() ?? 'Selected pet',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: deepRed,
+                                              fontFamily: 'Roboto',
+                                            ),
+                                          ),
+                                          Text(
+                                            'This pet is ready for a sitter',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                              fontFamily: 'Roboto',
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }(),
+                              SizedBox(height: 12),
+                            ],
                             Container(
                               decoration: BoxDecoration(
                                 color: Colors.white,
@@ -803,18 +831,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     value: p['id'] as String?,
                                     child: Row(
                                       children: [
-                                        Container(
-                                          width: 30,
-                                          height: 30,
-                                          decoration: BoxDecoration(
-                                            color: peach.withOpacity(0.3),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: Icon(
-                                            Icons.pets,
-                                            size: 16,
-                                            color: coral,
-                                          ),
+                                        _buildPetProfileAvatar(
+                                          profilePicture: p['profile_picture']?.toString(),
+                                          size: 30,
                                         ),
                                         SizedBox(width: 8),
                                         Text(
@@ -825,7 +844,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     ),
                                   );
                                 }).toList(),
-                                onChanged: (v) => setModalState(() => selectedPetId = v),
+                                onChanged: (v) => setModalState(() {
+                                  selectedPetId = v;
+                                  selectedPet = findPetById(v);
+                                }),
                                 decoration: InputDecoration(
                                   border: InputBorder.none,
                                   contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -2588,10 +2610,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final owner = (review['owner_name'] ?? 'Pet Owner').toString();
     final createdAt = review['created_at']?.toString();
     
-    // Get reviewer info from joined users table
-    final reviewerData = review['users'] as Map<String, dynamic>?;
-    final reviewerName = reviewerData?['name']?.toString() ?? owner;
-    final reviewerProfilePicture = reviewerData?['profile_picture']?.toString();
+    final reviewerName = review['reviewer_name']?.toString() ?? owner;
+    final reviewerProfilePicture = (review['reviewer_profile_picture'] ??
+        (review['users'] as Map<String, dynamic>?)?['profile_picture'])
+      ?.toString();
     
     String timeAgo = 'Recently';
     if (createdAt != null) {
@@ -3393,10 +3415,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildDefaultAvatar(String name) {
+  Widget _buildDefaultAvatar(String name, {double size = 54}) {
     return Container(
-      width: 54,
-      height: 54,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [coral, peach],
@@ -3415,6 +3437,33 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             fontFamily: 'Roboto',
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildCircularAvatar({
+    required String name,
+    String? imageUrl,
+    double size = 48,
+    Color? borderColor,
+  }) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: borderColor != null ? Border.all(color: borderColor, width: 2) : null,
+      ),
+      child: ClipOval(
+        child: imageUrl != null && imageUrl.isNotEmpty
+            ? Image.network(
+                imageUrl,
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _buildDefaultAvatar(name, size: size),
+              )
+            : _buildDefaultAvatar(name, size: size),
       ),
     );
   }

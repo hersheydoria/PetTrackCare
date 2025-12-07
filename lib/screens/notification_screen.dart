@@ -222,6 +222,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final actorName = actorId != null ? await _getActorName(actorId) : null;
 
     if (msg != null && msg.isNotEmpty) {
+      if (actorName != null && msg.startsWith(actorName)) {
+        return msg;
+      }
       return actorName != null ? '$actorName $msg' : msg;
     }
 

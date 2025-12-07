@@ -51,3 +51,15 @@ async def get_latest_pet_location(pet_id: str, db: Session = Depends(get_db)) ->
     if not location:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
     return location
+
+
+@router.get("/firebase/{entry_id}", response_model=LocationRead)
+async def get_location_by_firebase_entry(entry_id: str, db: Session = Depends(get_db)) -> models.LocationHistory:
+    location = (
+        db.query(models.LocationHistory)
+        .filter(models.LocationHistory.firebase_entry_id == entry_id)
+        .first()
+    )
+    if not location:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+    return location

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class CommunityUserSummary(BaseModel):
@@ -83,10 +83,16 @@ class CommunityPostBase(BaseModel):
     type: str
     content: str
     image_url: Optional[str] = None
-    latitude: Optional[str] = None
-    longitude: Optional[str] = None
+    latitude: Optional[str | float] = None
+    longitude: Optional[str | float] = None
     address: Optional[str] = None
     reported: Optional[bool] = False
+
+    @field_validator("latitude", "longitude", mode="before")
+    def _stringify_coordinates(cls, value: Optional[str | float]) -> Optional[str]:
+        if value is None:
+            return None
+        return str(value)
 
 
 class CommunityPostCreate(CommunityPostBase):
@@ -97,10 +103,16 @@ class CommunityPostUpdate(BaseModel):
     type: Optional[str] = None
     content: Optional[str] = None
     image_url: Optional[str] = None
-    latitude: Optional[str] = None
-    longitude: Optional[str] = None
+    latitude: Optional[str | float] = None
+    longitude: Optional[str | float] = None
     address: Optional[str] = None
     reported: Optional[bool] = None
+
+    @field_validator("latitude", "longitude", mode="before")
+    def _stringify_coordinates(cls, value: Optional[str | float]) -> Optional[str]:
+        if value is None:
+            return None
+        return str(value)
 
 
 class CommunityPostRead(CommunityPostBase):

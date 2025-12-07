@@ -10,6 +10,7 @@ class LocationSyncService {
   static String get _authKey => dotenv.env['FIREBASE_AUTH_KEY'] ?? '';
 
   final FastApiService _fastApi = FastApiService.instance;
+  final Map<String, String?> _devicePetCache = {};
 
   bool get _isFirebaseConfigured {
     final host = dotenv.env['FIREBASE_HOST'];
@@ -111,6 +112,7 @@ class LocationSyncService {
   }
 
   Future<bool> pushLocation({
+    required String petId,
     required double latitude,
     required double longitude,
     required String deviceMac,
@@ -118,6 +120,7 @@ class LocationSyncService {
     String? firebaseEntryId,
   }) async {
     final payload = <String, dynamic>{
+      'pet_id': petId,
       'latitude': latitude,
       'longitude': longitude,
       'device_mac': deviceMac,
@@ -146,6 +149,8 @@ class LocationSyncService {
       'failed': 0,
       'errors': <String>[],
       'processed_entries': <String>[],
+      'skipped': 0,
+      'skipped_entries': <String>[],
       'migration_timestamp': DateTime.now().toIso8601String(),
     };
 
@@ -183,6 +188,15 @@ class LocationSyncService {
       final deviceMac = locationData['device_mac'];
       final timestampValue = locationData['timestamp'];
 
+      if (await _firebaseEntryAlreadyMigrated(entryId)) {
+        if (kDebugMode) {
+          print('Skipping Firebase entry $entryId – already migrated to Postgres');
+        }
+        result['skipped'] = (result['skipped'] as int) + 1;
+        (result['skipped_entries'] as List<String>).add(entryId);
+        continue;
+      }
+
       if (latitude == null || longitude == null || deviceMac == null) {
         final error =
             'Entry $entryId missing lat/long/device_mac (lat: $latitude, long: $longitude, device_mac: $deviceMac)';
@@ -206,8 +220,16 @@ class LocationSyncService {
 
       final deviceMacStr = deviceMac.toString();
       final timestamp = _parseTimestamp(timestampValue);
+      final petId = await _resolvePetForDevice(deviceMacStr);
+      if (petId == null) {
+        final error = 'Entry $entryId could not be mapped to a pet (device_mac: $deviceMacStr)';
+        (result['errors'] as List<String>).add(error);
+        result['failed'] = (result['failed'] as int) + 1;
+        continue;
+      }
 
       final success = await pushLocation(
+        petId: petId,
         latitude: latValue,
         longitude: longValue,
         deviceMac: deviceMacStr,
@@ -244,6 +266,13 @@ class LocationSyncService {
       return false;
     }
 
+    if (await _firebaseEntryAlreadyMigrated(entryId)) {
+      if (kDebugMode) {
+        print('Skipping Firebase entry $entryId – already migrated to Postgres');
+      }
+      return true;
+    }
+
     final latitude = entryData['lat'];
     final longitude = entryData['long'];
     final deviceMac = entryData['device_mac'];
@@ -269,10 +298,20 @@ class LocationSyncService {
     }
 
     final timestamp = _parseTimestamp(timestampValue);
+    final deviceMacStr = deviceMac.toString();
+    final petId = await _resolvePetForDevice(deviceMacStr);
+    if (petId == null) {
+      if (kDebugMode) {
+        print('Entry $entryId could not be mapped to a pet (device_mac: $deviceMacStr)');
+      }
+      return false;
+    }
+
     final success = await pushLocation(
+      petId: petId,
       latitude: latValue,
       longitude: longValue,
-      deviceMac: deviceMac.toString(),
+      deviceMac: deviceMacStr,
       timestamp: timestamp,
       firebaseEntryId: entryId,
     );
@@ -390,5 +429,42 @@ class LocationSyncService {
       }
     }
     return DateTime.now();
+  }
+
+  String _normalizeDeviceKey(String deviceId) => deviceId.toLowerCase();
+
+  Future<String?> _resolvePetForDevice(String deviceId) async {
+    final cacheKey = _normalizeDeviceKey(deviceId);
+    if (_devicePetCache.containsKey(cacheKey)) {
+      return _devicePetCache[cacheKey];
+    }
+
+    try {
+      final mapping = await _fastApi.fetchDeviceForDevice(deviceId);
+      final petId = mapping?['pet_id']?.toString();
+      _devicePetCache[cacheKey] = petId;
+      return petId;
+    } catch (error) {
+      if (kDebugMode) {
+        print('Failed to resolve pet for device $deviceId: $error');
+      }
+      _devicePetCache[cacheKey] = null;
+      return null;
+    }
+  }
+
+  Future<bool> _firebaseEntryAlreadyMigrated(String entryId) async {
+    if (entryId.isEmpty) {
+      return false;
+    }
+    try {
+      final existing = await _fastApi.fetchLocationByFirebaseEntry(entryId);
+      return existing != null;
+    } catch (error) {
+      if (kDebugMode) {
+        print('Failed to verify Firebase entry $entryId on FastAPI: $error');
+      }
+      return false;
+    }
   }
 }

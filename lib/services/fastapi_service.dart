@@ -270,6 +270,18 @@ class FastApiService {
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
+  Future<Map<String, dynamic>?> fetchLocationByFirebaseEntry(String entryId) async {
+    final uri = Uri.parse('$_baseUrl/location/firebase/$entryId');
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode == 404) {
+      return null;
+    }
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch location by Firebase entry failed (${response.statusCode})');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
   Future<Map<String, dynamic>?> fetchDeviceForPet(String petId) async {
     final uri = Uri.parse('$_baseUrl/device-map/pet/$petId');
     final response = await _client.get(uri, headers: await _jsonHeaders);
@@ -278,6 +290,18 @@ class FastApiService {
     }
     if (response.statusCode != 200) {
       throw Exception('FastAPI fetch device map failed (${response.statusCode})');
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
+  }
+
+  Future<Map<String, dynamic>?> fetchDeviceForDevice(String deviceId) async {
+    final uri = Uri.parse('$_baseUrl/device-map/device/$deviceId');
+    final response = await _client.get(uri, headers: await _jsonHeaders);
+    if (response.statusCode == 404) {
+      return null;
+    }
+    if (response.statusCode != 200) {
+      throw Exception('FastAPI fetch device map by device failed (${response.statusCode})');
     }
     return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }

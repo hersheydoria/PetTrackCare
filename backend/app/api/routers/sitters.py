@@ -107,6 +107,7 @@ async def list_sitter_reviews(user_id: str, db: Session = Depends(get_db)) -> Li
                 comment=review.comment,
                 owner_name=review.owner_name,
                 reviewer_name=reviewer_name,
+                reviewer_profile_picture=review.reviewer.profile_picture if review.reviewer else None,
                 created_at=review.created_at,
             )
         )
@@ -142,5 +143,6 @@ async def create_sitter_review(
         comment=review.comment,
         owner_name=review.owner_name,
         reviewer_name=reviewer_name,
+        reviewer_profile_picture=current_user.profile_picture,
         created_at=review.created_at,
     )

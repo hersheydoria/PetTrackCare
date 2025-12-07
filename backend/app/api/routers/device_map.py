@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ...db import models
@@ -57,3 +58,19 @@ async def remove_device_for_pet(
         db.delete(mapping)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/device/{device_id}", response_model=DevicePetMapRead)
+async def read_pet_for_device(
+    device_id: str,
+    db: Session = Depends(get_db),
+) -> models.DevicePetMap:
+    normalized = device_id.lower()
+    mapping = (
+        db.query(models.DevicePetMap)
+        .filter(func.lower(models.DevicePetMap.device_id) == normalized)
+        .first()
+    )
+    if not mapping:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device map not found")
+    return mapping

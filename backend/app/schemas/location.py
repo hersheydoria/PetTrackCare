@@ -1,17 +1,16 @@
-from typing import Dict
-
 from datetime import datetime
-from pydantic import BaseModel, Field
+from uuid import UUID
+
+from pydantic import BaseModel
 
 
 class LocationBase(BaseModel):
-    pet_id: str
+    pet_id: UUID | None = None
     latitude: float
     longitude: float
     device_mac: str | None = None
-    address: str | None = None
     timestamp: datetime | None = None
-    additional_data: Dict[str, str] = Field(default_factory=dict)
+    firebase_entry_id: str | None = None
 
 
 class LocationCreate(LocationBase):
@@ -19,8 +18,8 @@ class LocationCreate(LocationBase):
 
 
 class LocationRead(LocationBase):
-    id: str
-    created_at: datetime
+    id: UUID
+    timestamp: datetime
 
     class Config:
         orm_mode = True
