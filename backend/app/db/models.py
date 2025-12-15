@@ -122,7 +122,6 @@ class LocationHistory(Base):
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=True, server_default=func.now())
-    firebase_entry_id = Column(String(255), index=True)
 
     pet = relationship("Pet", back_populates="locations")
 

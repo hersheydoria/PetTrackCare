@@ -27,9 +27,9 @@ load_dotenv(os.path.join(PARENT_DIR, ".env"), override=True)
 
 # Load environment variables
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "5000"))
-FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL") or f"http://192.168.100.23:{os.getenv('FASTAPI_PORT', '8000')}"
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL") or f"http://172.20.10.7:{os.getenv('FASTAPI_PORT', '8000')}"
 FASTAPI_TIMEOUT = float(os.getenv("FASTAPI_TIMEOUT", "15"))
-BACKEND_ANALYZE_URL = (os.getenv("BACKEND_ANALYZE_URL") or f"http://192.168.100.23:{BACKEND_PORT}/analyze").strip()
+BACKEND_ANALYZE_URL = (os.getenv("BACKEND_ANALYZE_URL") or f"http://172.20.10.7:{BACKEND_PORT}/analyze").strip()
 
 http_session = requests.Session()
 http_session.headers.update({"Accept": "application/json"})
@@ -1358,9 +1358,9 @@ def analyze_endpoint():
     
     if symptoms_detected:
         symptom_list = ', '.join(str(s).title() for s in symptoms_detected)
-        _add_insight('symptoms', f'Clinical symptoms reported: {symptom_list}.')
+        _add_insight('symptoms', f'Clinical signs reported: {symptom_list}.')
     else:
-        _add_insight('symptoms', 'No clinical symptoms were reported in the latest log.')
+        _add_insight('symptoms', 'No clinical signs were reported in the latest log.')
 
     recent_health_issues, window_days = _collect_recent_health_concerns(df, days=7)
     health_issues = _merge_health_issue_lists(behavioral_concerns, recent_health_issues)
@@ -1876,8 +1876,6 @@ def start_scheduler():
     scheduler.start()
 
 
-# Removed: backfill_future_sleep_forecasts() - predictions table deprecated
-# Removed: migrate_legacy_sleep_forecasts() - predictions table deprecated  
 # Removed: store_prediction() - predictions table deprecated
 
 def analyze_illness_duration_and_patterns(df):
@@ -2869,30 +2867,6 @@ def _interpret_illness_metrics(accuracy, f1):
         return "Poor - Model needs significant improvement, consider collecting more diverse data"
 
 
-def _interpret_sleep_metrics(mae, r2):
-    """Interpret sleep forecasting performance"""
-    if mae is None:
-        return "Insufficient data for evaluation"
-    
-    # MAE interpretation (hours off from actual)
-    mae_quality = "excellent" if mae < 0.5 else "good" if mae < 1.0 else "fair" if mae < 1.5 else "poor"
-    
-    # R² interpretation (how much variance explained)
-    if r2 is not None:
-        if r2 >= 0.8:
-            r2_quality = "excellent fit"
-        elif r2 >= 0.6:
-            r2_quality = "good fit"
-        elif r2 >= 0.4:
-            r2_quality = "moderate fit"
-        else:
-            r2_quality = "poor fit"
-        
-        return f"MAE: {mae_quality} (±{mae:.2f} hours error), R²: {r2_quality} ({r2:.2f})"
-    
-    return f"MAE: {mae_quality} (±{mae:.2f} hours error)"
-
-
 @app.route("/test_accuracy/summary", methods=["GET"])
 def test_accuracy_summary():
     """
@@ -2959,23 +2933,11 @@ def migrate_behavior_logs_to_predictions():
         print(f"[MIGRATION] Error: {e}")
 
 
-def backfill_future_sleep_forecasts():
-    """Sleep forecasting deprecated - no-op function."""
-    print("[MIGRATION] backfill_future_sleep_forecasts: Skipping (sleep tracking deprecated)")
-    return
-
-
-def migrate_legacy_sleep_forecasts():
-    """Sleep forecasting deprecated - no-op function."""
-    print("[MIGRATION] migrate_legacy_sleep_forecasts: Skipping (sleep tracking deprecated)")
-    return
-
-
 if __name__ == "__main__":
     # Run a one-time migration at startup (safe and idempotent)
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, default=None,
-                        help="Optional task to run directly: daily_analysis | migrate | backfill_sleep | migrate_legacy_sleep_forecasts")
+                        help="Optional task to run directly: daily_analysis | migrate")
     args = parser.parse_args()
 
     # If invoked with --task, run that task directly (useful for subprocess workers)
@@ -2985,10 +2947,6 @@ if __name__ == "__main__":
             daily_analysis_job()
         elif task in ("migrate", "migrate_behavior_logs_to_predictions"):
             migrate_behavior_logs_to_predictions()
-        elif task in ("backfill_sleep", "backfill_future_sleep_forecasts"):
-            backfill_future_sleep_forecasts()
-        elif task in ("migrate_legacy_sleep_forecasts", "migrate_sleep_forecasts"):
-            migrate_legacy_sleep_forecasts()
         else:
             print(f"Unknown task: {args.task}")
         sys.exit(0)

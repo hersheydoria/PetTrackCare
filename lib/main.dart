@@ -15,7 +15,6 @@ import 'widgets/missing_pet_alert_wrapper.dart';
 import 'widgets/call_invite_wrapper.dart';
 import 'services/notification_service.dart';
 import 'services/permission_service.dart';
-import 'services/auto_migration_service.dart';
 import 'services/fastapi_service.dart';
 
 void main() async {
@@ -41,65 +40,10 @@ class PetTrackCareApp extends StatefulWidget {
 }
 
 class _PetTrackCareAppState extends State<PetTrackCareApp> {
-  final AutoMigrationService _autoMigrationService = AutoMigrationService();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  bool _autoMigrationTriggered = false;
-
-  /// Run auto-migration in background without blocking the UI
-  void _runAutoMigrationInBackground() {
-    // Use multiple logging methods to ensure visibility
-    print('=== AUTO-MIGRATION TRIGGER ===');
-    debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM MAIN.DART');
-    print('Timestamp: ${DateTime.now().toIso8601String()}');
-    print('Route: /home (triggering auto-migration)');
-    Future.microtask(() async {
-      try {
-        final user = await FastApiService.instance.fetchCurrentUser();
-        print('User: ${user['id'] ?? "No user"}');
-        print('User Email: ${user['email'] ?? "No email"}');
-        await _evaluateAutoMigration();
-      } catch (error) {
-        print('Unable to resolve FastAPI user for migration logging: $error');
-        await _evaluateAutoMigration();
-      }
-    });
-  }
-
-  Future<void> _evaluateAutoMigration() async {
-    try {
-      print('=== CHECKING MIGRATION CONDITIONS ===');
-      debugPrint('Starting auto-migration check...');
-        
-      final shouldRun = await _autoMigrationService.shouldRunMigration();
-        print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
-        debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
-        
-        if (shouldRun) {
-          print('=== STARTING MIGRATION PROCESS ===');
-          debugPrint('INITIATING BACKGROUND MIGRATION...');
-        await _autoMigrationService.runAutoMigration();
-          print('=== MIGRATION COMPLETED ===');
-          debugPrint('Background migration process completed');
-        } else {
-          print('=== MIGRATION SKIPPED ===');
-          debugPrint('Auto-migration skipped - conditions not met');
-          
-          // TEMPORARY: Force run for testing
-          print('=== FORCE RUNNING MIGRATION FOR TESTING ===');
-          await _autoMigrationService.forceRunMigration();
-          print('=== FORCE MIGRATION COMPLETED ===');
-        }
-    } catch (e) {
-      print('=== MIGRATION ERROR ===');
-      print('Error type: ${e.runtimeType}');
-      print('Error details: $e');
-      debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
-    }
-  }
 
   Widget _buildAuthenticatedScreen({
     required Widget Function(String userId) builder,
-    bool triggerAutoMigration = false,
   }) {
     return FutureBuilder<Map<String, dynamic>>(
       future: FastApiService.instance.fetchCurrentUser(),
@@ -114,10 +58,6 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
           return const Scaffold(
             body: Center(child: Text('Unable to resolve authenticated user.')),
           );
-        }
-        if (triggerAutoMigration && !_autoMigrationTriggered) {
-          _autoMigrationTriggered = true;
-          _runAutoMigrationInBackground();
         }
         return builder(userId);
       },
@@ -185,7 +125,6 @@ class _PetTrackCareAppState extends State<PetTrackCareApp> {
             print('🚀 Route: /home accessed - initializing MissingPetAlertWrapper');
             return MissingPetAlertWrapper(
               child: _buildAuthenticatedScreen(
-                triggerAutoMigration: true,
                 builder: (userId) => MainNavigation(userId: userId),
               ),
             );

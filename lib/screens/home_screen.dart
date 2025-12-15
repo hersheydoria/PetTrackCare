@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:PetTrackCare/screens/chat_detail_screen.dart';
 import 'package:PetTrackCare/services/notification_service.dart';
-import '../services/auto_migration_service.dart';
 import '../services/fastapi_service.dart';
 
 const deepRed = Color(0xFFB82132);
@@ -55,65 +53,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   final TextEditingController _locationSearchController = TextEditingController();
   String _currentSearchQuery = '';
   
-  // Auto-migration service
-  final AutoMigrationService _autoMigrationService = AutoMigrationService();
 
   @override
   void initState() {
     super.initState();
     fetchUserData();
     _sitterTabController = TabController(length: 3, vsync: this);
-    
-    // Trigger auto-migration when HomeScreen loads
-    _runAutoMigrationInBackground();
   }
   
-  /// Run auto-migration in background without blocking the UI
-  void _runAutoMigrationInBackground() {
-    // Use multiple logging methods to ensure visibility
-    print('=== AUTO-MIGRATION TRIGGER FROM HOME_SCREEN ===');
-    debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM HomeScreen.initState()');
-    print('Timestamp: ${DateTime.now().toIso8601String()}');
-    print('User: ${widget.userId}');
-    print('User Email: [hidden for security]');
-    
-    // Debug environment variables
-    print('🔧 Environment Check:');
-    print('   🔗 Firebase Host: ${dotenv.env['FIREBASE_HOST'] ?? "NOT SET"}');
-    print('   🔑 Firebase Key: ${dotenv.env['FIREBASE_AUTH_KEY']?.substring(0, 10) ?? "NOT SET"}...[HIDDEN]');
-    
-    Future.microtask(() async {
-      try {
-        print('=== MIGRATION STATUS CHECK ===');
-        await _autoMigrationService.checkMigrationStatus();
-        
-        print('=== CHECKING MIGRATION CONDITIONS ===');
-        debugPrint('Starting auto-migration check...');
-        
-        final shouldRun = await _autoMigrationService.shouldRunMigration();
-        print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
-        debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
-        
-        if (shouldRun) {
-          print('=== STARTING MIGRATION PROCESS ===');
-          debugPrint('INITIATING BACKGROUND MIGRATION...');
-          await _autoMigrationService.runAutoMigration();
-          print('=== MIGRATION COMPLETED ===');
-          debugPrint('Background migration process completed');
-        } else {
-          print('=== MIGRATION SKIPPED ===');
-          debugPrint('Auto-migration skipped - conditions not met');
-          print('=== CONDITIONS: User not authenticated or wrong role ===');
-        }
-      } catch (e) {
-        print('=== MIGRATION ERROR ===');
-        print('Error type: ${e.runtimeType}');
-        print('Error details: $e');
-        debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
-      }
-    });
-  }
-
   @override
   void dispose() {
     _sitterTabController.dispose();

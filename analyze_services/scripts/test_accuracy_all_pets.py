@@ -1,13 +1,12 @@
 import requests
 
-API_URL = "https://pettrackcare.onrender.com"
+API_URL = "http://localhost:5000"
 TEST_DAYS = 7
 
 # Replace with your actual pet IDs
 pet_ids = [
-    "92615a69-fc43-4467-bebc-1f1ecab52334",
-    "2af1de22-2b85-4b81-b1a1-29e6a716c8ac",
-    "12f382c0-8906-4ad9-a05f-8889478d9fa7"
+    "1cf6c1b0-6e1b-4539-b354-9d8596dd0cb8",
+    "46fc4e1a-d52e-476e-a11d-71c32cb0de71"
 ]
 
 for pet_id in pet_ids:

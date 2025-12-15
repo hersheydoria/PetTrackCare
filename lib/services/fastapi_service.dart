@@ -18,7 +18,7 @@ class FastApiService {
   String get _baseUrl {
     final envUrl = dotenv.env['FASTAPI_BASE_URL']?.trim();
     if (envUrl == null || envUrl.isEmpty) {
-      return 'http://192.168.100.23:8000';
+      return 'http://172.20.10.7:8000';
     }
     return envUrl.replaceAll(RegExp(r'/+$'), '');
   }

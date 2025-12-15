@@ -15,7 +15,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/fastapi_service.dart';
 import '../services/notification_service.dart';
 import '../services/missing_pet_alert_service.dart';
-import '../services/auto_migration_service.dart';
+
+String _formatTimestamp(DateTime? dt) {
+  if (dt == null) return '-';
+  try {
+    final shifted = dt.add(Duration(hours: 8));
+    return DateFormat('MMM d, yyyy • hh:mm a').format(shifted);
+  } catch (_) {
+    return dt.toString();
+  }
+}
 
 // Color palette
 const deepRed = Color(0xFFB82132);
@@ -38,6 +47,30 @@ class _PetProfileScreenState extends State<PetProfileScreen>
   late TabController _tabController;
   final FastApiService _apiClient = FastApiService.instance;
   Map<String, dynamic>? _currentUser;
+  
+  double? _parseCoordinate(Map<String, dynamic> data, String primaryKey, String aliasKey) {
+    final rawValue = data[primaryKey] ?? data[aliasKey];
+    if (rawValue == null) return null;
+    return double.tryParse(rawValue.toString());
+  }
+
+  DateTime? _parseTimestamp(dynamic rawValue) {
+    if (rawValue == null) return null;
+    if (rawValue is DateTime) return rawValue.toUtc();
+
+    if (rawValue is String && rawValue.isNotEmpty) {
+      final trimmed = rawValue.trim();
+      final hasZone = RegExp(r'(?:Z|[+-]\d{2}:\d{2})$').hasMatch(trimmed);
+      final normalized = hasZone ? trimmed : '${trimmed}Z';
+      try {
+        final parsed = DateTime.parse(normalized);
+        return parsed.toUtc();
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
 
   // Helper method to get user role
   String _getUserRole() {
@@ -98,8 +131,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
 
   List<Map<String, dynamic>> _pets = [];
   Map<String, dynamic>? _selectedPet;
-  // Auto-migration service
-  final AutoMigrationService _autoMigrationService = AutoMigrationService();
   
   // Caching mechanism for pet data
   final Map<String, Map<String, dynamic>> _petDataCache = {};
@@ -882,16 +913,10 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     try {
       final assignedDeviceId = await _getStoredDeviceId();
       final latest = await _apiClient.fetchLatestLocationForPet(petId);
-      final lat = double.tryParse(latest['latitude']?.toString() ?? '');
-      final lng = double.tryParse(latest['longitude']?.toString() ?? '');
+      final lat = _parseCoordinate(latest, 'latitude', 'lat');
+      final lng = _parseCoordinate(latest, 'longitude', 'long');
       final deviceId = latest['device_mac']?.toString() ?? assignedDeviceId;
-      DateTime? ts;
-      final rawTs = latest['timestamp'];
-      if (rawTs is String) {
-        ts = DateTime.tryParse(rawTs);
-      } else if (rawTs is DateTime) {
-        ts = rawTs;
-      }
+      final ts = _parseTimestamp(latest['timestamp']);
 
       await _fetchLocationHistoryForPet(petId);
 
@@ -912,7 +937,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
             } else {
               _currentMapLabel = 'Live GPS Location';
             }
-            _currentMapSub = ts != null ? DateFormat('MMM d, yyyy • h:mm a').format(ts) : 'Latest location';
+            _currentMapSub = ts != null ? _formatTimestamp(ts) : 'Latest location';
           }
         });
       }
@@ -936,21 +961,14 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       final resp = await _apiClient.fetchLocationHistory(petId, limit: limit);
       final records = <Map<String, dynamic>>[];
       for (final row in resp) {
-        final lat = double.tryParse(row['latitude']?.toString() ?? '');
-        final lng = double.tryParse(row['longitude']?.toString() ?? '');
-        DateTime? ts;
-        final rawTs = row['timestamp'];
-        if (rawTs is String) {
-          ts = DateTime.tryParse(rawTs);
-        } else if (rawTs is DateTime) {
-          ts = rawTs;
-        }
+        final lat = _parseCoordinate(row, 'latitude', 'lat');
+        final lng = _parseCoordinate(row, 'longitude', 'long');
+        final ts = _parseTimestamp(row['timestamp']);
         records.add({
           'latitude': lat,
           'longitude': lng,
           'timestamp': ts,
           'device_mac': row['device_mac'],
-          'firebase_entry_id': row['firebase_entry_id'],
           'address': null,
         });
       }
@@ -1103,15 +1121,6 @@ class _PetProfileScreenState extends State<PetProfileScreen>
     await _resolveAddressesForLocationHistory();
   }
 
-  String _formatTimestamp(DateTime? dt) {
-    if (dt == null) return '-';
-    try {
-      return DateFormat('MMM d, yyyy • hh:mm a').format(dt);
-    } catch (_) {
-      return dt.toString();
-    }
-  }
-
   // Helper: expand map view to fullscreen
   void _expandMapView() {
     Navigator.push(
@@ -1122,7 +1131,7 @@ class _PetProfileScreenState extends State<PetProfileScreen>
           markerLocation: _currentMapLocation ?? _latestDeviceLocation,
           markerLabel: _currentMapLabel ?? (_latestDeviceLocation != null ? 'Current Location' : null),
           markerSub: _currentMapSub ?? (_latestDeviceTimestamp != null 
-            ? DateFormat('MMM d, HH:mm').format(_latestDeviceTimestamp!) 
+            ? _formatTimestamp(_latestDeviceTimestamp!) 
             : null),
           locationHistory: _locationHistory,
           onLocationSelected: (location, label, subtitle) {
@@ -1152,64 +1161,8 @@ class _PetProfileScreenState extends State<PetProfileScreen>
       _currentUser = widget.initialUser;
     }
     _initializeScreen();
-    // Register callback for when location data is migrated from Firebase
-    _autoMigrationService.setOnLocationDataMigrated(() {
-      print('🔄 Location data migration callback triggered - refreshing location display');
-      // Clear location cache to force fresh fetch
-      _clearLocationCache();
-      // Refresh location display when migration completes
-      if (_selectedPet != null && mounted) {
-        _fetchLatestLocationForPet();
-      }
-    });
-    
-    // Trigger auto-migration when PetProfileScreen loads
-    _runAutoMigrationInBackground();
   }
   
-  /// Run auto-migration in background without blocking the UI
-  void _runAutoMigrationInBackground() {
-    // Use multiple logging methods to ensure visibility
-    print('=== AUTO-MIGRATION TRIGGER FROM PETS_SCREEN ===');
-    debugPrint('AUTO-MIGRATION TRIGGER CALLED FROM PetProfileScreen.initState()');
-    print('Timestamp: ${DateTime.now().toIso8601String()}');
-    final userId = _currentUser?['id']?.toString() ?? 'No user';
-    final userEmail = _currentUser?['email']?.toString() ?? 'No email';
-    print('User: $userId');
-    print('User Email: $userEmail');
-    
-    Future.microtask(() async {
-      try {
-        print('=== MIGRATION STATUS CHECK ===');
-        await _autoMigrationService.checkMigrationStatus();
-        
-        print('=== CHECKING MIGRATION CONDITIONS ===');
-        debugPrint('Starting auto-migration check...');
-        
-        final shouldRun = await _autoMigrationService.shouldRunMigration();
-        print('MIGRATION DECISION: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
-        debugPrint('Migration decision: ${shouldRun ? "SHOULD RUN" : "SHOULD NOT RUN"}');
-        
-        if (shouldRun) {
-          print('=== STARTING MIGRATION PROCESS ===');
-          debugPrint('INITIATING BACKGROUND MIGRATION...');
-          await _autoMigrationService.runAutoMigration();
-          print('=== MIGRATION COMPLETED ===');
-          debugPrint('Background migration process completed');
-        } else {
-          print('=== MIGRATION SKIPPED ===');
-          debugPrint('Auto-migration skipped - conditions not met');
-          print('=== CONDITIONS: User not authenticated or wrong role ===');
-        }
-      } catch (e) {
-        print('=== MIGRATION ERROR ===');
-        print('Error type: ${e.runtimeType}');
-        print('Error details: $e');
-        debugPrint('BACKGROUND AUTO-MIGRATION ERROR: $e');
-      }
-    });
-  }
-
   @override
   void dispose() {
     _emergencyContactController.dispose();
@@ -3314,7 +3267,9 @@ void _disconnectDevice() async {
       markerLabel = locationAddress?.isNotEmpty == true 
           ? '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${locationAddress!.length > 40 ? '${locationAddress.substring(0, 40)}...' : locationAddress}'
           : '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)} - ${_latestDeviceId ?? 'Device Location'}';
-      markerSub = _latestDeviceTimestamp != null ? DateFormat('MMM d, yyyy • h:mm a').format(_latestDeviceTimestamp!) : 'Last seen: unknown';
+        markerSub = _latestDeviceTimestamp != null
+          ? 'Last seen: ${_formatTimestamp(_latestDeviceTimestamp!)}'
+          : 'Last seen: unknown';
     } else if (_currentMapLocation != null) {
       // Showing a historical location (user clicked on a location from history)
       lat = _currentMapLocation!.latitude;
@@ -3949,18 +3904,7 @@ void _disconnectDevice() async {
     }
     
     // Format actual timestamp instead of relative time
-    String timestampDisplay = 'Unknown time';
-    if (timestamp != null) {
-      try {
-        // Format as: Oct 5, 2025 • 2:30 PM
-        // The timestamp already has the correct local time, so don't convert it again
-        // Just use it directly without timezone conversion
-        timestampDisplay = DateFormat('MMM d, yyyy • h:mm a').format(timestamp);
-      } catch (e) {
-        // Fallback to ISO string if formatting fails
-        timestampDisplay = timestamp.toString().substring(0, 16);
-      }
-    }
+    final timestampDisplay = timestamp != null ? _formatTimestamp(timestamp) : 'Unknown time';
     
     return Container(
       decoration: BoxDecoration(
@@ -7680,9 +7624,7 @@ class _FullScreenMapViewState extends State<_FullScreenMapView> {
                                   title = 'Unknown location';
                                 }
                                 
-                                final timestamp = ts != null 
-                                    ? DateFormat('MMM d, yyyy • hh:mm a').format(ts)
-                                    : '-';
+                                final timestamp = ts != null ? _formatTimestamp(ts) : '-';
                                 
                                 return ListTile(
                                   dense: true,
